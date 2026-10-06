@@ -16,7 +16,7 @@ public static class Providers
     public static (string TargetSha, List<PullRequest> Prs) GitHub(Git git, string target, HashSet<int>? only, BranchPolicy policy)
     {
         var json = Git.Exec(git.RepoDir, "gh", ["pr", "list", "--state", "open", "--limit", "500", "--json",
-            "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels"]);
+            "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels,mergeStateStatus,autoMergeRequest"]);
         if (json.ExitCode != 0) throw new InvalidOperationException("gh pr list failed: " + json.Stderr.Trim());
 
         var all = JsonDocument.Parse(json.Stdout).RootElement.EnumerateArray().Select(e => (
@@ -32,6 +32,8 @@ public static class Providers
                 IsDraft = e.GetProperty("isDraft").GetBoolean(),
                 ReviewDecision = e.GetProperty("reviewDecision").GetString() is { Length: > 0 } rd ? rd : null,
                 CiStatus = CiStatus(e.GetProperty("statusCheckRollup"), policy.RequiredChecks),
+                MergeStateStatus = e.TryGetProperty("mergeStateStatus", out var ms) ? ms.GetString() : null,
+                AutoMerge = e.TryGetProperty("autoMergeRequest", out var am) && am.ValueKind == JsonValueKind.Object,
                 Labels = e.GetProperty("labels").EnumerateArray().Select(l => l.GetProperty("name").GetString()!).ToList(),
             })).ToList();
 

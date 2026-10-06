@@ -128,6 +128,9 @@ public static partial class Cli
             var plan = new Planner(new Simulator(git, strategy, RepoConfig.Load(git)), target, targetSha, prs, history).Build(beam);
             plan.Provider = provider;
             plan.MergeQueue = policy.MergeQueue;
+            // Local branches carry no review/CI/protection data: say so instead of implying "mergeable".
+            if (provider == "local")
+                plan.Notes.Add("local branches: only structural mergeability is checked (no reviews, checks or branch protection)");
             if (policy.MergeQueue)
                 plan.Notes.Add($"merge queue on {target}: plan only. Enqueue in this order; the queue re-tests and merges"
                     + (policy.QueueStrategy is { } q && q != strategy ? $" (queue merges with {q.ToString().ToLowerInvariant()})" : ""));

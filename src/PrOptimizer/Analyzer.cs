@@ -303,10 +303,24 @@ public static partial class Analyzer
         return prs.Select(p => Visit(p.Id)).FirstOrDefault(c => c != null);
     }
 
-    /// <summary>Readiness constraints; null means ready. Kept separate from the conflict score.</summary>
+    /// <summary>
+    /// Policy readiness; null means ready. Kept separate from the conflict score and from structural mergeability.
+    /// GitHub's BLOCKED covers rules the other fields don't name (e.g. unresolved conversations, signed commits).
+    /// </summary>
     public static string? NotReadyReason(PullRequest pr) =>
         pr.IsDraft ? "draft"
         : pr.ReviewDecision is "CHANGES_REQUESTED" or "REVIEW_REQUIRED" ? $"review: {pr.ReviewDecision}"
-        : pr.CiStatus is "FAILURE" or "PENDING" ? $"CI: {pr.CiStatus}"
+        : pr.CiStatus is "FAILURE" or "PENDING" ? $"checks: {pr.CiStatus}"
+        : pr.MergeStateStatus == "BLOCKED" ? "GitHub: merging is blocked by branch protection"
         : null;
+
+    /// <summary>What GitHub would say about merging a policy-ready PR, when that differs from "go ahead".</summary>
+    public static string? GitHubNote(PullRequest pr) => pr.MergeStateStatus switch
+    {
+        "BEHIND" => "GitHub: branch is behind its base, update it before merging",
+        "DIRTY" => "GitHub: reports conflicts with its base branch",
+        "UNSTABLE" => "GitHub: non-required checks are failing",
+        "UNKNOWN" => "GitHub: merge state not computed yet",
+        _ => pr.AutoMerge ? "GitHub: auto-merge is already enabled" : null,
+    };
 }
