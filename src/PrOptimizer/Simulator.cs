@@ -37,8 +37,8 @@ public class Simulator(Git git, MergeStrategy strategy)
     {
         if (strategy == MergeStrategy.FfOnly)
             return git.IsAncestor(state, pr.HeadSha)
-                ? new(true, [], [], new(pr.HeadSha))
-                : new(false, ["(not fast-forwardable)"], [], null);
+                ? new(MergeOutcome.Clean, [], [], new(pr.HeadSha))
+                : new(MergeOutcome.Conflict, ["(not fast-forwardable)"], [], null);
 
         var (tree, conflicts) = git.MergeTree(state, pr.HeadSha);
         return FromMerge(state, pr, tree, conflicts);
@@ -46,22 +46,21 @@ public class Simulator(Git git, MergeStrategy strategy)
 
     SimulationResult FromMerge(string state, PullRequest pr, string tree, List<string> conflicts)
     {
-        var regenerate = new List<string>();
-        if (conflicts.Count > 0)
-        {
-            // Lockfile/generated conflicts are real, but resolved by regenerating rather than by hand.
-            if (!conflicts.All(f => FileClasses.IsRegenerable(FileClasses.Classify(f))))
-                return new(false, conflicts, [], null);
-            regenerate = conflicts;
-            // ponytail: the synthetic tree for these keeps git's conflict markers; fine for planning,
-            // a real regenerate step (npm install, etc.) belongs in verification.
-        }
+        // Real conflicts end here: no next state exists.
+        if (!conflicts.All(f => FileClasses.IsRegenerable(FileClasses.Classify(f))))
+            return new(MergeOutcome.Conflict, conflicts, [], null);
 
         var msg = $"pr-optimizer: {pr.Id}";
         // ponytail: rebase is simulated as squash (same resulting tree in the common case);
         // per-commit replay only matters when individual commits conflict.
-        // Commit lazily: most simulated states are pruned by the beam and never need one.
         string[] parents = strategy == MergeStrategy.Merge ? [state, pr.HeadSha] : [state];
-        return new(true, [], regenerate, new(() => git.CommitTree(tree, msg, parents)));
+        // Commit lazily: most simulated states are pruned by the beam and never need one.
+        if (conflicts.Count == 0)
+            return new(MergeOutcome.Clean, [], [], new(() => git.CommitTree(tree, msg, parents)));
+
+        // Lockfile/generated conflicts: merge-tree's tree holds conflict markers and must never become a state.
+        // Stand-in until the step's regenerate runs: the PR's version of those files, a real resolved tree.
+        return new(MergeOutcome.RegenerationRequired, [], conflicts,
+            new(() => git.CommitTree(git.ReplacePaths(tree, pr.HeadSha, conflicts), msg + " (regenerate: " + string.Join(", ", conflicts) + ")", parents)));
     }
 }

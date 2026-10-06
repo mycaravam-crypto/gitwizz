@@ -69,6 +69,31 @@ public class Git(string repoDir)
     }
 
     /// <summary>
+    /// Tree with the given paths replaced by their version in commit (removed where commit lacks them).
+    /// Uses a throwaway index file, so the user's index and working tree are untouched.
+    /// </summary>
+    public string ReplacePaths(string tree, string commit, IReadOnlyCollection<string> paths)
+    {
+        var index = Path.Combine(Path.GetTempPath(), "pr-optimizer-index-" + Guid.NewGuid().ToString("N"));
+        var env = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = index };
+        string Must(GitResult r, string what) =>
+            r.ExitCode == 0 ? r.Stdout.Trim() : throw new InvalidOperationException($"git {what} failed: {r.Stderr.Trim()}");
+        try
+        {
+            Must(Exec(RepoDir, "git", ["read-tree", tree], env), "read-tree");
+            var theirs = Must(Exec(RepoDir, "git", ["ls-tree", "-r", "-z", commit, "--", .. paths]), "ls-tree")
+                .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                .Select(e => e.Split('\t', 2)).ToDictionary(e => e[1], e => e[0].Split(' ')); // mode, type, sha
+            var zero = new string('0', tree.Length);
+            // --index-info: "mode sha<TAB>path"; mode 0 removes the entry.
+            var info = string.Concat(paths.Select(p => theirs.TryGetValue(p, out var m) ? $"{m[0]} {m[2]}\t{p}\n" : $"0 {zero}\t{p}\n"));
+            Must(Exec(RepoDir, "git", ["update-index", "--index-info"], env, info), "update-index");
+            return Must(Exec(RepoDir, "git", ["write-tree"], env), "write-tree");
+        }
+        finally { File.Delete(index); }
+    }
+
+    /// <summary>
     /// Writes a synthetic commit as a loose object in-process: no git process per commit.
     /// Fixed identity and epoch date keep commits deterministic, so identical merges get identical ids.
     /// </summary>
