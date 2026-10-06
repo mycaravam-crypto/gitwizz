@@ -11,7 +11,7 @@ public static class Report
         sb.AppendLine("PR MERGE PLAN");
         sb.AppendLine($"Target: {plan.Target}");
         sb.AppendLine($"Strategy: {plan.Strategy.ToString().ToLowerInvariant()}");
-        foreach (var n in plan.Notes) sb.AppendLine($"Policy: {n}");
+        foreach (var n in plan.Notes) sb.AppendLine($"Note: {n}");
         sb.AppendLine();
 
         int i = 1;
@@ -26,7 +26,7 @@ public static class Report
         foreach (var b in plan.Blocked)
         {
             sb.AppendLine($"{i++,-3}{b.Pr.Id}  {b.Pr.Title}");
-            sb.AppendLine("   BLOCKED");
+            sb.AppendLine(b.Policy ? "   POLICY BLOCKED" : "   BLOCKED");
             sb.AppendLine($"   Reason: {b.Reason}");
             sb.AppendLine();
         }
@@ -74,7 +74,7 @@ public static class Report
             id = s.Pr.Id, title = s.Pr.Title, cost = s.Cost, reason = s.Reason,
             dependencies = s.Pr.Dependencies, regenerate = s.RegenerateFiles,
         }),
-        blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, reason = b.Reason }),
+        blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, reason = b.Reason, policy = b.Policy }),
         parallelizable = plan.Parallelizable,
         explanations = plan.Explanations.Select(e => new { a = e.A, b = e.B, shared = e.Shared, aThenB = e.AThenB, bThenA = e.BThenA }),
         conflicts = plan.Conflicts.Select(c => new { a = c.A, b = c.B, weight = c.Weight }),

@@ -87,6 +87,7 @@ For a rendered example, see [docs/sample-plan.html](docs/sample-plan.html).
 PR MERGE PLAN
 Target: main
 Strategy: merge
+Note: local branches: only structural mergeability is checked (no reviews, checks or branch protection)
 
 1  docs  docs
    CLEAN
@@ -169,8 +170,14 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    (PR base is another PR's head branch, or commit ancestry), and semantic: B uses a name that A introduces
    and that appears nowhere at the base (`git grep`), e.g. a new `TenantId` type ("dependency: A (uses TenantId)").
    Cycles from explicit or structural edges are an error. A semantic edge that would close a cycle is dropped.
-5. **Readiness**: drafts, `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, and failing/pending CI are hard constraints.
-   Such PRs, and every PR that depends on them, are reported as BLOCKED. They aren't scored.
+5. **Readiness** is three separate questions, and the report never mixes them up:
+   - *structure*: does the tree merge? Only the simulation answers this.
+   - *policy*: drafts, `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, failing or pending checks, and GitHub's `BLOCKED`
+     merge state (protection rules the other fields don't name). These are hard constraints: such PRs, and every PR
+     that depends on them, are **POLICY BLOCKED** and aren't scored.
+   - *GitHub*: for a policy-ready PR, GitHub's merge state is added to the step reason, e.g. "branch is behind its
+     base, update it before merging", "reports conflicts with its base branch", or "auto-merge is already enabled".
+   Local branches carry no policy data, so the plan says that only structural mergeability was checked.
    **Branch policy** (GitHub): required checks are read from branch protection and rulesets. When the target names
    required checks, only those gate a PR, and a required check that hasn't reported yet counts as pending.
    Required reviews come through GitHub's review decision. With a **merge queue**, the tool only plans: the next step

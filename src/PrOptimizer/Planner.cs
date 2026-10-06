@@ -68,7 +68,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
                 if (p.Dependencies.FirstOrDefault(blocked.ContainsKey) is { } d)
                 { blocked[p.Id] = $"depends on {d} ({blocked[d]})"; changed = true; }
         }
-        plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id])));
+        plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id], Policy: true)));
         var pool = prs.Where(p => !blocked.ContainsKey(p.Id)).ToList();
 
         // Pairwise outcomes (first -> second from the target) for every overlapping pair, batched once up front.
@@ -188,6 +188,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 
         double cost = overlaps.Sum(Risk) + c.Regeneration * r.RegenerateFiles.Count - c.DependencyUnblock * unlocks.Count;
 
+        if (Analyzer.GitHubNote(pr) is { } gh) reasons.Add(gh);
         if (pr.Dependencies.Count > 0)
             reasons.Add("dependency: " + string.Join(", ", pr.Dependencies.Select(d => pr.DependencyNotes.TryGetValue(d, out var why) ? $"{d} ({why})" : d)));
         if (unlocks.Count > 0) reasons.Add("unlocks " + string.Join(", ", unlocks));

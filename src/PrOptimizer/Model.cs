@@ -36,10 +36,15 @@ public class PullRequest
     public HashSet<string> Dependencies { get; } = [];
     public Dictionary<string, string> DependencyNotes { get; } = []; // why, for inferred (semantic) dependencies
 
-    // Readiness (provider-supplied). Null reason == ready.
+    // Readiness (provider-supplied, GitHub only). Three separate questions:
+    //   structure: does the tree merge? (the simulation, never these fields)
+    //   policy:    draft, review decision, required checks
+    //   GitHub:    MergeStateStatus, GitHub's own verdict (CLEAN, BLOCKED, BEHIND, DIRTY, UNSTABLE, UNKNOWN, ...)
     public bool IsDraft { get; init; }
     public string? ReviewDecision { get; init; }
     public string? CiStatus { get; init; }
+    public string? MergeStateStatus { get; init; }
+    public bool AutoMerge { get; init; }
 
     public override string ToString() => Id;
 }
@@ -56,7 +61,8 @@ public record SimulationResult(MergeOutcome Outcome, List<string> ConflictFiles,
 
 public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> RegenerateFiles);
 
-public record BlockedPr(PullRequest Pr, string Reason);
+/// <summary>Policy: blocked by repository rules (draft, reviews, checks, GitHub), not by the merge itself.</summary>
+public record BlockedPr(PullRequest Pr, string Reason, bool Policy = false);
 
 /// <summary>"Why A before B?": both orders simulated from the target. Outcomes are "clean", "conflict" or "conflict on X".</summary>
 public record Explanation(string A, string B, List<string> Shared, string AThenB, string BThenA)

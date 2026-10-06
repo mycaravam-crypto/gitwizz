@@ -149,6 +149,26 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Separates_structural_policy_and_github_readiness()
+    {
+        var (sha, prs) = Providers.Local(_git, "main", ["docs", "billing", "refactor"]);
+        PullRequest With(PullRequest p, bool draft = false, string? state = null) =>
+            new() { Id = p.Id, HeadSha = p.HeadSha, HeadRef = p.HeadRef, IsDraft = draft, MergeStateStatus = state };
+        prs = [With(prs[0], draft: true), With(prs[1], state: "BEHIND"), prs[2]];
+        foreach (var pr in prs) Analyzer.Analyze(_git, sha, pr);
+        Analyzer.ResolveDependencies(_git, sha, prs);
+        var plan = new Planner(new Simulator(_git, MergeStrategy.Merge), "main", sha, prs).Build(8);
+
+        // docs merges cleanly but is a draft: POLICY BLOCKED, not BLOCKED and not clean.
+        Assert.True(plan.Blocked.Single(b => b.Pr.Id == "docs").Policy);
+        Assert.Contains("POLICY BLOCKED", Report.Text(plan));
+        // billing is structurally clean and policy-ready, but GitHub wants the branch updated first.
+        Assert.Contains("GitHub: branch is behind", plan.Steps.Single(s => s.Pr.Id == "billing").Reason);
+        Assert.Equal("GitHub: merging is blocked by branch protection",
+            Analyzer.NotReadyReason(new PullRequest { Id = "x", HeadSha = "x", MergeStateStatus = "BLOCKED" }));
+    }
+
+    [Fact]
     public void Complete_plans_beat_cheaper_incomplete_ones()
     {
         var complete = new PlanObjective(Unmerged: 0, Cost: 8.2, TieBreak: 0);
