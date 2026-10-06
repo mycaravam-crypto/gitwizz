@@ -18,6 +18,7 @@ public static class Report
         foreach (var s in plan.Steps)
         {
             sb.AppendLine($"{i++,-3}{s.Pr.Id}  {s.Pr.Title}");
+            sb.AppendLine(s.RegenerateFiles.Count > 0 ? $"   REGENERATE REQUIRED: {string.Join(", ", s.RegenerateFiles)}" : "   CLEAN");
             sb.AppendLine($"   Cost: {s.Cost:0.##}");
             sb.AppendLine($"   Reason: {s.Reason}");
             sb.AppendLine();

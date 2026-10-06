@@ -89,14 +89,17 @@ Target: main
 Strategy: merge
 
 1  docs  docs
+   CLEAN
    Cost: 0
    Reason: no overlapping changes with pending PRs
 
 2  billing  billing
+   CLEAN
    Cost: 0.3
    Reason: unlocks refactor; overlaps clash (0.40)
 
 3  refactor  refactor
+   CLEAN
    Cost: 0.4
    Reason: dependency: billing; overlaps clash (0.40)
 
@@ -132,7 +135,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    really conflicted. Each file gets a rate, `conflicts / (merges that brought it in + 1)`, and a shared file with
    rate r weighs `(1 + 2r)`× more. Step reasons name conflict-prone files ("billing.cs (33 %)").
 3. **File classes**: lockfiles and generated files (`package-lock.json`, `*.Designer.cs`, …) aren't ignored.
-   If a merge conflicts *only* in such files, it counts as mergeable with a "regenerate after merge" note (cost 0.5 per file).
+   A merge that conflicts *only* in such files is planned as **REGENERATE REQUIRED** (cost 0.5 per file), never as clean.
+   merge-tree's conflicted tree is never committed. The next planning state takes the PR's version of those files
+   (written through a throwaway index), so later PRs never merge against conflict markers.
 4. **Dependencies**: explicit (`depends on #N` / `blocked by #N` in the body or labels), structural
    (PR base is another PR's head branch, or commit ancestry), and semantic: B uses a name that A introduces
    and that appears nowhere at the base (`git grep`), e.g. a new `TenantId` type ("dependency: A (uses TenantId)").
@@ -184,6 +189,8 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 - Hunk overlap assumes the PRs share a merge-base. With very different bases it's an approximation.
 - Dependencies on PRs outside the selected set are ignored.
 - `--verify` checks only the final state. There are no per-batch or per-step modes yet.
+- After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one. Later lockfile edits
+  are judged against that version.
 - Synthetic commits are unreferenced objects. `git gc` cleans them up.
 - History needs true merge commits. Squash- or rebase-merged repositories have nothing to replay, so the history is empty there.
 - Structural overlap and semantic analysis cover C# only. Other languages use file and hunk overlap.

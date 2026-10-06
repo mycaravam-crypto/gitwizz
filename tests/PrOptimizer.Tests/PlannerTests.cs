@@ -77,6 +77,24 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Regenerable_conflicts_never_become_a_conflicted_state()
+    {
+        Branch("deps3", "main", () => Write("package-lock.json", "{\n\"v\": 4\n}\n"));
+        var plan = PlanFor(MergeStrategy.Merge, 8, "deps1", "deps2", "deps3");
+
+        // merge-tree sees the lockfile conflict; the step is planned as REGENERATE, never as clean.
+        Assert.Equal(3, plan.Steps.Count);
+        Assert.Equal(2, plan.Steps.Count(s => s.RegenerateFiles.SequenceEqual(["package-lock.json"])));
+        Assert.Contains("REGENERATE REQUIRED: package-lock.json", Report.Text(plan));
+
+        // No state along the plan carries conflict markers, so later PRs never merge against them.
+        for (var c = plan.FinalState!; _git.Try("rev-parse", "--verify", "-q", c + "^").ExitCode == 0 && c != _git.RevParse("main"); c = _git.RevParse(c + "^"))
+            Assert.DoesNotContain("<<<<<<<", _git.Run("show", $"{c}:package-lock.json"));
+        Assert.Equal(0, _git.Try("fsck", "--no-dangling").ExitCode);
+        Assert.Equal("", _git.Run("status", "--porcelain"));
+    }
+
+    [Fact]
     public void Learns_conflict_rates_from_past_merges()
     {
         // History on main: two branches edit docs.md; the second merge conflicts and is resolved by hand.

@@ -44,7 +44,15 @@ public class PullRequest
     public override string ToString() => Id;
 }
 
-public record SimulationResult(bool Mergeable, List<string> ConflictFiles, List<string> RegenerateFiles, Lazy<string>? Commit);
+/// <summary>Clean: the merged tree is the next state. RegenerationRequired: only regenerable files conflict; the next state
+/// takes the PR's version of them and the step needs a regenerate. Conflict: no next state.</summary>
+public enum MergeOutcome { Clean, RegenerationRequired, Conflict }
+
+/// <summary>Commit is never built from a tree that still holds conflicts (see Simulator).</summary>
+public record SimulationResult(MergeOutcome Outcome, List<string> ConflictFiles, List<string> RegenerateFiles, Lazy<string>? Commit)
+{
+    public bool Mergeable => Outcome != MergeOutcome.Conflict;
+}
 
 public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> RegenerateFiles);
 
