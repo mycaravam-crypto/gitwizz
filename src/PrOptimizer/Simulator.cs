@@ -13,6 +13,26 @@ public class Simulator(Git git, MergeStrategy strategy)
     public SimulationResult Simulate(string state, PullRequest pr) =>
         _cache.GetOrAdd((state, pr.HeadSha), k => new(() => Run(k.State, pr))).Value;
 
+    /// <summary>Simulates many (state, PR) pairs up front, in one git process per core, filling the cache.</summary>
+    public void Prefetch(IEnumerable<(string State, PullRequest Pr)> pairs)
+    {
+        if (strategy == MergeStrategy.FfOnly) return;
+        var todo = pairs.DistinctBy(x => (x.State, x.Pr.HeadSha)).Where(x => !_cache.ContainsKey((x.State, x.Pr.HeadSha))).ToList();
+        if (todo.Count < 2) return;
+        var size = (int)Math.Ceiling(todo.Count / (double)Environment.ProcessorCount);
+        Parallel.ForEach(todo.Chunk(Math.Max(size, 8)), chunk =>
+        {
+            // On failure leave the cache alone: Simulate then runs single merges and reports the real error.
+            if (git.MergeTreeBatch(chunk.Select(x => (x.State, x.Pr.HeadSha)).ToList()) is not { } results) return;
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                var (state, pr) = chunk[i];
+                var (tree, conflicts) = results[i];
+                _cache.TryAdd((state, pr.HeadSha), new(FromMerge(state, pr, tree, conflicts)));
+            }
+        });
+    }
+
     SimulationResult Run(string state, PullRequest pr)
     {
         if (strategy == MergeStrategy.FfOnly)
@@ -21,6 +41,11 @@ public class Simulator(Git git, MergeStrategy strategy)
                 : new(false, ["(not fast-forwardable)"], [], null);
 
         var (tree, conflicts) = git.MergeTree(state, pr.HeadSha);
+        return FromMerge(state, pr, tree, conflicts);
+    }
+
+    SimulationResult FromMerge(string state, PullRequest pr, string tree, List<string> conflicts)
+    {
         var regenerate = new List<string>();
         if (conflicts.Count > 0)
         {

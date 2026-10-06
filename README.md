@@ -13,44 +13,55 @@ Design rationale: [PLAN.md](PLAN.md) (German).
 - git ≥ 2.38 (needs `merge-tree --write-tree`)
 - `gh` CLI, authenticated, for the GitHub provider
 
+## Quick start
+
+```bash
+dotnet run --project src/PrOptimizer -- example   # builds a demo repo and plans it
+```
+
+The example repository has seven branches. Between them they show every outcome: independent PRs you can merge
+in parallel, a lockfile conflict that only needs a regenerate, a stacked dependency, a member-level overlap in
+`BillingService.CalculateTax`, and a PR that is blocked by a real conflict.
+It ends with commands to try on the demo repo yourself.
+
 ## Build & test
 
 ```bash
 dotnet build
 dotnet test
-# single-file binary
-dotnet publish src/PrOptimizer -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true
+# fastest: precompiled (ReadyToRun) single-file binary
+dotnet publish src/PrOptimizer -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
 ```
 
 ## Usage
 
-Run inside the repository:
+Run inside the repository. `plan` is the default command, so `pr-optimizer --all-open` is enough.
 
 ```bash
-# GitHub: all open PRs into main (plus PRs stacked on them)
-pr-optimizer plan --target main --all-open
-
-# GitHub: specific PRs, squash merges, JSON output
-pr-optimizer plan --target main --prs 101,102,105 --strategy squash --format json
-
-# Local branches as "PRs", verify the final merged state
-pr-optimizer plan --target main --prs feature-a,feature-b --verify "dotnet test"
-
-# Shareable HTML report (same visuals as the terminal)
-pr-optimizer plan --target main --all-open --format html > plan.html
+pr-optimizer --all-open                     # all open GitHub PRs (or all unmerged local branches)
+pr-optimizer -a -s squash                   # same, planned for squash merges
+pr-optimizer -p 101,102,105 -f json         # specific GitHub PRs as JSON
+pr-optimizer -p feature/a,feature/b --verify "dotnet test"
+pr-optimizer -a -o plan.html                # shareable HTML report (format from the extension)
+pr-optimizer help                           # all options with examples
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--target` | `main` | Branch to merge into |
-| `--prs` | | Comma-separated PR numbers (GitHub) or branch names (local) |
-| `--all-open` | | All open PRs into `--target` and PRs stacked on them (GitHub) |
-| `--provider` | auto | `github` if `--all-open` or all `--prs` are numeric, else `local` |
-| `--strategy` | `merge` | `merge`, `squash`, `rebase`, `ff-only` |
-| `--beam` | `8` | Beam search width; `1` = greedy |
+| `-a`, `--all-open` | | All open PRs into the target and PRs stacked on them (GitHub), or all local branches not yet merged (local) |
+| `-p`, `--prs` | | Comma-separated PR numbers (GitHub) or branch names (local) |
+| `-t`, `--target` | auto | Branch to merge into: `origin/HEAD`, else `main`/`master`, else the current branch |
+| `--provider` | auto | `github` for numeric `--prs`, or for `--all-open` with a GitHub `origin` and `gh` installed; else `local` |
+| `-s`, `--strategy` | `merge` | `merge`, `squash`, `rebase`, `ff-only` |
+| `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
 | `--verify` | `none` | Shell command run in a temporary worktree on the final merged state |
-| `--format` | `pretty` / `text` | `pretty` (default on a terminal), `text` (default when piped), `json`, `html` |
-| `--repo` | cwd | Repository directory |
+| `-f`, `--format` | `pretty` / `text` | `pretty` (default on a terminal), `text` (default when piped), `json`, `html` |
+| `-o`, `--output` | stdout | Write the report to a file; the format comes from the extension (`.html`, `.json`, else text) |
+| `-r`, `--repo` | cwd | Repository directory |
+
+Typos get suggestions (`--strat` → "did you mean --strategy?"), and common errors come with a hint.
+Every report ends with the **next step**, as a ready-to-run command (`gh pr merge 105 --squash` or
+`git merge --no-ff docs`). Re-run the tool after each real merge so the plan reflects the new state.
 
 Exit codes: `0` ok, `1` error or failed verification, `2` usage error.
 
@@ -63,7 +74,7 @@ On a terminal, `pretty` renders a rich report:
 - **plan table**: cost bars (green → gold → orange → red), status, and the reason for each step
 - **dependency tree** of stacked and explicit dependencies
 - **conflict-risk heatmap** between all PRs (above 12 PRs it switches to a "riskiest pairs" bar chart)
-- **"why A before B?"** panels comparing both simulated orders, and a **verification** panel
+- **"why A before B?"** panels comparing both simulated orders, a **verification** panel, and the **next step** command
 
 Every colour comes with an icon or a label (✔ ⟳ ✘ ⇉ `dep`), so the report still reads without colour.
 Below 90 columns the layout turns compact. `NO_COLOR` is respected.
@@ -95,6 +106,7 @@ Strategy: merge
 Currently independent candidates (parallelizable):
     docs
 
+Next: git checkout main && git merge --no-ff docs
 Total cost: 10.7
 ```
 
@@ -134,6 +146,23 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    whose two orders give different results in simulation.
 8. **Verification** ([Verify.cs](src/PrOptimizer/Verify.cs)): `git worktree add --detach` on the final synthetic commit,
    run the command, then remove the worktree.
+
+## Performance
+
+Search cost is kept low in four ways:
+
+- **Result reuse:** if the PR merged last touches none of a candidate's files and shares no history with it, the candidate's result
+  carries over from the previous state unchanged. The real merge only runs if that branch of the search survives.
+- **Batched merges:** the merges each beam level needs go through `git merge-tree --stdin`, one process per CPU core.
+- **In-process commits:** synthetic commits are written directly as loose git objects (SHA-1 or SHA-256), not with one `git commit-tree` process per commit.
+- **One `rev-list` per PR** for dependency detection, instead of an ancestry check per pair of PRs.
+
+| Benchmark | v0.1 | now (ReadyToRun) |
+|---|---|---|
+| 20 PRs | 8.6 s | 0.47 s |
+| 60 PRs | 10.2 s | 0.8 s |
+
+Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 
 ## Known limitations
 

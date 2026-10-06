@@ -116,14 +116,14 @@ public static partial class Analyzer
     public static void ResolveDependencies(Git git, string target, List<PullRequest> prs)
     {
         var ids = prs.Select(p => p.Id).ToHashSet();
-        // Heads already in the target can't be dependencies; skip their n² ancestry checks.
-        var unmerged = prs.AsParallel().Where(a => !git.IsAncestor(a.HeadSha, target)).ToHashSet();
-        var structural = prs.SelectMany(b => prs.Select(a => (a, b)))
-            .Where(x => x.a != x.b && x.a.HeadSha != x.b.HeadSha && unmerged.Contains(x.a))
-            .AsParallel()
-            .Where(x => (x.a.HeadRef != "" && x.b.BaseRef == x.a.HeadRef) || git.IsAncestor(x.a.HeadSha, x.b.HeadSha))
-            .ToList();
-        foreach (var (a, b) in structural) b.Dependencies.Add(a.Id);
+        // One rev-list per PR instead of an ancestry check per pair: a is an ancestor of b iff a's head is among
+        // b's commits not yet in the target. An empty set means the PR is already merged and can't be a dependency.
+        var own = prs.AsParallel().ToDictionary(p => p, p =>
+            git.Run("rev-list", $"{target}..{p.HeadSha}").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToHashSet());
+        foreach (var a in prs.Where(a => own[a].Count > 0))
+            foreach (var b in prs.Where(b => b != a && b.HeadSha != a.HeadSha))
+                if ((a.HeadRef != "" && b.BaseRef == a.HeadRef) || own[b].Contains(a.HeadSha))
+                    b.Dependencies.Add(a.Id);
         foreach (var b in prs)
             foreach (var d in ExplicitDependencies(b).Where(d => ids.Contains(d) && d != b.Id)) b.Dependencies.Add(d);
         var cycle = FindCycle(prs);

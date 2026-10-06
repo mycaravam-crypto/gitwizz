@@ -6,7 +6,7 @@ public static class Providers
 {
     /// <summary>Local provider: each "PR" is a branch or ref in the current repository.</summary>
     public static (string TargetSha, List<PullRequest> Prs) Local(Git git, string target, IEnumerable<string> refs) =>
-        (git.RevParse(target), refs.Select(r => new PullRequest
+        (git.RevParse(target), refs.AsParallel().AsOrdered().Select(r => new PullRequest
         {
             Id = r, HeadRef = r, HeadSha = git.RevParse(r),
             Title = git.Run("log", "-1", "--format=%s", r), // head commit subject stands in for a PR title

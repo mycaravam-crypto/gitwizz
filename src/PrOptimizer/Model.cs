@@ -60,6 +60,7 @@ public class Plan
 {
     public required string Target { get; init; }
     public required MergeStrategy Strategy { get; init; }
+    public string Provider { get; set; } = "local";
     public List<PlanStep> Steps { get; } = [];
     public List<BlockedPr> Blocked { get; } = [];
     public List<string> Parallelizable { get; set; } = [];

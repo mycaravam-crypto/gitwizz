@@ -47,6 +47,9 @@ public static class Pretty
         Conflicts(plan, c);
         Explanations(plan, c);
         Verification(plan, c);
+        if (Report.NextCommand(plan) is { } next)
+            c.Write(new Panel(new Markup($"[bold]{Esc(next)}[/]\n[{Hex(Muted)}]then re-run pr-optimizer: the plan is re-evaluated after every real merge[/]"))
+                .Header($" next step: merge {Esc(plan.Steps[0].Pr.Id)} ").RoundedBorder().BorderColor(Ok).Expand());
         c.Write(new Rule($"[{Hex(Muted)}]total cost[/] [bold]{plan.TotalCost:0.##}[/]").RuleStyle(Style.Parse("grey")).RightJustified());
     }
 
@@ -148,16 +151,17 @@ public static class Pretty
             return;
         }
 
-        var ids = Ordered(plan).Select(p => p.Id).ToList();
-        var t = new Table().RoundedBorder().BorderColor(Muted).Title("[bold]conflict risk[/]").AddColumn("");
-        foreach (var id in ids) t.AddColumn(new TableColumn(Id(id)).Centered());
-        foreach (var a in ids)
-            {
-            var pa = plan.Prs.First(p => p.Id == a);
-            t.AddRow(ids.Select(b => a == b ? $"[{Hex(Muted)}]—[/]"
-                : pa.Dependencies.Contains(b) || plan.Prs.First(p => p.Id == b).Dependencies.Contains(a) ? $"[{Hex(Accent)}]dep[/]"
-                : W(a, b) is var x && x <= 0 ? $"[{Hex(Muted)}]·[/]"
-                : $"[black on {Hex(CostColor(x * 1.5))}] {x:0.00} [/]").Prepend(Id(a)).ToArray());
+        // Columns are numbered like the plan table (#), so long branch names only appear once, on the rows.
+        var ordered = Ordered(plan);
+        var t = new Table().RoundedBorder().BorderColor(Muted).Title("[bold]conflict risk[/]").AddColumn("[bold]#[/]").AddColumn("");
+        for (int i = 0; i < ordered.Count; i++) t.AddColumn(new TableColumn($"[bold]{i + 1}[/]").Centered());
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            var a = ordered[i];
+            t.AddRow(ordered.Select(b => a == b ? $"[{Hex(Muted)}]—[/]"
+                : a.Dependencies.Contains(b.Id) || b.Dependencies.Contains(a.Id) ? $"[{Hex(Accent)}]dep[/]"
+                : W(a.Id, b.Id) is var x && x <= 0 ? $"[{Hex(Muted)}]·[/]"
+                : $"[black on {Hex(CostColor(x * 1.5))}]{x:0.00}[/]").Prepend(Id(a.Id)).Prepend($"{i + 1}").ToArray());
         }
         c.Write(t);
         c.MarkupLine($"  [{Hex(Muted)}]· none[/]  [{Hex(Accent)}]dep[/] dependency  [black on {Hex(Warn)}] low [/] [black on {Hex(Risk)}] medium [/] [black on {Hex(Bad)}] high [/]");

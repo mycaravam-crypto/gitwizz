@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <AssemblyName>pr-optimizer</AssemblyName>
     <RootNamespace>PrOptimizer</RootNamespace>
+    <Version>0.3.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>
