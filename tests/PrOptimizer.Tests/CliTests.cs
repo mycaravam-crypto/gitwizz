@@ -1,3 +1,4 @@
+using System.Text.Json;
 using PrOptimizer;
 
 namespace PrOptimizer.Tests;
@@ -46,5 +47,31 @@ public class CliTests
         Assert.Throws<InvalidOperationException>(() => Example.Create(other));
         Assert.True(File.Exists(Path.Combine(other, "keep.txt")));
         Directory.Delete(other, true);
+    }
+
+    [Fact]
+    public void Reads_branch_policy_and_gates_on_required_checks()
+    {
+        var policy = Providers.ParsePolicy(
+            """{"protection":{"required_status_checks":{"contexts":["build"]}}}""",
+            """[{"type":"merge_queue","parameters":{"merge_method":"SQUASH"}}, {"type":"required_linear_history"},""" +
+            """ {"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]""");
+        Assert.True(policy.MergeQueue);
+        Assert.Equal(MergeStrategy.Squash, policy.QueueStrategy);
+        Assert.True(policy.LinearHistory);
+        Assert.Equal(["build", "test"], policy.RequiredChecks.Order());
+        Assert.Empty(Providers.ParsePolicy("", "").RequiredChecks);
+
+        JsonElement Rollup(string json) => JsonDocument.Parse(json).RootElement;
+        var lintFailed = Rollup("""[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"}, {"context":"test","state":"SUCCESS"},""" +
+            """ {"name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]""");
+        Assert.Equal("SUCCESS", Providers.CiStatus(lintFailed, policy.RequiredChecks)); // lint isn't required
+        Assert.Equal("FAILURE", Providers.CiStatus(lintFailed, new HashSet<string>()));
+        Assert.Equal("PENDING", Providers.CiStatus(Rollup("""[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"}]"""), policy.RequiredChecks));
+        Assert.Null(Providers.CiStatus(Rollup("[]"), new HashSet<string>()));
+
+        var plan = new Plan { Target = "main", Strategy = MergeStrategy.Squash, Provider = "github", MergeQueue = true };
+        plan.Steps.Add(new PlanStep(new PullRequest { Id = "#7", HeadSha = "x" }, 0, "", []));
+        Assert.Equal("gh pr merge 7", Report.NextCommand(plan));
     }
 }

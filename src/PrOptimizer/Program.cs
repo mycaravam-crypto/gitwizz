@@ -80,8 +80,9 @@ public static partial class Cli
 
         var provider = opt.GetValueOrDefault("provider")
             ?? (prArgs.Count > 0 ? (prArgs.All(p => p.All(char.IsDigit)) ? "github" : "local") : IsGitHub(git) ? "github" : "local");
-        var strategy = opt.GetValueOrDefault("strategy", "merge") switch
+        MergeStrategy? chosen = opt.GetValueOrDefault("strategy") switch
         {
+            null => null,
             "merge" => MergeStrategy.Merge,
             "squash" => MergeStrategy.Squash,
             "rebase" => MergeStrategy.Rebase,
@@ -104,10 +105,11 @@ public static partial class Cli
         {
             if (timing) status += m => Console.Error.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {m}");
             status($"Loading pull requests ({provider})…");
+            var policy = provider == "github" ? Providers.GitHubPolicy(git, target) : new BranchPolicy([]);
             var (targetSha, prs) = provider switch
             {
                 "local" => Providers.Local(git, target, allOpen && prArgs.Count == 0 ? LocalBranches(git, target) : prArgs),
-                "github" => Providers.GitHub(git, target, allOpen ? null : prArgs.Select(int.Parse).ToHashSet()),
+                "github" => Providers.GitHub(git, target, allOpen ? null : prArgs.Select(int.Parse).ToHashSet(), policy),
                 _ => throw new ArgumentException($"unknown provider '{provider}' (local, github)"),
             };
             if (prs.Count == 0) throw new InvalidOperationException($"no open pull requests found for '{target}'");
@@ -117,8 +119,18 @@ public static partial class Cli
             Analyzer.ResolveDependencies(git, targetSha, prs);
 
             status($"Simulating merge orders for {prs.Count} pull requests…");
+            // No --strategy: plan for what the branch enforces (merge queue method, linear history), else merge.
+            var strategy = chosen ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge);
             var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs).Build(beam);
             plan.Provider = provider;
+            plan.MergeQueue = policy.MergeQueue;
+            if (policy.MergeQueue)
+                plan.Notes.Add($"merge queue on {target}: plan only. Enqueue in this order; the queue re-tests and merges"
+                    + (policy.QueueStrategy is { } q && q != strategy ? $" (queue merges with {q.ToString().ToLowerInvariant()})" : ""));
+            if (policy.LinearHistory && strategy == MergeStrategy.Merge)
+                plan.Notes.Add($"{target} requires linear history: merge commits are rejected, use --strategy squash or rebase");
+            if (policy.RequiredChecks.Count > 0)
+                plan.Notes.Add("required checks: " + string.Join(", ", policy.RequiredChecks.Order()));
 
             if (opt.TryGetValue("verify", out var cmd) && cmd is not ("" or "none") && plan.FinalState != null)
             {
@@ -194,7 +206,7 @@ public static partial class Cli
                   --provider <name>     local | github [grey](default: auto-detected)[/]
 
             [bold]Planning[/]
-              -s, --strategy <name>     merge | squash | rebase | ff-only [grey](default: merge)[/]
+              -s, --strategy <name>     merge | squash | rebase | ff-only [grey](default: from branch rules, else merge)[/]
               -b, --beam <width>        search width, 1 = greedy [grey](default: 8)[/]
                   --verify <command>    run a command on the final merged state, e.g. "dotnet test"
 

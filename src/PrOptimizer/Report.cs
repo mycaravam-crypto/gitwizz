@@ -11,6 +11,7 @@ public static class Report
         sb.AppendLine("PR MERGE PLAN");
         sb.AppendLine($"Target: {plan.Target}");
         sb.AppendLine($"Strategy: {plan.Strategy.ToString().ToLowerInvariant()}");
+        foreach (var n in plan.Notes) sb.AppendLine($"Policy: {n}");
         sb.AppendLine();
 
         int i = 1;
@@ -47,6 +48,8 @@ public static class Report
     {
         if (plan.Steps.Count == 0) return null;
         var (id, t) = (plan.Steps[0].Pr.Id, plan.Target);
+        // With a merge queue, gh adds the PR to the queue and the queue picks the merge method.
+        if (plan.Provider == "github" && plan.MergeQueue) return $"gh pr merge {id.TrimStart('#')}";
         if (plan.Provider == "github")
             return $"gh pr merge {id.TrimStart('#')} --" + plan.Strategy switch
             { MergeStrategy.Squash => "squash", MergeStrategy.Merge => "merge", _ => "rebase" };
@@ -63,6 +66,8 @@ public static class Report
     {
         target = plan.Target,
         strategy = plan.Strategy.ToString().ToLowerInvariant(),
+        mergeQueue = plan.MergeQueue,
+        notes = plan.Notes,
         steps = plan.Steps.Select(s => new
         {
             id = s.Pr.Id, title = s.Pr.Title, cost = s.Cost, reason = s.Reason,

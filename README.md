@@ -52,7 +52,7 @@ pr-optimizer help                           # all options with examples
 | `-p`, `--prs` | | Comma-separated PR numbers (GitHub) or branch names (local) |
 | `-t`, `--target` | auto | Branch to merge into: `origin/HEAD`, else `main`/`master`, else the current branch |
 | `--provider` | auto | `github` for numeric `--prs`, or for `--all-open` with a GitHub `origin` and `gh` installed; else `local` |
-| `-s`, `--strategy` | `merge` | `merge`, `squash`, `rebase`, `ff-only` |
+| `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
 | `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
 | `--verify` | `none` | Shell command run in a temporary worktree on the final merged state |
 | `-f`, `--format` | `pretty` / `text` | `pretty` (default on a terminal), `text` (default when piped), `json`, `html` |
@@ -130,6 +130,11 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    (PR base is another PR's head branch, or commit ancestry). Cycles are an error.
 5. **Readiness**: drafts, `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, and failing/pending CI are hard constraints.
    Such PRs, and every PR that depends on them, are reported as BLOCKED. They aren't scored.
+   **Branch policy** (GitHub): required checks are read from branch protection and rulesets. When the target names
+   required checks, only those gate a PR, and a required check that hasn't reported yet counts as pending.
+   Required reviews come through GitHub's review decision. With a **merge queue**, the tool only plans: the next step
+   is `gh pr merge N` (which enqueues), and the strategy defaults to the queue's merge method. A `merge` plan on a
+   branch that requires linear history gets a warning.
 6. **Simulation** ([Simulator.cs](src/PrOptimizer/Simulator.cs)): `State₀ = target HEAD`;
    `git merge-tree --write-tree State PR`. If the merge is clean, `git commit-tree` creates the next synthetic state
    (two parents for `merge`, one for `squash`/`rebase`; `ff-only` requires ancestry).

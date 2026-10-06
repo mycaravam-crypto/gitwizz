@@ -56,6 +56,9 @@ public record Explanation(string A, string B, List<string> Shared, string AThenB
 
 public record ConflictPair(string A, string B, double Weight);
 
+/// <summary>Target branch rules (GitHub branch protection + rulesets). Empty when unknown or unprotected.</summary>
+public record BranchPolicy(HashSet<string> RequiredChecks, bool MergeQueue = false, MergeStrategy? QueueStrategy = null, bool LinearHistory = false);
+
 public class Plan
 {
     public required string Target { get; init; }
@@ -69,5 +72,7 @@ public class Plan
     public List<ConflictPair> Conflicts { get; set; } = []; // pairwise risk > 0, each pair once
     public string? FinalState { get; set; }
     public string? Verification { get; set; }
+    public bool MergeQueue { get; set; }
+    public List<string> Notes { get; } = []; // policy remarks shown with the plan
     public double TotalCost => Steps.Sum(s => s.Cost) + Blocked.Count * Planner.BlockedCost;
 }

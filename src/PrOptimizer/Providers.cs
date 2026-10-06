@@ -13,7 +13,7 @@ public static class Providers
         }).ToList());
 
     /// <summary>GitHub provider via the gh CLI. Includes PRs stacked on other selected PRs.</summary>
-    public static (string TargetSha, List<PullRequest> Prs) GitHub(Git git, string target, HashSet<int>? only)
+    public static (string TargetSha, List<PullRequest> Prs) GitHub(Git git, string target, HashSet<int>? only, BranchPolicy policy)
     {
         var json = Git.Exec(git.RepoDir, "gh", ["pr", "list", "--state", "open", "--limit", "500", "--json",
             "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels"]);
@@ -31,7 +31,7 @@ public static class Providers
                 HeadSha = e.GetProperty("headRefOid").GetString()!,
                 IsDraft = e.GetProperty("isDraft").GetBoolean(),
                 ReviewDecision = e.GetProperty("reviewDecision").GetString() is { Length: > 0 } rd ? rd : null,
-                CiStatus = CiStatus(e.GetProperty("statusCheckRollup")),
+                CiStatus = CiStatus(e.GetProperty("statusCheckRollup"), policy.RequiredChecks),
                 Labels = e.GetProperty("labels").EnumerateArray().Select(l => l.GetProperty("name").GetString()!).ToList(),
             })).ToList();
 
@@ -56,15 +56,62 @@ public static class Providers
         return (git.RevParse($"origin/{target}"), prs);
     }
 
-    static string? CiStatus(JsonElement rollup)
+    /// <summary>
+    /// Rollup of the checks that gate merging: the required ones if the branch names any, else all.
+    /// A required check that hasn't reported yet counts as pending, as GitHub won't merge without it.
+    /// </summary>
+    public static string? CiStatus(JsonElement rollup, IReadOnlySet<string> required)
     {
-        if (rollup.ValueKind != JsonValueKind.Array || rollup.GetArrayLength() == 0) return null;
         string? S(JsonElement c, string p) => c.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-        var checks = rollup.EnumerateArray().ToList();
+        var all = rollup.ValueKind == JsonValueKind.Array ? rollup.EnumerateArray().ToList() : [];
+        var checks = all.Where(c => required.Count == 0 || required.Contains(S(c, "name") ?? S(c, "context") ?? "")).ToList();
         if (checks.Any(c => S(c, "conclusion") is "FAILURE" or "CANCELLED" or "TIMED_OUT" or "ACTION_REQUIRED" || S(c, "state") is "FAILURE" or "ERROR"))
             return "FAILURE";
-        if (checks.Any(c => (S(c, "status") is { } s && s != "COMPLETED") || S(c, "state") is "PENDING" or "EXPECTED"))
+        if (checks.Any(c => (S(c, "status") is { } s && s != "COMPLETED") || S(c, "state") is "PENDING" or "EXPECTED")
+            || required.Except(all.Select(c => S(c, "name") ?? S(c, "context"))).Any())
             return "PENDING";
-        return "SUCCESS";
+        return checks.Count == 0 ? null : "SUCCESS";
+    }
+
+    /// <summary>Required checks, merge queue and linear history of the target, from branch protection and rulesets.</summary>
+    public static BranchPolicy GitHubPolicy(Git git, string target)
+    {
+        // Both endpoints only need read access; on failure (no gh auth, unknown branch) assume no policy.
+        string Api(string path) => Git.Exec(git.RepoDir, "gh", ["api", path]) is { ExitCode: 0 } r ? r.Stdout : "";
+        var branch = Uri.EscapeDataString(target);
+        return ParsePolicy(Api($"repos/{{owner}}/{{repo}}/branches/{branch}"), Api($"repos/{{owner}}/{{repo}}/rules/branches/{branch}"));
+    }
+
+    public static BranchPolicy ParsePolicy(string branchJson, string rulesJson)
+    {
+        var policy = new BranchPolicy([]);
+        if (branchJson != "" && JsonDocument.Parse(branchJson).RootElement is var b
+            && b.TryGetProperty("protection", out var p) && p.TryGetProperty("required_status_checks", out var rsc)
+            && rsc.TryGetProperty("contexts", out var contexts))
+            policy.RequiredChecks.UnionWith(contexts.EnumerateArray().Select(c => c.GetString()!));
+        if (rulesJson == "") return policy;
+        foreach (var rule in JsonDocument.Parse(rulesJson).RootElement.EnumerateArray())
+        {
+            var prm = rule.TryGetProperty("parameters", out var x) ? x : default;
+            switch (rule.GetProperty("type").GetString())
+            {
+                case "merge_queue":
+                    var method = prm.ValueKind == JsonValueKind.Object && prm.TryGetProperty("merge_method", out var m) ? m.GetString() : null;
+                    policy = policy with
+                    {
+                        MergeQueue = true,
+                        QueueStrategy = method switch { "SQUASH" => MergeStrategy.Squash, "REBASE" => MergeStrategy.Rebase, "MERGE" => MergeStrategy.Merge, _ => null },
+                    };
+                    break;
+                case "required_status_checks":
+                    policy.RequiredChecks.UnionWith(prm.GetProperty("required_status_checks").EnumerateArray()
+                        .Select(c => c.GetProperty("context").GetString()!));
+                    break;
+                case "required_linear_history":
+                    policy = policy with { LinearHistory = true };
+                    break;
+            }
+        }
+        return policy;
     }
 }
