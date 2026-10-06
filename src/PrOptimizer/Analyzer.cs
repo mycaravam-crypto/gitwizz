@@ -117,15 +117,24 @@ public static partial class Analyzer
         var hb = b.Hunks.Where(h => shared.Contains(h.Path)).ToList();
         w += 0.3 * a.Hunks.Where(h => shared.Contains(h.Path)).Count(h => hb.Any(h.Overlaps));
 
-        bool Risky(PullRequest p, string f) =>
-            p.Files.Any(c => (c.Kind is ChangeKind.Deleted && c.Path == f) || (c.Kind is ChangeKind.Renamed && c.OldPath == f));
-        w += 0.4 * sharedFiles.Count(f => Risky(a, f) != Risky(b, f));
+        // A path names one file lineage: a rename is found by its old and its new path.
+        static FileChange Change(PullRequest p, string f) => p.Files.First(c => c.Path == f || c.OldPath == f);
+        w += 0.4 * sharedFiles.Count(f => LineageClash(Change(a, f), Change(b, f)));
 
         // Same member touched, even on different lines, is a likely semantic conflict.
         w += 0.2 * a.Members.Intersect(b.Members).Count();
 
         return Math.Min(w, 1.0);
     }
+
+    /// <summary>
+    /// Two changes to one file lineage that clash beyond line overlap: delete or rename against an edit or add,
+    /// rename against delete, or renames to different targets. Identical deletes or renames merge cleanly.
+    /// </summary>
+    public static bool LineageClash(FileChange a, FileChange b) =>
+        a.Kind == b.Kind
+            ? a.Kind == ChangeKind.Renamed && a.Path != b.Path
+            : a.Kind is ChangeKind.Deleted or ChangeKind.Renamed || b.Kind is ChangeKind.Deleted or ChangeKind.Renamed;
 
     static bool Accepts(HashSet<int> arities, int args) =>
         arities.Count > 0 && (args == -1 || arities.Contains(args) || arities.Contains(-1));

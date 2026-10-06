@@ -77,6 +77,44 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Tracks_renames_as_one_file_lineage()
+    {
+        // Large enough that git still detects the rename after small edits (similarity > 50%).
+        var foo = "class Foo\n{\n    int Charge() => 1;\n\n    int Refund() => 2;\n"
+            + string.Concat(Enumerable.Range(1, 10).Select(i => $"\n    int Get{i}() => {i};\n")) + "}\n";
+        Write("Foo.cs", foo);
+        Commit("foo");
+        void Mv(string to) => _git.Run("mv", "Foo.cs", to);
+        Branch("ren", "main", () => { Mv("Bar.cs"); Write("Bar.cs", foo.Replace("=> 1", "=> 10")); });
+        Branch("ren-mod", "ren", () => Write("Bar.cs", foo.Replace("=> 1", "=> 10").Replace("=> 2", "=> 20")));
+        Branch("ren2", "main", () => Mv("Baz.cs"));
+        Branch("mod", "main", () => Write("Foo.cs", foo.Replace("=> 1", "=> 11")));
+        Branch("del", "main", () => _git.Run("rm", "-q", "Foo.cs"));
+        _git.Run("checkout", "-q", "main");
+
+        var (sha, list) = Providers.Local(_git, "main", ["ren", "ren-mod", "ren2", "mod", "del"]);
+        foreach (var pr in list) Analyzer.Analyze(_git, sha, pr);
+        Analyzer.ResolveDependencies(_git, sha, list);
+        var p = list.ToDictionary(x => x.Id);
+        double W(string a, string b) => Analyzer.ConflictWeight(p[a], p[b], out _);
+
+        // rename vs modify: same lineage, same hunk, same member.
+        Assert.Contains("Foo.Charge()", p["ren"].Members.Intersect(p["mod"].Members));
+        Assert.True(W("ren", "mod") >= 0.7);
+        // rename vs rename to another name, delete vs rename: lineage clashes git can't merge.
+        Assert.True(W("ren", "ren2") >= 0.4);
+        Assert.True(W("del", "ren2") >= 0.4);
+        Assert.True(Analyzer.LineageClash(new("Bar.cs", ChangeKind.Renamed, "Foo.cs"), new("Bar.cs", ChangeKind.Added)));
+        Assert.False(Analyzer.LineageClash(new("Bar.cs", ChangeKind.Renamed, "Foo.cs"), new("Bar.cs", ChangeKind.Renamed, "Foo.cs")));
+        // rename, then modify the new path: a stacked PR that waits for the rename.
+        Assert.Equal(["ren"], p["ren-mod"].Dependencies);
+
+        var plan = new Planner(new Simulator(_git, MergeStrategy.Merge), "main", sha, [p["ren"], p["ren-mod"], p["del"]]).Build(8);
+        Assert.Equal(["ren", "ren-mod"], plan.Steps.Select(s => s.Pr.Id));
+        Assert.Equal(["del"], plan.Blocked.Select(b => b.Pr.Id)); // rename/delete is a real conflict
+    }
+
+    [Fact]
     public void Generated_file_conflicts_are_regenerated_and_plans_are_deterministic()
     {
         Write("Api.g.cs", "// gen 1\n");

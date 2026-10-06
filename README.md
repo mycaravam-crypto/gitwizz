@@ -130,7 +130,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    and the names its new lines call or reference. That gives **semantic risks**: B calls `GetUser(id)` but A changes
    it to `GetUser(id, tenant)`, B calls an overload only A adds, or both PRs add migrations to the same folder.
    A pairwise **conflict weight** in [0,1] combines file overlap, hunk overlap, shared members
-   delete/rename-vs-modify risk, and 0.3 per semantic risk.
+   lineage clashes, and 0.3 per semantic risk. A rename is one file **lineage**, found by its old and its new path.
+   Delete or rename against an edit, rename against delete, and renames to different names add 0.4 per file.
+   Identical deletes or renames don't.
    **History**: the target's last 200 merge commits are replayed with `git merge-tree` (batched) to see which files
    really conflicted. Each file gets a rate, `conflicts / (merges that brought it in + 1)`, and a shared file with
    rate r weighs `(1 + 2r)`× more. Step reasons name conflict-prone files ("billing.cs (33 %)").
