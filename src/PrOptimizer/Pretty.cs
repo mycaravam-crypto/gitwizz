@@ -68,7 +68,8 @@ public static class Pretty
         if (regen > 0) chart.AddItem($"{IconRegen} regenerate", regen, Warn);
         if (plan.Blocked.Count > 0) chart.AddItem($"{IconBlocked} blocked", plan.Blocked.Count, Bad);
 
-        c.Write(new Panel(new Rows(facts, new Text(""), chart)).Header(" summary ").RoundedBorder().BorderColor(Muted).Expand());
+        var notes = plan.Notes.Select(n => (IRenderable)new Markup($"[{Hex(Warn)}]⚑[/] [{Hex(Muted)}]{Esc(n)}[/]"));
+        c.Write(new Panel(new Rows([facts, new Text(""), chart, .. notes])).Header(" summary ").RoundedBorder().BorderColor(Muted).Expand());
     }
 
     static void Flow(Plan plan, IAnsiConsole c)
