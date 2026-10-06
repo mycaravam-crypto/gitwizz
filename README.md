@@ -111,7 +111,7 @@ Currently independent candidates (parallelizable):
     docs
 
 Next: git checkout main && git merge --no-ff docs
-Total cost: 10.7
+Total cost: 0.7
 ```
 
 ## How it works
@@ -160,7 +160,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    marginalCost = Σ conflictWeight(PR, pending PRs) + 0.5·regenerateFiles − 0.1·unblockedDependents
    ```
 
-   A PR that can't merge cleanly at a dead end is BLOCKED (+10). When total costs are equal, cheaper PRs go first.
+   Plans are compared **lexicographically**: first the number of unmerged PRs, then total cost, then cheaper PRs first,
+   then name. A plan that merges every PR always beats a cheaper one that leaves a PR BLOCKED. Finished plans are kept
+   outside the beam, so the search can't prune the best one.
    The report also lists PRs that are parallelizable right now, and gives "Why A before B?" for overlapping pairs
    whose two orders give different results in simulation.
 8. **Verification** ([Verify.cs](src/PrOptimizer/Verify.cs)): `git worktree add --detach` on the final synthetic commit,
