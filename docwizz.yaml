@@ -1,0 +1,20 @@
+# docwizz (https://github.com/mycaravam-crypto/docwizz): documentation gaps in gitwizz.
+# Run locally: `docwizz analyze .` (all gaps) or `docwizz check . --since origin/main` (what a change introduces).
+# Documentation profile: default, software, api, architecture, technical-publication, iso-42010, iso-15289.
+profile: default
+check:
+  min_coverage: 80
+  max_critical: 0
+  max_violations: 0
+  max_cycles: 0
+  fail_on: low
+architecture:
+  layers: {}            # single-project CLI: no layers to enforce
+  allow: {}
+security:
+  enabled: false
+# Test code: scanned only to link tests to the code they exercise; never analyzed or documented.
+tests: ["tests/*", "*.Tests/*"]
+exclude: []
+# gitwizz documents members with /// XML docs; plain // comments are explanations, not summaries.
+comment_docs: false

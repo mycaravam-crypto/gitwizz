@@ -61,6 +61,18 @@ If PowerShell refuses to load the profile, allow local scripts once: `Set-Execut
 
 Then run `pr-optimizer --all-open` in any repository. After pulling changes, re-run the `dotnet publish` line to update.
 
+## Documentation gaps
+
+[docwizz](https://github.com/mycaravam-crypto/docwizz) checks this repository's `///` docs, configured in
+[docwizz.yaml](docwizz.yaml). On every pull request, [.github/workflows/docwizz.yml](.github/workflows/docwizz.yml)
+posts one comment with the documentation gaps the change *introduces*, and fails the job on a new critical gap.
+Existing gaps don't fail it. To see them all locally:
+
+```bash
+docwizz analyze .                        # every gap, ranked by how much it needs docs
+docwizz check . --since origin/main      # only what your branch introduces, as CI runs it
+```
+
 ## Usage
 
 Run inside the repository. `plan` is the default command, so `pr-optimizer --all-open` is enough.
