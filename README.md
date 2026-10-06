@@ -33,6 +33,34 @@ dotnet test
 dotnet publish src/PrOptimizer -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
 ```
 
+## Install as a command
+
+Publish the DLL to a fixed folder, then point a shell alias at it.
+
+```bash
+dotnet publish src/PrOptimizer -c Release -o ~/tools/pr-optimizer   # creates ~/tools/pr-optimizer/pr-optimizer.dll
+```
+
+**Bash / zsh**: add the alias to your startup file so every new shell has it.
+
+```bash
+echo "alias pr-optimizer='dotnet ~/tools/pr-optimizer/pr-optimizer.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
+source ~/.bashrc
+```
+
+**PowerShell**: `Set-Alias` can't pass arguments, so use a function. `$PROFILE` runs at every start.
+
+```powershell
+dotnet publish src/PrOptimizer -c Release -o $HOME\tools\pr-optimizer
+if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
+Add-Content $PROFILE 'function pr-optimizer { dotnet "$HOME\tools\pr-optimizer\pr-optimizer.dll" @args }'
+. $PROFILE
+```
+
+If PowerShell refuses to load the profile, allow local scripts once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+Then run `pr-optimizer --all-open` in any repository. After pulling changes, re-run the `dotnet publish` line to update.
+
 ## Usage
 
 Run inside the repository. `plan` is the default command, so `pr-optimizer --all-open` is enough.
