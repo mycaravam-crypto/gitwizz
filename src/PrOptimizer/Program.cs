@@ -125,7 +125,7 @@ public static partial class Cli
             status($"Simulating merge orders for {prs.Count} pull requests…");
             // No --strategy: plan for what the branch enforces (merge queue method, linear history), else merge.
             var strategy = chosen ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge);
-            var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs, history).Build(beam);
+            var plan = new Planner(new Simulator(git, strategy, RepoConfig.Load(git)), target, targetSha, prs, history).Build(beam);
             plan.Provider = provider;
             plan.MergeQueue = policy.MergeQueue;
             if (policy.MergeQueue)
@@ -189,6 +189,7 @@ public static partial class Cli
         : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
         : msg.Contains("no open pull requests") ? "use --prs to pick branches/PRs explicitly, or --target for another branch"
+        : msg.StartsWith("invalid .gitwizz.yml") ? "fix the file or remove it to use the defaults; see the README section 'Configuration'"
         : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'pr-optimizer help'"
         : null;
 

@@ -182,6 +182,48 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Repository_configuration_is_optional_validated_and_applied()
+    {
+        Assert.Same(RepoConfig.Default, RepoConfig.Load(_git)); // no .gitwizz.yml: built-in behaviour
+
+        Write("schema.sql", "v1\n");
+        Commit("schema");
+        Branch("s1", "main", () => Write("schema.sql", "v2\n"));
+        Branch("s2", "main", () => Write("schema.sql", "v3\n"));
+        _git.Run("checkout", "-q", "main");
+        Assert.Single(PlanFor(MergeStrategy.Merge, 8, "s1", "s2").Blocked); // a normal file: real conflict
+
+        Write(".gitwizz.yml", """
+            regenerators:
+              - match: schema.sql
+                command: make schema
+            ignored: ["docs.md"]
+            costs:
+              regeneration: 2
+            """);
+        var config = RepoConfig.Load(_git);
+        Assert.Equal(1.0, config.Costs.Conflict); // keys left out keep their defaults
+        var (sha, prs) = Providers.Local(_git, "main", ["s1", "s2"]);
+        foreach (var pr in prs) Analyzer.Analyze(_git, sha, pr);
+        var plan = new Planner(new Simulator(_git, MergeStrategy.Merge, config), "main", sha, prs).Build(8);
+        Assert.Empty(plan.Blocked);
+        var regen = plan.Steps.Single(s => s.RegenerateFiles.Count > 0);
+        Assert.Contains("schema.sql (make schema)", regen.Reason);
+        Assert.Equal(2, regen.Cost);
+
+        var a = new PullRequest { Id = "a", HeadSha = "1", Files = [new("docs.md", ChangeKind.Modified)] };
+        var b = new PullRequest { Id = "b", HeadSha = "2", Files = [new("docs.md", ChangeKind.Modified)] };
+        Assert.Equal(0, Analyzer.ConflictWeight(a, b, out _, config: config));
+
+        foreach (var bad in new[] { "colour: red\n", "costs:\n  conflict: -1\n", "regenerators:\n  - match: x\n", "costs: [1\n" })
+        {
+            Write(".gitwizz.yml", bad);
+            Assert.StartsWith("invalid .gitwizz.yml", Assert.Throws<InvalidOperationException>(() => RepoConfig.Load(_git)).Message);
+        }
+        File.Delete(P(".gitwizz.yml"));
+    }
+
+    [Fact]
     public void Learns_conflict_rates_from_past_merges()
     {
         // History on main: two branches edit docs.md; the second merge conflicts and is resolved by hand.

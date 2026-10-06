@@ -114,6 +114,31 @@ Next: git checkout main && git merge --no-ff docs
 Total cost: 0.7
 ```
 
+## Configuration
+
+Optional. Put a `.gitwizz.yml` at the repository root. Every key is optional, and anything you leave out keeps the
+built-in default, so a repository without the file behaves exactly as described below.
+
+```yaml
+regenerators:            # files to regenerate instead of resolving by hand, and the command that does it
+  - match: package-lock.json
+    command: npm install --package-lock-only
+  - match: "*.csproj"
+    command: dotnet restore
+generated:               # more generated files (regenerable, like *.Designer.cs)
+  - "*.pb.go"
+ignored:                 # left out of overlap scoring; real merge conflicts in them still block
+  - "*.snap"
+costs:
+  regeneration: 0.5      # per file that needs regenerating
+  conflict: 1.0          # a pending PR that would really conflict after this one
+  dependency_unblock: 0.1
+```
+
+Patterns use `*` and `?`. They match the file name, or the whole path when they contain a `/`.
+A regenerator's command appears in the plan ("regenerate after merge: package-lock.json (npm install --package-lock-only)").
+Unknown keys, empty patterns and negative costs are errors.
+
 ## How it works
 
 ```text

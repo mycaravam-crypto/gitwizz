@@ -26,6 +26,56 @@ public static class FileClasses
     public static bool IsRegenerable(FileClass c) => c is FileClass.Lockfile or FileClass.Generated;
 }
 
+/// <summary>
+/// Optional repository rules from .gitwizz.yml at the repository root. Without the file (or for keys it leaves out)
+/// the built-in behaviour applies, so Default reproduces the tool without configuration.
+/// </summary>
+public record RepoConfig
+{
+    public const string FileName = ".gitwizz.yml";
+    public static readonly RepoConfig Default = new();
+
+    public List<Regenerator> Regenerators { get; init; } = [];   // regenerable files and the command that rebuilds them
+    public List<string> Generated { get; init; } = [];           // more generated (regenerable) files
+    public List<string> Ignored { get; init; } = [];             // left out of overlap scoring; real conflicts still block
+    public CostModel Costs { get; init; } = new();
+
+    public record Regenerator { public string Match { get; init; } = ""; public string Command { get; init; } = ""; }
+    public record CostModel { public double Regeneration { get; init; } = 0.5; public double Conflict { get; init; } = 1.0; public double DependencyUnblock { get; init; } = 0.1; }
+
+    public static RepoConfig Load(Git git)
+    {
+        var path = Path.Combine(git.Run("rev-parse", "--show-toplevel"), FileName);
+        if (!File.Exists(path)) return Default;
+        RepoConfig c;
+        try
+        {
+            c = new YamlDotNet.Serialization.DeserializerBuilder()
+                .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
+                .Build().Deserialize<RepoConfig?>(File.ReadAllText(path)) ?? Default;
+        }
+        catch (YamlDotNet.Core.YamlException e) { throw new InvalidOperationException($"invalid {FileName}: {e.Message} {e.InnerException?.Message}".Trim()); }
+        var error = c.Regenerators.Any(r => r is null || r.Match.Trim() == "" || r.Command.Trim() == "") ? "every regenerator needs a match and a command"
+            : c.Generated.Concat(c.Ignored).Any(g => string.IsNullOrWhiteSpace(g)) ? "empty pattern in generated/ignored"
+            : c.Costs is null || new[] { c.Costs.Regeneration, c.Costs.Conflict, c.Costs.DependencyUnblock }.Any(x => x < 0 || double.IsNaN(x)) ? "costs must be non-negative numbers"
+            : null;
+        return error == null ? c : throw new InvalidOperationException($"invalid {FileName}: {error}");
+    }
+
+    /// <summary>Glob with * and ?; matched against the file name, or the whole path when the pattern has a '/'.</summary>
+    static bool Matches(string glob, string path) =>
+        System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(glob, glob.Contains('/') ? path : Path.GetFileName(path), ignoreCase: false);
+
+    public FileClass Classify(string path) =>
+        Regenerators.Any(r => Matches(r.Match, path)) ? FileClass.Lockfile
+        : Generated.Any(g => Matches(g, path)) ? FileClass.Generated
+        : FileClasses.Classify(path);
+
+    public bool IsRegenerable(string path) => FileClasses.IsRegenerable(Classify(path));
+    public bool IsIgnored(string path) => Ignored.Any(g => Matches(g, path));
+    public string? RegenerateCommand(string path) => Regenerators.FirstOrDefault(r => Matches(r.Match, path))?.Command;
+}
+
 public static partial class Analyzer
 {
     /// <summary>Fills BaseSha, Files, Hunks and Members relative to the merge-base with the target.</summary>
@@ -104,14 +154,15 @@ public static partial class Analyzer
     /// </summary>
     // ponytail: hunk comparison assumes both PRs share a merge-base; diverging bases make it approximate.
     public static double ConflictWeight(PullRequest a, PullRequest b, out List<string> sharedFiles,
-        IReadOnlyDictionary<string, double>? history = null)
+        IReadOnlyDictionary<string, double>? history = null, RepoConfig? config = null)
     {
-        sharedFiles = Paths(a).Intersect(Paths(b)).ToList();
+        config ??= RepoConfig.Default;
+        sharedFiles = Paths(a).Intersect(Paths(b)).Where(f => !config.IsIgnored(f)).ToList();
         // Level 4: API changes the other PR's new code relies on, and migrations added side by side.
         double w = 0.3 * SemanticRisks(a, b).Count;
 
         foreach (var f in sharedFiles)
-            w += (FileClasses.IsRegenerable(FileClasses.Classify(f)) ? 0.05 : 0.1) * (1 + 2 * (history?.GetValueOrDefault(f) ?? 0));
+            w += (config.IsRegenerable(f) ? 0.05 : 0.1) * (1 + 2 * (history?.GetValueOrDefault(f) ?? 0));
 
         var shared = sharedFiles.ToHashSet();
         var hb = b.Hunks.Where(h => shared.Contains(h.Path)).ToList();
