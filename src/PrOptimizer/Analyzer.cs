@@ -28,7 +28,7 @@ public static class FileClasses
 
 public static partial class Analyzer
 {
-    /// <summary>Fills BaseSha, Files and Hunks relative to the merge-base with the target.</summary>
+    /// <summary>Fills BaseSha, Files, Hunks and Members relative to the merge-base with the target.</summary>
     public static void Analyze(Git git, string target, PullRequest pr)
     {
         pr.BaseSha = git.MergeBase(target, pr.HeadSha);
@@ -36,6 +36,10 @@ public static partial class Analyzer
         string[] diff = ["-c", "core.quotePath=false", "diff", "-M", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
         pr.Files = ParseNameStatus(git.Run([.. diff, "--name-status", pr.BaseSha, pr.HeadSha]));
         pr.Hunks = ParseHunks(git.Run([.. diff, "-U0", pr.BaseSha, pr.HeadSha]));
+        // Hunks of added files start at 0 and have no old-side members.
+        pr.Members = pr.Hunks.Where(h => h.Start > 0 && Structure.Supports(h.Path)).GroupBy(h => h.Path)
+            .SelectMany(g => Structure.TouchedMembers(git.Run("show", $"{pr.BaseSha}:{g.Key}"), g))
+            .ToHashSet();
     }
 
     public static List<FileChange> ParseNameStatus(string output) =>
@@ -94,6 +98,9 @@ public static partial class Analyzer
         bool Risky(PullRequest p, string f) =>
             p.Files.Any(c => (c.Kind is ChangeKind.Deleted && c.Path == f) || (c.Kind is ChangeKind.Renamed && c.OldPath == f));
         w += 0.4 * sharedFiles.Count(f => Risky(a, f) != Risky(b, f));
+
+        // Same member touched, even on different lines, is a likely semantic conflict.
+        w += 0.2 * a.Members.Intersect(b.Members).Count();
 
         return Math.Min(w, 1.0);
     }

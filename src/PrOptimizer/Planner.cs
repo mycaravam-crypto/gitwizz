@@ -118,9 +118,12 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         if (r.RegenerateFiles.Count > 0) reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles));
         reasons.Add(overlaps.Count == 0
             ? "no overlapping changes with pending PRs"
-            : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Weight(pr, o):0.00})")));
+            : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Weight(pr, o):0.00}{SharedMembers(pr, o)})")));
         return (Math.Round(Math.Max(cost, 0), 2), string.Join("; ", reasons));
     }
+
+    static string SharedMembers(PullRequest a, PullRequest b) =>
+        a.Members.Intersect(b.Members).ToList() is { Count: > 0 } m ? ": " + string.Join(", ", m) : "";
 
     /// <summary>Ready PRs with no dependencies that merge cleanly now and touch nothing any other PR touches.</summary>
     List<string> Parallelizable(List<PullRequest> pool) =>
@@ -141,8 +144,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
                 var ab = Pair(a, b);
                 var ba = Pair(b, a);
                 if (ab == ba) continue;
+                var members = a.Members.Intersect(b.Members).ToList();
                 res.Add($"Why {a} before {b}?\n" +
-                        $"  both modify: {string.Join(", ", _weights[(a.Id, b.Id)].Files)}\n" +
+                        $"  both modify: {string.Join(", ", members.Count > 0 ? members : _weights[(a.Id, b.Id)].Files)}\n" +
                         $"  {a} -> {b} = {ab}\n  {b} -> {a} = {ba}");
             }
         return res;

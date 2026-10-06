@@ -30,6 +30,7 @@ public class PullRequest
     public string BaseSha { get; set; } = "";
     public List<FileChange> Files { get; set; } = [];
     public List<Hunk> Hunks { get; set; } = [];
+    public HashSet<string> Members { get; set; } = []; // e.g. "UserService.Login(string)", C# only
     public HashSet<string> Dependencies { get; } = [];
 
     // Readiness (provider-supplied). Null reason == ready.

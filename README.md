@@ -90,7 +90,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    `github` reads open PRs through `gh` (title, body, labels, draft, review decision, CI rollup)
    and fetches `refs/pull/N/head`.
 2. **Analysis** ([Analyzer.cs](src/PrOptimizer/Analyzer.cs)): changed files (with renames and deletes) and
-   `-U0` hunks against the merge-base. A pairwise **conflict weight** in [0,1] combines file overlap, hunk overlap
+   `-U0` hunks against the merge-base. For C# files, hunks are mapped to the **members** they touch with Roslyn
+   (e.g. `Billing.Charge(decimal)`), so two PRs editing different lines of the same method are still flagged.
+   A pairwise **conflict weight** in [0,1] combines file overlap, hunk overlap, shared members
    and delete/rename-vs-modify risk.
 3. **File classes**: lockfiles and generated files (`package-lock.json`, `*.Designer.cs`, …) aren't ignored.
    If a merge conflicts *only* in such files, it counts as mergeable with a "regenerate after merge" note (cost 0.5 per file).
@@ -122,8 +124,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
 - Dependencies on PRs outside the selected set are ignored.
 - `--verify` checks only the final state. There are no per-batch or per-step modes yet.
 - Synthetic commits are unreferenced objects. `git gc` cleans them up.
+- Structural overlap covers C# only. Other languages use file and hunk overlap.
 
 ## Roadmap
 
-v2 issues: [#15 structural (AST) overlap](../../issues/15), [#16 semantic dependencies](../../issues/16),
+v2 issues: [#16 semantic dependencies](../../issues/16),
 [#17 historical intelligence](../../issues/17), [#18 merge queue / branch protection](../../issues/18).
