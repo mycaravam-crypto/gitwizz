@@ -94,6 +94,10 @@ public static class Providers
         return ParsePolicy(Api($"repos/{{owner}}/{{repo}}/branches/{branch}"), Api($"repos/{{owner}}/{{repo}}/rules/branches/{branch}"));
     }
 
+    /// <summary>
+    /// Branch policy from GitHub's branch and rulesets JSON: required checks, merge queue and its method, linear history.
+    /// An empty string means that API call returned nothing.
+    /// </summary>
     public static BranchPolicy ParsePolicy(string branchJson, string rulesJson)
     {
         var policy = new BranchPolicy([]);

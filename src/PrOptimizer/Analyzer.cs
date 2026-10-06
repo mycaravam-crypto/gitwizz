@@ -9,6 +9,7 @@ public static class FileClasses
     static readonly string[] BinaryExt = [".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".dll", ".exe", ".so", ".woff", ".woff2"];
     static readonly string[] ConfigExt = [".json", ".yaml", ".yml", ".toml", ".ini", ".config", ".props", ".targets", ".env"];
 
+    /// <summary>Built-in file class from the name or path: lockfile, generated, migration, submodule, binary, configuration or normal.</summary>
     public static FileClass Classify(string path)
     {
         var name = Path.GetFileName(path);
@@ -43,6 +44,7 @@ public record RepoConfig
     public record Regenerator { public string Match { get; init; } = ""; public string Command { get; init; } = ""; }
     public record CostModel { public double Regeneration { get; init; } = 0.5; public double Conflict { get; init; } = 1.0; public double DependencyUnblock { get; init; } = 0.1; }
 
+    /// <summary>Reads .gitwizz.yml from the repository root, or Default without one; throws on invalid YAML or values.</summary>
     public static RepoConfig Load(Git git)
     {
         var path = Path.Combine(git.Run("rev-parse", "--show-toplevel"), FileName);

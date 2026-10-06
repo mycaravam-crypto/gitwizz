@@ -49,6 +49,7 @@ public static partial class Cli
     static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "history", "verify", "verify-at", "format", "output", "repo"];
     static readonly string[] Flags = ["all-open"];
 
+    /// <summary>Parses arguments into option → value (flags become "true"), resolving aliases; unknown options suggest a near match.</summary>
     public static Dictionary<string, string> Parse(string[] args)
     {
         var opt = new Dictionary<string, string>();
@@ -67,6 +68,10 @@ public static partial class Cli
         return opt;
     }
 
+    /// <summary>
+    /// Runs the plan command: validates options, loads PRs from the provider, analyzes, plans, optionally verifies, and
+    /// renders or writes the report. Returns 1 if verification failed, else 0.
+    /// </summary>
     public static int Plan(Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = new Git(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")));
@@ -190,6 +195,7 @@ public static partial class Cli
         git.Run("for-each-ref", "--format=%(refname:short)", "--no-merged", target, "refs/heads")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
 
+    /// <summary>A next step to suggest for a known error message, or null.</summary>
     public static string? Hint(string msg) =>
         msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
         : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
