@@ -9,7 +9,7 @@ namespace PrOptimizer;
 public class Planner(Simulator sim, string targetName, string targetSha, List<PullRequest> prs,
     IReadOnlyDictionary<string, double>? history = null)
 {
-    readonly Dictionary<(string, string), (double W, List<string> Files, bool Independent)> _weights = Pairwise(prs, history);
+    readonly Dictionary<(string, string), (double W, List<string> Files, bool Independent)> _weights = Pairwise(prs, history, sim.Config);
 
     record Node(List<PlanStep> Steps, Lazy<string> State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked, Node? Parent = null)
     {
@@ -21,13 +21,13 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
     }
 
     static Dictionary<(string, string), (double, List<string>, bool)> Pairwise(List<PullRequest> prs,
-        IReadOnlyDictionary<string, double>? history)
+        IReadOnlyDictionary<string, double>? history, RepoConfig config)
     {
         var d = new Dictionary<(string, string), (double, List<string>, bool)>();
         foreach (var a in prs)
             foreach (var b in prs.Where(b => b != a))
             {
-                var w = Analyzer.ConflictWeight(a, b, out var f, history);
+                var w = Analyzer.ConflictWeight(a, b, out var f, history, config);
                 // A stacked PR "overlaps" its parent only by containing the parent's own changes.
                 d[(a.Id, b.Id)] = a.Dependencies.Contains(b.Id) || b.Dependencies.Contains(a.Id) ? (0, [], false) : (w, f, f.Count == 0);
             }
@@ -173,7 +173,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
     /// <summary>
     /// Marginal cost of merging pr now: regeneration work, minus an unblock bonus, plus the risk it pushes onto pending
     /// PRs that overlap it. That risk is state-aware: each risky one is simulated on the state after pr, and the simulation
-    /// outranks the static graph. A real conflict costs 1, a forced regenerate 0.5, and a clean merge keeps half the
+    /// outranks the static graph. A real conflict costs 1, a forced regenerate 0.5 (both configurable), and a clean merge keeps half the
     /// static weight as residual (semantic) risk.
     /// </summary>
     (double Cost, string Reason) Score(PullRequest pr, List<PullRequest> others, SimulationResult r)
@@ -182,15 +182,17 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         var overlaps = others.Where(o => Weight(pr, o) > 0).OrderByDescending(o => Weight(pr, o)).ToList();
         var unlocks = others.Where(o => o.Dependencies.Contains(pr.Id)).ToList();
         var after = overlaps.ToLookup(o => PairOutcome(pr, o) is { } p && p != MergeOutcome.Conflict ? p : sim.Simulate(r.Commit!.Value, o).Outcome);
-        double Risk(PullRequest o) => after[MergeOutcome.Conflict].Contains(o) ? 1
-            : after[MergeOutcome.RegenerationRequired].Contains(o) ? 0.5 : 0.5 * Weight(pr, o);
+        var c = sim.Config.Costs;
+        double Risk(PullRequest o) => after[MergeOutcome.Conflict].Contains(o) ? c.Conflict
+            : after[MergeOutcome.RegenerationRequired].Contains(o) ? c.Regeneration : 0.5 * Weight(pr, o);
 
-        double cost = overlaps.Sum(Risk) + 0.5 * r.RegenerateFiles.Count - 0.1 * unlocks.Count;
+        double cost = overlaps.Sum(Risk) + c.Regeneration * r.RegenerateFiles.Count - c.DependencyUnblock * unlocks.Count;
 
         if (pr.Dependencies.Count > 0)
             reasons.Add("dependency: " + string.Join(", ", pr.Dependencies.Select(d => pr.DependencyNotes.TryGetValue(d, out var why) ? $"{d} ({why})" : d)));
         if (unlocks.Count > 0) reasons.Add("unlocks " + string.Join(", ", unlocks));
-        if (r.RegenerateFiles.Count > 0) reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles));
+        if (r.RegenerateFiles.Count > 0)
+            reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles.Select(f => sim.Config.RegenerateCommand(f) is { } cmd ? $"{f} ({cmd})" : f)));
         if (after[MergeOutcome.Conflict].Any()) reasons.Add("then conflicts: " + string.Join(", ", after[MergeOutcome.Conflict]));
         if (after[MergeOutcome.RegenerationRequired].Any())
             reasons.Add("then needs regenerate: " + string.Join(", ", after[MergeOutcome.RegenerationRequired]));

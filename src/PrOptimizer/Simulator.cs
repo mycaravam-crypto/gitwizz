@@ -3,8 +3,10 @@ using System.Collections.Concurrent;
 namespace PrOptimizer;
 
 /// <summary>Merges PRs onto synthetic states without touching working tree or index. Thread-safe.</summary>
-public class Simulator(Git git, MergeStrategy strategy)
+public class Simulator(Git git, MergeStrategy strategy, RepoConfig? config = null)
 {
+    public RepoConfig Config { get; } = config ?? RepoConfig.Default;
+
     // Strategy is fixed per simulator instance, so it is implicitly part of the key.
     readonly ConcurrentDictionary<(string State, string Head), Lazy<SimulationResult>> _cache = new();
 
@@ -59,7 +61,7 @@ public class Simulator(Git git, MergeStrategy strategy)
         foreach (var (c, parent) in Commits(pr, state))
         {
             var (tree, conflicts) = git.MergeTree(current, c, parent);
-            if (!conflicts.All(f => FileClasses.IsRegenerable(FileClasses.Classify(f))))
+            if (!conflicts.All(Config.IsRegenerable))
                 return new(MergeOutcome.Conflict, conflicts.Select(f => $"{f} (commit {c[..7]})").ToList(), [], null);
             if (conflicts.Count > 0) tree = git.ReplacePaths(tree, c, conflicts); // as in FromMerge: never commit markers
             regenerate.AddRange(conflicts.Except(regenerate));
@@ -84,7 +86,7 @@ public class Simulator(Git git, MergeStrategy strategy)
     SimulationResult FromMerge(string state, PullRequest pr, string tree, List<string> conflicts)
     {
         // Real conflicts end here: no next state exists.
-        if (!conflicts.All(f => FileClasses.IsRegenerable(FileClasses.Classify(f))))
+        if (!conflicts.All(Config.IsRegenerable))
             return new(MergeOutcome.Conflict, conflicts, [], null);
 
         var msg = $"pr-optimizer: {pr.Id}";
