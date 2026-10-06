@@ -35,11 +35,25 @@ public static partial class Analyzer
         // Pin output format against user config (noprefix, external diff, quoted paths).
         string[] diff = ["-c", "core.quotePath=false", "diff", "-M", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
         pr.Files = ParseNameStatus(git.Run([.. diff, "--name-status", pr.BaseSha, pr.HeadSha]));
-        pr.Hunks = ParseHunks(git.Run([.. diff, "-U0", pr.BaseSha, pr.HeadSha]));
-        // Hunks of added files start at 0 and have no old-side members.
-        pr.Members = pr.Hunks.Where(h => h.Start > 0 && Structure.Supports(h.Path)).GroupBy(h => h.Path)
-            .SelectMany(g => Structure.TouchedMembers(git.Run("show", $"{pr.BaseSha}:{g.Key}"), g))
-            .ToHashSet();
+        var patch = git.Run([.. diff, "-U0", pr.BaseSha, pr.HeadSha]);
+        pr.Hunks = ParseHunks(patch);
+        var added = ParseHunks(patch, newSide: true);
+
+        List<(string, int)> before = [], after = [];
+        foreach (var f in pr.Files.Where(f => Structure.Supports(f.Path)))
+        {
+            var oldPath = f.OldPath ?? f.Path;
+            var oldSrc = f.Kind == ChangeKind.Added ? "" : git.Run("show", $"{pr.BaseSha}:{oldPath}");
+            var newSrc = f.Kind == ChangeKind.Deleted ? "" : git.Run("show", $"{pr.HeadSha}:{f.Path}");
+            pr.Members.UnionWith(Structure.TouchedMembers(oldSrc, pr.Hunks.Where(h => h.Path == oldPath && h.Start > 0)));
+            before.AddRange(Structure.Declarations(oldSrc));
+            after.AddRange(Structure.Declarations(newSrc));
+            pr.Uses.UnionWith(Structure.Uses(newSrc, added.Where(h => h.Path == f.Path)));
+        }
+        var (b, a) = (before.ToLookup(d => d.Item1, d => d.Item2), after.ToLookup(d => d.Item1, d => d.Item2));
+        pr.Api = b.Select(g => g.Key).Union(a.Select(g => g.Key))
+            .Select(n => (n, B: b[n].ToHashSet(), A: a[n].ToHashSet())).Where(x => !x.B.SetEquals(x.A))
+            .ToDictionary(x => x.n, x => (x.B, x.A));
     }
 
     public static List<FileChange> ParseNameStatus(string output) =>
@@ -56,11 +70,14 @@ public static partial class Analyzer
             };
         }).ToList();
 
-    [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+")]
+    [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))?")]
     private static partial Regex HunkHeader();
 
-    /// <summary>Hunks on the old (merge-base) side, so hunks of different PRs with the same base are comparable.</summary>
-    public static List<Hunk> ParseHunks(string diff)
+    /// <summary>
+    /// Hunks on the old (merge-base) side, so hunks of different PRs with the same base are comparable.
+    /// newSide: the added lines instead, on the PR's version of each file.
+    /// </summary>
+    public static List<Hunk> ParseHunks(string diff, bool newSide = false)
     {
         var hunks = new List<Hunk>();
         string? oldPath = null, newPath = null;
@@ -68,10 +85,11 @@ public static partial class Analyzer
         {
             if (line.StartsWith("--- ")) oldPath = line == "--- /dev/null" ? null : line[6..];
             else if (line.StartsWith("+++ ")) newPath = line == "+++ /dev/null" ? null : line[6..];
-            else if (HunkHeader().Match(line) is { Success: true } m)
+            else if (HunkHeader().Match(line) is { Success: true } m && (!newSide || newPath != null))
             {
-                var count = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : 1;
-                hunks.Add(new Hunk((oldPath ?? newPath)!, int.Parse(m.Groups[1].Value), count));
+                var g = newSide ? 3 : 1;
+                var count = m.Groups[g + 1].Success ? int.Parse(m.Groups[g + 1].Value) : 1;
+                hunks.Add(new Hunk(newSide ? newPath! : (oldPath ?? newPath)!, int.Parse(m.Groups[g].Value), count));
             }
         }
         return hunks;
@@ -89,9 +107,9 @@ public static partial class Analyzer
         IReadOnlyDictionary<string, double>? history = null)
     {
         sharedFiles = Paths(a).Intersect(Paths(b)).ToList();
-        if (sharedFiles.Count == 0) return 0;
+        // Level 4: API changes the other PR's new code relies on, and migrations added side by side.
+        double w = 0.3 * SemanticRisks(a, b).Count;
 
-        double w = 0;
         foreach (var f in sharedFiles)
             w += (FileClasses.IsRegenerable(FileClasses.Classify(f)) ? 0.05 : 0.1) * (1 + 2 * (history?.GetValueOrDefault(f) ?? 0));
 
@@ -107,6 +125,54 @@ public static partial class Analyzer
         w += 0.2 * a.Members.Intersect(b.Members).Count();
 
         return Math.Min(w, 1.0);
+    }
+
+    static bool Accepts(HashSet<int> arities, int args) =>
+        arities.Count > 0 && (args == -1 || arities.Contains(args) || arities.Contains(-1));
+
+    static string Call(string name, int args) => args < 0 ? name : $"{name}({args} args)";
+
+    /// <summary>
+    /// Semantic (level 4) risks between two PRs, in both directions: new code calls a name the other PR removes or
+    /// re-signatures ("breaks"), or calls a signature only the other PR adds ("needs"); or both add migrations
+    /// to the same folder, where order and numbering matter. Each entry adds 0.3 to the pair's conflict weight.
+    /// </summary>
+    public static List<string> SemanticRisks(PullRequest a, PullRequest b)
+    {
+        IEnumerable<string> Directed(PullRequest changer, PullRequest user) => user.Uses
+            .Where(u => changer.Api.ContainsKey(u.Name) && !user.Api.ContainsKey(u.Name))
+            .Select(u => (u, api: changer.Api[u.Name]))
+            .Where(x => Accepts(x.api.Before, x.u.Args) != Accepts(x.api.After, x.u.Args))
+            .Select(x => Accepts(x.api.Before, x.u.Args)
+                ? $"{user} uses {Call(x.u.Name, x.u.Args)}, changed by {changer}"
+                : $"{user} uses {Call(x.u.Name, x.u.Args)}, added by {changer}")
+            .Distinct();
+        static IEnumerable<string?> MigrationDirs(PullRequest p) => p.Files
+            .Where(f => f.Kind == ChangeKind.Added && FileClasses.Classify(f.Path) == FileClass.Migration)
+            .Select(f => Path.GetDirectoryName(f.Path)).Distinct();
+        return [.. Directed(a, b), .. Directed(b, a),
+            .. MigrationDirs(a).Intersect(MigrationDirs(b)).Select(d => $"both add migrations in {d}/")];
+    }
+
+    /// <summary>
+    /// Hard semantic dependency: b's new code uses a name that a introduces and that appears nowhere in the base,
+    /// so b can't build without a.
+    /// </summary>
+    static void AddSemanticDependencies(Git git, List<PullRequest> prs)
+    {
+        var known = new System.Collections.Concurrent.ConcurrentDictionary<(string, string), bool>();
+        bool InBase(string sha, string name) => known.GetOrAdd((sha, name), _ =>
+            git.Try("grep", "-q", "-w", "-F", "-e", name, sha, "--", "*.cs").ExitCode == 0);
+        foreach (var b in prs)
+            foreach (var a in prs.Where(a => a != b && !b.Dependencies.Contains(a.Id)))
+                if (b.Uses.FirstOrDefault(u => a.Api.TryGetValue(u.Name, out var api) && api.Before.Count == 0
+                        && Accepts(api.After, u.Args) && !b.Api.ContainsKey(u.Name) && !InBase(a.BaseSha, u.Name)) is { Name: not null } use)
+                {
+                    b.Dependencies.Add(a.Id);
+                    // Name-based inference can be wrong; never let it create a cycle.
+                    if (FindCycle(prs) != null) b.Dependencies.Remove(a.Id);
+                    else b.DependencyNotes[a.Id] = $"uses {use.Name}";
+                }
     }
 
     /// <summary>
@@ -139,7 +205,7 @@ public static partial class Analyzer
     public static IEnumerable<string> ExplicitDependencies(PullRequest pr) =>
         DependsOn().Matches(pr.Body + "\n" + string.Join('\n', pr.Labels)).Select(m => "#" + m.Groups[1].Value);
 
-    /// <summary>Explicit (body/labels) + structural (stacked branches / commit ancestry). Throws on cycles.</summary>
+    /// <summary>Explicit (body/labels), structural (stacked branches / commit ancestry) and semantic. Throws on cycles.</summary>
     // ponytail: dependencies on PRs outside the input set are ignored, not treated as blocking.
     public static void ResolveDependencies(Git git, string target, List<PullRequest> prs)
     {
@@ -156,6 +222,7 @@ public static partial class Analyzer
             foreach (var d in ExplicitDependencies(b).Where(d => ids.Contains(d) && d != b.Id)) b.Dependencies.Add(d);
         var cycle = FindCycle(prs);
         if (cycle != null) throw new InvalidOperationException("Dependency cycle: " + string.Join(" -> ", cycle));
+        AddSemanticDependencies(git, prs);
     }
 
     public static List<string>? FindCycle(List<PullRequest> prs)

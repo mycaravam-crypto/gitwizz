@@ -147,11 +147,14 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 
         double cost = overlaps.Sum(o => Weight(pr, o)) + 0.5 * r.RegenerateFiles.Count - 0.1 * unlocks.Count;
 
-        if (pr.Dependencies.Count > 0) reasons.Add("dependency: " + string.Join(", ", pr.Dependencies));
+        if (pr.Dependencies.Count > 0)
+            reasons.Add("dependency: " + string.Join(", ", pr.Dependencies.Select(d => pr.DependencyNotes.TryGetValue(d, out var why) ? $"{d} ({why})" : d)));
         if (unlocks.Count > 0) reasons.Add("unlocks " + string.Join(", ", unlocks));
         if (r.RegenerateFiles.Count > 0) reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles));
         var hot = overlaps.SelectMany(o => _weights[(pr.Id, o.Id)].Files).Distinct()
             .Where(f => history?.GetValueOrDefault(f) > 0).ToList();
+        var semantic = overlaps.SelectMany(o => Analyzer.SemanticRisks(pr, o)).ToList();
+        if (semantic.Count > 0) reasons.Add("semantic: " + string.Join("; ", semantic));
         if (hot.Count > 0) reasons.Add("conflict-prone in past merges: " + string.Join(", ", hot.Select(f => $"{f} ({history![f]:P0})")));
         reasons.Add(overlaps.Count == 0
             ? "no overlapping changes with pending PRs"
