@@ -77,6 +77,28 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Learns_conflict_rates_from_past_merges()
+    {
+        // History on main: two branches edit docs.md; the second merge conflicts and is resolved by hand.
+        Branch("h1", "main", () => Write("docs.md", "h1\n"));
+        Branch("h2", "main", () => Write("docs.md", "h2\n"));
+        _git.Run("checkout", "-q", "main");
+        _git.Run("merge", "-q", "--no-ff", "h1");
+        Assert.NotEqual(0, _git.Try("merge", "-q", "--no-ff", "h2").ExitCode);
+        Write("docs.md", "h1+h2\n");
+        Commit("resolve");
+
+        var history = Analyzer.ConflictHistory(_git, "main", 200);
+        Assert.Equal(1 / 3.0, history["docs.md"], 3); // 1 conflict, brought in by 2 merges
+        Assert.False(history.ContainsKey("billing.cs"));
+        Assert.Empty(Analyzer.ConflictHistory(_git, "main", 0));
+
+        var a = new PullRequest { Id = "a", HeadSha = "1", Files = [new("docs.md", ChangeKind.Modified)] };
+        var b = new PullRequest { Id = "b", HeadSha = "2", Files = [new("docs.md", ChangeKind.Modified)] };
+        Assert.True(Analyzer.ConflictWeight(a, b, out _, history) > Analyzer.ConflictWeight(a, b, out _));
+    }
+
+    [Fact]
     public void FfOnly_blocks_diverged_branches()
     {
         var plan = PlanFor(MergeStrategy.FfOnly, 8, "docs", "billing");

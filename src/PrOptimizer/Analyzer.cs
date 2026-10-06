@@ -80,16 +80,20 @@ public static partial class Analyzer
     static IEnumerable<string> Paths(PullRequest pr) =>
         pr.Files.SelectMany(f => f.OldPath is null ? [f.Path] : new[] { f.Path, f.OldPath }).Distinct();
 
-    /// <summary>Pairwise conflict risk in [0,1]. Heuristic; the simulation is the source of truth.</summary>
+    /// <summary>
+    /// Pairwise conflict risk in [0,1]. Heuristic; the simulation is the source of truth.
+    /// history: per-file conflict rate from past merges (see ConflictHistory); hot files weigh up to 3x.
+    /// </summary>
     // ponytail: hunk comparison assumes both PRs share a merge-base; diverging bases make it approximate.
-    public static double ConflictWeight(PullRequest a, PullRequest b, out List<string> sharedFiles)
+    public static double ConflictWeight(PullRequest a, PullRequest b, out List<string> sharedFiles,
+        IReadOnlyDictionary<string, double>? history = null)
     {
         sharedFiles = Paths(a).Intersect(Paths(b)).ToList();
         if (sharedFiles.Count == 0) return 0;
 
         double w = 0;
         foreach (var f in sharedFiles)
-            w += FileClasses.IsRegenerable(FileClasses.Classify(f)) ? 0.05 : 0.1;
+            w += (FileClasses.IsRegenerable(FileClasses.Classify(f)) ? 0.05 : 0.1) * (1 + 2 * (history?.GetValueOrDefault(f) ?? 0));
 
         var shared = sharedFiles.ToHashSet();
         var hb = b.Hunks.Where(h => shared.Contains(h.Path)).ToList();
@@ -103,6 +107,30 @@ public static partial class Analyzer
         w += 0.2 * a.Members.Intersect(b.Members).Count();
 
         return Math.Min(w, 1.0);
+    }
+
+    /// <summary>
+    /// Learns per-file conflict rates from the target's last merge commits: each merge is replayed with
+    /// git merge-tree (batched, one process per core), and rate = conflicts / (times the merge brought the file in + 1).
+    /// The +1 keeps a single conflict from reading as a certainty.
+    /// </summary>
+    // ponytail: only true merge commits carry history; squash/rebase-merged repos yield nothing to learn from.
+    public static Dictionary<string, double> ConflictHistory(Git git, string target, int maxMerges)
+    {
+        if (maxMerges <= 0) return [];
+        var touches = new Dictionary<string, int>();
+        var merges = new List<(string Ours, string Theirs)>();
+        foreach (var line in git.Run("log", "--merges", "--first-parent", "-n", maxMerges.ToString(), "--diff-merges=first-parent",
+                     "--name-only", "--format=>%P", target).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            if (line.StartsWith('>')) { var p = line[1..].Split(' '); merges.Add((p[0], p[1])); }
+            else touches[line] = touches.GetValueOrDefault(line) + 1;
+
+        var conflicts = new Dictionary<string, int>();
+        var size = Math.Max(8, (int)Math.Ceiling(merges.Count / (double)Environment.ProcessorCount));
+        foreach (var batch in merges.Chunk(size).AsParallel().Select(c => git.MergeTreeBatch(c)).ToList())
+            foreach (var f in batch?.SelectMany(r => r.Conflicts) ?? []) // a failed batch just contributes nothing
+                conflicts[f] = conflicts.GetValueOrDefault(f) + 1;
+        return conflicts.ToDictionary(c => c.Key, c => Math.Min(1, c.Value / (touches.GetValueOrDefault(c.Key) + 1.0)));
     }
 
     [GeneratedRegex(@"(?:depends[- ]on|blocked[- ]by)[:\s-]*#(\d+)", RegexOptions.IgnoreCase)]
