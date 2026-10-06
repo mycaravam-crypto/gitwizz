@@ -29,7 +29,7 @@ public class PlannerTests : IDisposable
     public void Dispose() => Directory.Delete(_dir, true);
 
     string P(string f) => Path.Combine(_dir, f);
-    void Write(string f, string c) => File.WriteAllText(P(f), c);
+    void Write(string f, string c) { Directory.CreateDirectory(Path.GetDirectoryName(P(f))!); File.WriteAllText(P(f), c); }
     static string Lines(int n) => string.Concat(Enumerable.Range(1, n).Select(i => $"line{i}\n"));
     void Commit(string m) { _git.Run("add", "-A"); _git.Run("commit", "-q", "-m", m); }
     void Branch(string name, string from, Action change)
@@ -96,6 +96,37 @@ public class PlannerTests : IDisposable
         var a = new PullRequest { Id = "a", HeadSha = "1", Files = [new("docs.md", ChangeKind.Modified)] };
         var b = new PullRequest { Id = "b", HeadSha = "2", Files = [new("docs.md", ChangeKind.Modified)] };
         Assert.True(Analyzer.ConflictWeight(a, b, out _, history) > Analyzer.ConflictWeight(a, b, out _));
+    }
+
+    [Fact]
+    public void Infers_semantic_dependencies_and_risks()
+    {
+        Write("Users.cs", "class UserService\n{\n    public User GetUser(int id) => null;\n}\n");
+        Commit("users");
+        // api: new type + changed signature; caller needs the new type; legacy still calls the old signature.
+        Branch("api", "main", () =>
+        {
+            Write("Tenant.cs", "public record TenantId(string Value);\n");
+            Write("Users.cs", "class UserService\n{\n    public User GetUser(int id, TenantId t) => null;\n}\n");
+        });
+        Branch("caller", "main", () => Write("Admin.cs", "class Admin\n{\n    void Show(UserService s) => s.GetUser(1, new TenantId(\"x\"));\n}\n"));
+        Branch("legacy", "main", () => Write("Report.cs", "class Report\n{\n    void Run(UserService s) => s.GetUser(5);\n}\n"));
+        Branch("m1", "main", () => Write("db/migrations/002_add_tenant.sql", "-- a\n"));
+        Branch("m2", "main", () => Write("db/migrations/002_add_index.sql", "-- b\n"));
+        _git.Run("checkout", "-q", "main");
+
+        var plan = PlanFor(MergeStrategy.Merge, 8, "caller", "legacy", "api", "m1", "m2");
+        var prs = plan.Prs.ToDictionary(p => p.Id);
+        Assert.Equal(["api"], prs["caller"].Dependencies);
+        Assert.Equal("uses TenantId", prs["caller"].DependencyNotes["api"]);
+        Assert.Empty(prs["legacy"].Dependencies); // GetUser exists at base: a risk, not a dependency
+
+        var order = plan.Steps.Select(s => s.Pr.Id).ToList();
+        Assert.True(order.IndexOf("api") < order.IndexOf("caller"));
+        Assert.Contains("legacy uses GetUser(1 args), changed by api", Analyzer.SemanticRisks(prs["api"], prs["legacy"]));
+        Assert.Equal(["both add migrations in db/migrations/"], Analyzer.SemanticRisks(prs["m1"], prs["m2"]));
+        Assert.Contains(plan.Conflicts, c => c.Weight > 0 && new[] { c.A, c.B }.Order().SequenceEqual(["api", "legacy"]));
+        Assert.Contains(plan.Steps, s => s.Reason.Contains("semantic: "));
     }
 
     [Fact]

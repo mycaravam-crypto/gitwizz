@@ -31,7 +31,10 @@ public class PullRequest
     public List<FileChange> Files { get; set; } = [];
     public List<Hunk> Hunks { get; set; } = [];
     public HashSet<string> Members { get; set; } = []; // e.g. "UserService.Login(string)", C# only
+    public Dictionary<string, (HashSet<int> Before, HashSet<int> After)> Api { get; set; } = []; // C# names whose accepted arg counts changed
+    public HashSet<(string Name, int Args)> Uses { get; set; } = []; // names the PR's new C# code calls or references
     public HashSet<string> Dependencies { get; } = [];
+    public Dictionary<string, string> DependencyNotes { get; } = []; // why, for inferred (semantic) dependencies
 
     // Readiness (provider-supplied). Null reason == ready.
     public bool IsDraft { get; init; }

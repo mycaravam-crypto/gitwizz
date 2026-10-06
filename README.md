@@ -123,15 +123,20 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
 2. **Analysis** ([Analyzer.cs](src/PrOptimizer/Analyzer.cs)): changed files (with renames and deletes) and
    `-U0` hunks against the merge-base. For C# files, hunks are mapped to the **members** they touch with Roslyn
    (e.g. `Billing.Charge(decimal)`), so two PRs editing different lines of the same method are still flagged.
+   Roslyn also records each PR's **API delta** (declared names with the argument counts they accept, before vs after)
+   and the names its new lines call or reference. That gives **semantic risks**: B calls `GetUser(id)` but A changes
+   it to `GetUser(id, tenant)`, B calls an overload only A adds, or both PRs add migrations to the same folder.
    A pairwise **conflict weight** in [0,1] combines file overlap, hunk overlap, shared members
-   and delete/rename-vs-modify risk.
+   delete/rename-vs-modify risk, and 0.3 per semantic risk.
    **History**: the target's last 200 merge commits are replayed with `git merge-tree` (batched) to see which files
    really conflicted. Each file gets a rate, `conflicts / (merges that brought it in + 1)`, and a shared file with
    rate r weighs `(1 + 2r)`× more. Step reasons name conflict-prone files ("billing.cs (33 %)").
 3. **File classes**: lockfiles and generated files (`package-lock.json`, `*.Designer.cs`, …) aren't ignored.
    If a merge conflicts *only* in such files, it counts as mergeable with a "regenerate after merge" note (cost 0.5 per file).
-4. **Dependencies**: explicit (`depends on #N` / `blocked by #N` in the body or labels) and structural
-   (PR base is another PR's head branch, or commit ancestry). Cycles are an error.
+4. **Dependencies**: explicit (`depends on #N` / `blocked by #N` in the body or labels), structural
+   (PR base is another PR's head branch, or commit ancestry), and semantic: B uses a name that A introduces
+   and that appears nowhere at the base (`git grep`), e.g. a new `TenantId` type ("dependency: A (uses TenantId)").
+   Cycles from explicit or structural edges are an error. A semantic edge that would close a cycle is dropped.
 5. **Readiness**: drafts, `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, and failing/pending CI are hard constraints.
    Such PRs, and every PR that depends on them, are reported as BLOCKED. They aren't scored.
    **Branch policy** (GitHub): required checks are read from branch protection and rulesets. When the target names
@@ -181,9 +186,11 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 - `--verify` checks only the final state. There are no per-batch or per-step modes yet.
 - Synthetic commits are unreferenced objects. `git gc` cleans them up.
 - History needs true merge commits. Squash- or rebase-merged repositories have nothing to replay, so the history is empty there.
-- Structural overlap covers C# only. Other languages use file and hunk overlap.
+- Structural overlap and semantic analysis cover C# only. Other languages use file and hunk overlap.
+- Semantic analysis is syntax-only. Names aren't resolved to types, so same-named members of different classes
+  look alike. That's why only a name that is new to the whole base becomes a hard dependency.
 
 ## Roadmap
 
-v2 issues: [#16 semantic dependencies](../../issues/16),
-[#17 historical intelligence](../../issues/17), [#18 merge queue / branch protection](../../issues/18).
+All planned v1 and v2 issues are done. Ideas from [PLAN.md](PLAN.md) that are still open: per-step/batch `--verify` modes,
+structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
