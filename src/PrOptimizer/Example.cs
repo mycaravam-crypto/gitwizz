@@ -42,6 +42,10 @@ public static class Example
         }
         """;
 
+    /// <summary>
+    /// Builds the demo repository in dir: main plus seven branches covering every plan outcome. Replaces dir only if
+    /// an earlier run created it.
+    /// </summary>
     public static void Create(string dir)
     {
         // Only ever replace a directory this command created (marker inside .git), never user data.

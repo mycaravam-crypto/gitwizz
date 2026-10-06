@@ -11,6 +11,7 @@ public static class Report
     /// <summary>Pair weights are heuristics, not probabilities, so they are shown as levels, never as percentages.</summary>
     public static string RiskLevel(double weight) => weight < 0.3 ? "low" : weight < 0.6 ? "medium" : "high";
 
+    /// <summary>Plain-text report (--format text): notes, numbered steps with status, cost and reason, blocked PRs, next step.</summary>
     public static string Text(Plan plan)
     {
         var sb = new StringBuilder();

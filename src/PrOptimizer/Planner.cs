@@ -54,6 +54,10 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 
     public double Weight(PullRequest a, PullRequest b) => _weights[(a.Id, b.Id)].W;
 
+    /// <summary>
+    /// Plans the merge order: blocks PRs that aren't ready (and their dependents), then beam-searches simulated orders
+    /// and returns the best complete plan, with its states, parallelizable PRs and "why A before B?" explanations.
+    /// </summary>
     public Plan Build(int beamWidth)
     {
         var plan = new Plan { Target = targetName, Strategy = sim.Strategy };

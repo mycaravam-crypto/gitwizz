@@ -1,0 +1,14 @@
+# Documentation gaps each pull request introduces, posted as one PR comment (docwizz check --since).
+name: docwizz
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }   # check --since needs the base commit
+      - uses: mycaravam-crypto/docwizz@main
+        with: { path: . }

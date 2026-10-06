@@ -12,6 +12,7 @@ public class Simulator(Git git, MergeStrategy strategy, RepoConfig? config = nul
 
     public MergeStrategy Strategy => strategy;
 
+    /// <summary>Merges pr onto state with this simulator's strategy; results are cached per (state, PR head).</summary>
     public SimulationResult Simulate(string state, PullRequest pr) =>
         _cache.GetOrAdd((state, pr.HeadSha), k => new(() => Run(k.State, pr))).Value;
 

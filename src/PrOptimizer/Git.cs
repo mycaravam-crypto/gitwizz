@@ -97,14 +97,14 @@ public class Git(string repoDir)
         finally { File.Delete(index); }
     }
 
-    /// <summary>
-    /// Writes a synthetic commit as a loose object in-process: no git process per commit.
-    /// Fixed identity and date keep commits deterministic, so identical merges get identical ids. The date is far in
-    /// the future: date-ordered history walks (rev-list a..b) assume children are newer than parents, and a 1970
-    /// commit on top of real history makes them stop early and list commits that are actually reachable.
-    /// </summary>
+    // Far in the future: date-ordered history walks (rev-list a..b) assume children are newer than parents, and a 1970
+    // commit on top of real history makes them stop early and list commits that are actually reachable.
     const long SyntheticDate = 4102444800; // 2100-01-01
 
+    /// <summary>
+    /// Writes a synthetic commit as a loose object in-process: no git process per commit.
+    /// Fixed identity and date keep commits deterministic, so identical merges get identical ids.
+    /// </summary>
     public string CommitTree(string tree, string message, params string[] parents)
     {
         var body = new StringBuilder($"tree {tree}\n");
@@ -128,6 +128,7 @@ public class Git(string repoDir)
         return id;
     }
 
+    /// <summary>Runs any program in dir and captures exit code, stdout and stderr; never throws on a non-zero exit.</summary>
     public static GitResult Exec(string dir, string file, string[] args, IDictionary<string, string>? env = null, string? stdin = null)
     {
         var psi = new ProcessStartInfo(file)
