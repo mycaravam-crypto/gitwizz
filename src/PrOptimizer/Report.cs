@@ -83,7 +83,7 @@ public static class Report
         }),
         blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, status = Status(b), reason = b.Reason }),
         parallelizable = plan.Parallelizable,
-        explanations = plan.Explanations.Select(e => new { a = e.A, b = e.B, shared = e.Shared, aThenB = e.AThenB, bThenA = e.BThenA }),
+        explanations = plan.Explanations.Select(e => new { a = e.A, b = e.B, files = e.Files, members = e.Members, aThenB = e.AThenB, bThenA = e.BThenA, reason = e.Reason }),
         conflicts = plan.Conflicts.Select(c => new { a = c.A, b = c.B, risk = RiskLevel(c.Weight), weight = c.Weight }),
         finalState = plan.FinalState,
         verification = plan.Verification,

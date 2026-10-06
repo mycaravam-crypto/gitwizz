@@ -317,6 +317,9 @@ public class PlannerTests : IDisposable
         // The planner finds the order that rebases cleanly: flip first, then billing.
         var plan = PlanFor(MergeStrategy.Rebase, 8, "billing", "flip");
         Assert.Equal(["flip", "billing"], plan.Steps.Select(s => s.Pr.Id));
+        var why = Assert.Single(plan.Explanations);
+        Assert.Equal(("clean", "conflict"), (why.AThenB, why.BThenA));
+        Assert.Equal("after flip, billing merges cleanly; after billing, flip conflicts", why.Reason);
         Assert.Contains("flip9", _git.Run("show", $"{plan.FinalState}:billing.cs"));
         Assert.Equal(0, _git.Try("fsck", "--no-dangling").ExitCode);
     }
