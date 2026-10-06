@@ -236,6 +236,8 @@ Search cost is kept low in four ways:
 - **Batched merges:** the merges each beam level needs go through `git merge-tree --stdin`, one process per CPU core.
 - **In-process commits:** synthetic commits are written directly as loose git objects (SHA-1 or SHA-256), not with one `git commit-tree` process per commit.
 - **One `rev-list` per PR** for dependency detection, instead of an ancestry check per pair of PRs.
+- v0.4 adds correctness work: state-aware cost, per-commit rebase, marker-free regenerate states. On the dense
+  synthetic set that costs about 10–15% (60 PRs: 3.2 s → 3.6 s), with identical plans.
 - **State-aware cost only where it matters:** pairwise outcomes are batched once. Only conflicting pairs are simulated
   again on each search state (about +35% on a dense 60-PR set: 2.5 s → 3.4 s).
 
@@ -249,7 +251,12 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 ## Known limitations
 
 - Hunk overlap assumes the PRs share a merge-base. With very different bases it's an approximation.
-- Dependencies on PRs outside the selected set are ignored.
+- A declared dependency on an *open* PR outside the selected set blocks the PR. One on a merged or closed PR counts as met.
+  A PR whose base is neither the target nor a planned PR's branch is blocked ("targets 'release', not 'main'"),
+  because `gh pr merge` would merge it elsewhere. Branches already in the target are left out with a note. A local
+  target behind `origin` gets a warning.
+- Beam search is a heuristic. Among the plans it finds, complete ones always win, but a complete order that only a
+  very wide search would reach can be missed. Raise `--beam` when the plan blocks PRs you expected to merge.
 - After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one. Later lockfile edits
   are judged against that version.
 - Synthetic commits are unreferenced objects. `git gc` cleans them up.
@@ -260,4 +267,4 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 
 ## Roadmap
 
-All planned v1 and v2 issues are done. Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+All planned v1, v2 and v0.4 issues are done. Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

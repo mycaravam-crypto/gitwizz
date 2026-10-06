@@ -133,6 +133,8 @@ public static partial class Cli
             // Local branches carry no review/CI/protection data: say so instead of implying "mergeable".
             if (provider == "local")
                 plan.Notes.Add("local branches: only structural mergeability is checked (no reviews, checks or branch protection)");
+            if (provider == "local" && Providers.BehindRemote(git, target) is > 0 and var behind)
+                plan.Notes.Add($"{target} is {behind} commit(s) behind origin/{target}: update it first (git pull on {target}), or the plan misses newer upstream changes");
             if (policy.MergeQueue)
                 plan.Notes.Add($"merge queue on {target}: plan only. Enqueue in this order; the queue re-tests and merges"
                     + (policy.QueueStrategy is { } q && q != strategy ? $" (queue merges with {q.ToString().ToLowerInvariant()})" : ""));

@@ -59,17 +59,29 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         var plan = new Plan { Target = targetName, Strategy = sim.Strategy };
 
         // Readiness is a hard constraint, applied before optimisation; dependents of blocked PRs are blocked too.
-        var blocked = prs.Select(p => (p, r: Analyzer.NotReadyReason(p))).Where(x => x.r != null)
-            .ToDictionary(x => x.p.Id, x => x.r!);
+        // Already in the target: nothing to merge, and dependencies on them are satisfied.
+        var merged = prs.Where(p => p.AlreadyMerged).ToList();
+        if (merged.Count > 0) plan.Notes.Add($"already merged into {targetName}, left out: {string.Join(", ", merged)}");
+        // Known before simulating: a PR that merges into another branch than the target (its base isn't the target or
+        // a planned PR's branch), or one that waits on an open PR outside the plan, can't be merged by following it.
+        var heads = prs.Select(p => p.HeadRef).Where(h => h != "").ToHashSet();
+        string? Structural(PullRequest p) =>
+            p.BaseRef != "" && p.BaseRef != targetName && !heads.Contains(p.BaseRef) ? $"targets '{p.BaseRef}', not '{targetName}'"
+            : p.OpenOutsideDependencies.Count > 0 ? $"depends on {string.Join(", ", p.OpenOutsideDependencies)} (open, not in this plan)"
+            : null;
+        var blocked = new Dictionary<string, (string Reason, bool Policy)>();
+        foreach (var p in prs.Except(merged))
+            if (Structural(p) is { } r) blocked[p.Id] = (r, false);
+            else if (Analyzer.NotReadyReason(p) is { } n) blocked[p.Id] = (n, true);
         for (bool changed = true; changed;)
         {
             changed = false;
-            foreach (var p in prs.Where(p => !blocked.ContainsKey(p.Id)))
+            foreach (var p in prs.Except(merged).Where(p => !blocked.ContainsKey(p.Id)))
                 if (p.Dependencies.FirstOrDefault(blocked.ContainsKey) is { } d)
-                { blocked[p.Id] = $"depends on {d} ({blocked[d]})"; changed = true; }
+                { blocked[p.Id] = ($"depends on {d} ({blocked[d].Reason})", blocked[d].Policy); changed = true; }
         }
-        plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id], Policy: true)));
-        var pool = prs.Where(p => !blocked.ContainsKey(p.Id)).ToList();
+        plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id].Reason, blocked[p.Id].Policy)));
+        var pool = prs.Except(merged).Where(p => !blocked.ContainsKey(p.Id)).ToList();
 
         // Pairwise outcomes (first -> second from the target) for every overlapping pair, batched once up front.
         var overlapping = pool.SelectMany(a => pool.Where(b => b != a && Weight(a, b) > 0).Select(b => (a, b))).ToList();
@@ -82,7 +94,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 
         // Finished plans live outside the beam, so the best complete plan can never be pruned by unfinished ones.
         Node? best = null;
-        var beam = new List<Node> { new([], new(targetSha), [], 0, null) };
+        var beam = new List<Node> { new([], new(targetSha), [.. merged.Select(p => p.Id)], 0, null) };
         while (beam.Count > 0)
         {
             // Batch-simulate what can't be reused, then evaluate all candidates in parallel; Expand reads the results.
