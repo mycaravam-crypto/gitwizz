@@ -29,7 +29,8 @@ public class PrettyTests
         plan.Prs = [a, b, x, .. Enumerable.Range(10, extraPrs).Select(i => Pr($"#{i}"))];
         plan.Conflicts = [new ConflictPair("#1", "#3", 0.8), new ConflictPair("#2", "#3", 0.2)];
         plan.Parallelizable = ["#1"];
-        plan.Explanations = [new Explanation("#1", "#3", ["A.Run()"], "clean", "conflict")];
+        plan.Explanations = [new Explanation("#1", "#3", ["a.cs"], ["A.Run()"], "clean", "conflict", "after #1, #3 merges cleanly; after #3, #1 conflicts"),
+                             new Explanation("#2", "#4", ["b.cs"], [], "policy blocked", "policy blocked", "#4 can't be ordered yet")];
         plan.Verification = "FAILED (dotnet test)\nerror [CS0103]";
         return plan;
     }
@@ -41,7 +42,7 @@ public class PrettyTests
     {
         var o = Render(Sample(), width);
         foreach (var s in new[] { "summary", "merge order", "CLEAN", "REGENERATE", "BLOCKED", "POLICY BLOCKED", "[WIP]", "[src]/a.cs", "dependencies",
-                                  "conflict risk", "why #1 before #3?", "A.Run()", "FAILED", "[CS0103]", "parallelizable" })
+                                  "conflict risk", "why #1 before #3?", "A.Run()", "shared member", "after #1, #3 merges cleanly", "policy blocked", "FAILED", "[CS0103]", "parallelizable" })
             Assert.Contains(s, o);
     }
 

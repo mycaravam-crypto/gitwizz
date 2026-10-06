@@ -114,7 +114,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         plan.Blocked.AddRange(final.Blocked!);
         plan.FinalState = final.State.Value;
         plan.Parallelizable = Parallelizable(pool);
-        plan.Explanations = Explain(final.Steps);
+        plan.Explanations = Explain(final.Steps, plan.Blocked);
         plan.Prs = prs;
         plan.Conflicts = prs.SelectMany((a, i) => prs.Skip(i + 1).Select(b => new ConflictPair(a.Id, b.Id, Weight(a, b))))
             .Where(c => c.Weight > 0).OrderByDescending(c => c.Weight).ToList();
@@ -221,28 +221,43 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
                         && sim.Simulate(targetSha, p).Mergeable)
             .Select(p => p.Id).ToList();
 
-    /// <summary>For overlapping, independent pairs: show that the chosen order matters by simulating both.</summary>
-    List<Explanation> Explain(List<PlanStep> steps)
+    /// <summary>
+    /// For overlapping, independent planned pairs whose two orders simulate differently: why the plan's order wins.
+    /// Plus, per policy-blocked PR, the planned PR it overlaps most: it can't be ordered until its policy is resolved.
+    /// </summary>
+    List<Explanation> Explain(List<PlanStep> steps, List<BlockedPr> blocked)
     {
         var res = new List<Explanation>();
+        Explanation New(PullRequest a, PullRequest b, string ab, string ba, string reason) =>
+            new(a.Id, b.Id, _weights[(a.Id, b.Id)].Files, a.Members.Intersect(b.Members).ToList(), ab, ba, reason);
         for (int i = 0; i < steps.Count; i++)
             for (int j = i + 1; j < steps.Count; j++)
             {
                 var (a, b) = (steps[i].Pr, steps[j].Pr);
                 if (b.Dependencies.Contains(a.Id) || Weight(a, b) == 0) continue;
-                var ab = Pair(a, b);
-                var ba = Pair(b, a);
+                var (ab, ba) = (PairOutcome(a, b), PairOutcome(b, a));
                 if (ab == ba) continue;
-                var members = a.Members.Intersect(b.Members).ToList();
-                res.Add(new(a.Id, b.Id, members.Count > 0 ? members : _weights[(a.Id, b.Id)].Files, ab, ba));
+                var why = Analyzer.SemanticRisks(a, b).FirstOrDefault()
+                    ?? $"after {a}, {b} {Effect(ab)}; after {b}, {a} {Effect(ba)}";
+                res.Add(New(a, b, Word(ab), Word(ba), why));
             }
+        foreach (var p in blocked.Where(x => x.Policy).Select(x => x.Pr))
+            if (steps.Select(s => s.Pr).Where(s => Weight(s, p) > 0).MaxBy(s => Weight(s, p)) is { } s)
+                res.Add(New(s, p, "policy blocked", "policy blocked", $"{p} overlaps {s} but can't be ordered until its policy block is resolved"));
         return res;
     }
 
-    string Pair(PullRequest first, PullRequest second)
+    static string Word(MergeOutcome? o) => o switch
     {
-        var r1 = sim.Simulate(targetSha, first);
-        if (!r1.Mergeable) return $"conflict on {first}";
-        return sim.Simulate(r1.Commit!.Value, second).Mergeable ? "clean" : "conflict";
-    }
+        MergeOutcome.Clean => "clean",
+        MergeOutcome.RegenerationRequired => "regenerate",
+        _ => "conflict", // null: the first PR alone already conflicts on the target
+    };
+
+    static string Effect(MergeOutcome? o) => o switch
+    {
+        MergeOutcome.Clean => "merges cleanly",
+        MergeOutcome.RegenerationRequired => "needs a regenerate",
+        _ => "conflicts",
+    };
 }

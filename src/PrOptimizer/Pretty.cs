@@ -172,15 +172,23 @@ public static class Pretty
         c.WriteLine();
     }
 
-    static string Outcome(string o) => o == "clean" ? $"[{Hex(Ok)}]{IconOk} clean[/]" : $"[{Hex(Bad)}]{IconBlocked} {Esc(o)}[/]";
+    static string Outcome(string o) => o switch
+    {
+        "clean" => $"[{Hex(Ok)}]{IconOk} clean[/]",
+        "regenerate" => $"[{Hex(Warn)}]{IconRegen} regenerate[/]",
+        "policy blocked" => $"[{Hex(Risk)}]{IconPolicy} policy blocked[/]",
+        _ => $"[{Hex(Bad)}]{IconBlocked} {Esc(o)}[/]",
+    };
 
     static void Explanations(Plan plan, IAnsiConsole c)
     {
         if (plan.Explanations.Count == 0) return;
         var panels = plan.Explanations.Select(e => new Panel(new Markup(
-                $"[{Hex(Muted)}]both modify[/] {Esc(string.Join(", ", e.Shared))}\n" +
+                $"[{Hex(Muted)}]both modify[/] {Esc(string.Join(", ", e.Files))}\n" +
+                (e.Members.Count > 0 ? $"[{Hex(Muted)}]shared member[/] {Esc(string.Join(", ", e.Members))}\n" : "") +
                 $"{Id(e.A)} {Arrow} {Id(e.B)}  {Outcome(e.AThenB)}\n" +
-                $"{Id(e.B)} {Arrow} {Id(e.A)}  {Outcome(e.BThenA)}"))
+                $"{Id(e.B)} {Arrow} {Id(e.A)}  {Outcome(e.BThenA)}\n" +
+                $"[{Hex(Muted)}]{Esc(e.Reason)}[/]"))
             .Header($" why {Esc(e.A)} before {Esc(e.B)}? ").RoundedBorder().BorderColor(Warn));
         c.Write(new Columns(panels) { Expand = false });
     }

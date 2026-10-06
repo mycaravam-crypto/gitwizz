@@ -68,11 +68,16 @@ public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> 
 /// <summary>Policy: blocked by repository rules (draft, reviews, checks, GitHub), not by the merge itself.</summary>
 public record BlockedPr(PullRequest Pr, string Reason, bool Policy = false);
 
-/// <summary>"Why A before B?": both orders simulated from the target. Outcomes are "clean", "conflict" or "conflict on X".</summary>
-public record Explanation(string A, string B, List<string> Shared, string AThenB, string BThenA)
+/// <summary>
+/// "Why A before B?": both orders simulated from the target. Outcomes are "clean", "regenerate", "conflict" or
+/// "policy blocked"; Reason states the direct evidence (a semantic risk, else the simulated outcomes).
+/// </summary>
+public record Explanation(string A, string B, List<string> Files, List<string> Members, string AThenB, string BThenA, string Reason)
 {
     public override string ToString() =>
-        $"Why {A} before {B}?\n  both modify: {string.Join(", ", Shared)}\n  {A} -> {B} = {AThenB}\n  {B} -> {A} = {BThenA}";
+        $"Why {A} before {B}?\n  both modify: {string.Join(", ", Files)}\n"
+        + (Members.Count > 0 ? $"  shared member: {string.Join(", ", Members)}\n" : "")
+        + $"  {A} -> {B} = {AThenB}\n  {B} -> {A} = {BThenA}\n  reason: {Reason}";
 }
 
 /// <summary>

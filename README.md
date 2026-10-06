@@ -209,7 +209,19 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    then name. A plan that merges every PR always beats a cheaper one that leaves a PR BLOCKED. Finished plans are kept
    outside the beam, so the search can't prune the best one.
    The report also lists PRs that are parallelizable right now, and gives "Why A before B?" for overlapping pairs
-   whose two orders give different results in simulation.
+   whose two orders give different results in simulation:
+
+   ```text
+   Why flip before billing?
+     both modify: billing.cs
+     flip -> billing = clean
+     billing -> flip = conflict
+     reason: after flip, billing merges cleanly; after billing, flip conflicts
+   ```
+
+   Each order's outcome is `clean`, `regenerate` or `conflict`, with any shared member listed. The reason is a semantic
+   risk when there is one ("legacy uses GetUser(1 args), changed by api"). A policy-blocked PR is explained against the
+   planned PR it overlaps most (`policy blocked`).
 8. **Verification** ([Verify.cs](src/PrOptimizer/Verify.cs)): `git worktree add --detach` on a synthetic plan state,
    run the command, then remove the worktree. `--verify-at` chooses the states (`final`, `critical`, `step`). Only the
    chosen plan's states are verified, never search candidates, so the test count stays linear. The first failure stops
