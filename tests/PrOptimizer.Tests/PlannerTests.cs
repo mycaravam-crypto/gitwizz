@@ -77,6 +77,26 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Generated_file_conflicts_are_regenerated_and_plans_are_deterministic()
+    {
+        Write("Api.g.cs", "// gen 1\n");
+        Commit("generated");
+        Branch("gen1", "main", () => Write("Api.g.cs", "// gen 2\n"));
+        Branch("gen2", "main", () => Write("Api.g.cs", "// gen 3\n"));
+        _git.Run("checkout", "-q", "main");
+
+        var plan = PlanFor(MergeStrategy.Merge, 8, "gen1", "gen2", "docs");
+        Assert.Empty(plan.Blocked);
+        Assert.Contains(plan.Steps, s => s.RegenerateFiles.SequenceEqual(["Api.g.cs"]));
+        Assert.DoesNotContain("<<<<<<<", _git.Run("show", $"{plan.FinalState}:Api.g.cs"));
+
+        // Same input, same plan, same synthetic final commit, regardless of input order.
+        var again = PlanFor(MergeStrategy.Merge, 8, "docs", "gen2", "gen1");
+        Assert.Equal(plan.Steps.Select(s => s.Pr.Id), again.Steps.Select(s => s.Pr.Id));
+        Assert.Equal(plan.FinalState, again.FinalState);
+    }
+
+    [Fact]
     public void Complete_plans_beat_cheaper_incomplete_ones()
     {
         var complete = new PlanObjective(Unmerged: 0, Cost: 8.2, TieBreak: 0);
