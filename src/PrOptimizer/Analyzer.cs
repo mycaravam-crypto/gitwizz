@@ -274,6 +274,7 @@ public static partial class Analyzer
         // b's commits not yet in the target. An empty set means the PR is already merged and can't be a dependency.
         var own = prs.AsParallel().ToDictionary(p => p, p =>
             git.Run("rev-list", $"{target}..{p.HeadSha}").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToHashSet());
+        foreach (var p in prs) p.AlreadyMerged = own[p].Count == 0;
         foreach (var a in prs.Where(a => own[a].Count > 0))
             foreach (var b in prs.Where(b => b != a && b.HeadSha != a.HeadSha))
                 if ((a.HeadRef != "" && b.BaseRef == a.HeadRef) || own[b].Contains(a.HeadSha))

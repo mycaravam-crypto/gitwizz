@@ -169,6 +169,54 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Never_recommends_a_merge_the_plan_cannot_deliver()
+    {
+        var (sha, local) = Providers.Local(_git, "main", ["docs", "billing", "refactor", "deps1"]);
+        PullRequest Copy(PullRequest p, string baseRef = "", List<string>? outside = null) =>
+            new() { Id = p.Id, HeadSha = p.HeadSha, HeadRef = p.HeadRef, BaseRef = baseRef, OpenOutsideDependencies = outside ?? [] };
+        // docs targets another branch; refactor is stacked on billing (fine); deps1 waits on an open PR outside the plan.
+        List<PullRequest> prs = [Copy(local[0], "release"), Copy(local[1], "main"), Copy(local[2], "billing"), Copy(local[3], "main", ["#9"])];
+        foreach (var pr in prs) Analyzer.Analyze(_git, sha, pr);
+        Analyzer.ResolveDependencies(_git, sha, prs);
+        var plan = new Planner(new Simulator(_git, MergeStrategy.Merge), "main", sha, prs).Build(8);
+
+        Assert.Equal(["billing", "refactor"], plan.Steps.Select(s => s.Pr.Id));
+        var blocked = plan.Blocked.ToDictionary(b => b.Pr.Id);
+        Assert.Equal("targets 'release', not 'main'", blocked["docs"].Reason);
+        Assert.Equal("depends on #9 (open, not in this plan)", blocked["deps1"].Reason);
+        Assert.False(blocked["docs"].Policy);
+    }
+
+    [Fact]
+    public void Already_merged_branches_are_left_out_not_recommended()
+    {
+        _git.Run("merge", "-q", "--no-ff", "docs");
+        var plan = PlanFor(MergeStrategy.Merge, 8, "docs", "billing");
+        Assert.Equal(["billing"], plan.Steps.Select(s => s.Pr.Id));
+        Assert.Empty(plan.Blocked);
+        Assert.Contains("already merged into main, left out: docs", plan.Notes);
+        Assert.Equal("git checkout main && git merge --no-ff billing", Report.NextCommand(plan));
+    }
+
+    [Fact]
+    public void Detects_a_local_target_behind_its_remote()
+    {
+        var clone = Directory.CreateTempSubdirectory("pr-opt-clone").FullName;
+        try
+        {
+            Git.Exec(_dir, "git", ["clone", "-q", _dir, clone]);
+            var cloned = new Git(clone);
+            Assert.Equal(0, Providers.BehindRemote(cloned, "main"));
+            Write("new.txt", "upstream\n");
+            Commit("upstream work");
+            cloned.Run("fetch", "-q", "origin");
+            Assert.Equal(1, Providers.BehindRemote(cloned, "main"));
+            Assert.Equal(0, Providers.BehindRemote(_git, "main")); // no origin: nothing to compare
+        }
+        finally { Directory.Delete(clone, true); }
+    }
+
+    [Fact]
     public void Complete_plans_beat_cheaper_incomplete_ones()
     {
         var complete = new PlanObjective(Unmerged: 0, Cost: 8.2, TieBreak: 0);

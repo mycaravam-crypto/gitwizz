@@ -34,6 +34,8 @@ public class PullRequest
     public Dictionary<string, (HashSet<int> Before, HashSet<int> After)> Api { get; set; } = []; // C# names whose accepted arg counts changed
     public HashSet<(string Name, int Args)> Uses { get; set; } = []; // names the PR's new C# code calls or references
     public HashSet<string> Dependencies { get; } = [];
+    public List<string> OpenOutsideDependencies { get; set; } = []; // declared dependencies on open PRs not in this plan
+    public bool AlreadyMerged { get; set; } // head already in the target: nothing to merge
     public Dictionary<string, string> DependencyNotes { get; } = []; // why, for inferred (semantic) dependencies
 
     // Readiness (provider-supplied, GitHub only). Three separate questions:

@@ -54,9 +54,19 @@ public static class Providers
             }
         }
 
+        // A declared dependency on an open PR that isn't in the plan can't be satisfied by the plan: remember it.
+        var open = all.Select(x => x.Pr.Id).ToHashSet();
+        var selected = prs.Select(p => p.Id).ToHashSet();
+        foreach (var p in prs)
+            p.OpenOutsideDependencies = Analyzer.ExplicitDependencies(p).Where(d => open.Contains(d) && !selected.Contains(d)).Distinct().ToList();
+
         git.Run([.. new[] { "fetch", "--quiet", "origin", target }, .. prs.Select(p => $"refs/pull/{p.Id[1..]}/head")]);
         return (git.RevParse($"origin/{target}"), prs);
     }
+
+    /// <summary>Commits on origin/target missing from the local target, or 0 (no such remote branch, or up to date).</summary>
+    public static int BehindRemote(Git git, string target) =>
+        git.Try("rev-list", "--count", $"{target}..refs/remotes/origin/{target}") is { ExitCode: 0 } r ? int.Parse(r.Stdout.Trim()) : 0;
 
     /// <summary>
     /// Rollup of the checks that gate merging: the required ones if the branch names any, else all.
