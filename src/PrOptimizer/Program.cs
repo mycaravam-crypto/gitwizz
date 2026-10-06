@@ -48,7 +48,7 @@ try
         _ => throw new ArgumentException($"unknown provider: {provider}"),
     };
 
-    foreach (var pr in prs) Analyzer.Analyze(git, targetSha, pr);
+    Parallel.ForEach(prs, pr => Analyzer.Analyze(git, targetSha, pr));
     Analyzer.ResolveDependencies(git, targetSha, prs);
 
     var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs).Build(beam);
@@ -62,8 +62,8 @@ try
     Console.Write(opt.GetValueOrDefault("format") == "json" ? Report.Json(plan) + "\n" : Report.Text(plan));
     return plan.Verification?.StartsWith("FAILED") == true ? 1 : 0;
 }
-catch (Exception e) when (e is InvalidOperationException or ArgumentException or FormatException)
+catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
 {
-    Console.Error.WriteLine("error: " + e.Message);
+    Console.Error.WriteLine("error: " + (e is AggregateException a2 ? a2.InnerException! : e).Message);
     return 1;
 }

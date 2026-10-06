@@ -10,7 +10,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 
     readonly Dictionary<(string, string), (double W, List<string> Files)> _weights = Pairwise(prs);
 
-    record Node(List<PlanStep> Steps, string State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked)
+    record Node(List<PlanStep> Steps, Lazy<string> State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked)
     {
         public bool Done => Blocked != null;
         public string Key => string.Join(",", Steps.Select(s => s.Pr.Id));
@@ -47,9 +47,12 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id])));
         var pool = prs.Where(p => !blocked.ContainsKey(p.Id)).ToList();
 
-        var beam = new List<Node> { new([], targetSha, [], 0, null) };
+        var beam = new List<Node> { new([], new(targetSha), [], 0, null) };
         while (beam.Any(n => !n.Done))
         {
+            // Simulate all candidates of all live nodes in parallel; Expand then reads from the cache.
+            Parallel.ForEach(beam.Where(n => !n.Done).SelectMany(n => Candidates(n, pool).Select(pr => (n, pr))),
+                x => sim.Simulate(x.n.State.Value, x.pr));
             var next = beam.Where(n => n.Done).ToList();
             foreach (var n in beam.Where(n => !n.Done)) next.AddRange(Expand(n, pool));
             // Equal totals: prefer cheap PRs early (maximising Σ cost·position pushes expensive ones late), then a stable order.
@@ -62,11 +65,14 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         var best = beam[0];
         plan.Steps.AddRange(best.Steps);
         plan.Blocked.AddRange(best.Blocked!);
-        plan.FinalState = best.State;
+        plan.FinalState = best.State.Value;
         plan.Parallelizable = Parallelizable(pool);
         plan.Explanations = Explain(best.Steps);
         return plan;
     }
+
+    static IEnumerable<PullRequest> Candidates(Node n, List<PullRequest> pool) =>
+        pool.Where(p => !n.Merged.Contains(p.Id) && p.Dependencies.All(n.Merged.Contains));
 
     IEnumerable<Node> Expand(Node n, List<PullRequest> pool)
     {
@@ -74,9 +80,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         if (remaining.Count == 0) { yield return n with { Blocked = [] }; yield break; }
 
         var any = false;
-        foreach (var pr in remaining.Where(p => p.Dependencies.All(n.Merged.Contains)))
+        foreach (var pr in Candidates(n, pool))
         {
-            var r = sim.Simulate(n.State, pr);
+            var r = sim.Simulate(n.State.Value, pr);
             if (!r.Mergeable) continue;
             any = true;
             var others = remaining.Where(o => o != pr).ToList();
@@ -91,7 +97,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         {
             var missing = pr.Dependencies.Where(d => !n.Merged.Contains(d)).ToList();
             if (missing.Count > 0) return new BlockedPr(pr, $"depends on {string.Join(", ", missing)}");
-            var r = sim.Simulate(n.State, pr);
+            var r = sim.Simulate(n.State.Value, pr);
             var after = n.Steps.Count > 0 ? $" after {n.Steps[^1].Pr.Id}" : "";
             return new BlockedPr(pr, $"conflict{after}: {string.Join(", ", r.ConflictFiles)}");
         }).ToList();
@@ -146,6 +152,6 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
     {
         var r1 = sim.Simulate(targetSha, first);
         if (!r1.Mergeable) return $"conflict on {first}";
-        return sim.Simulate(r1.Commit!, second).Mergeable ? "clean" : "conflict";
+        return sim.Simulate(r1.Commit!.Value, second).Mergeable ? "clean" : "conflict";
     }
 }

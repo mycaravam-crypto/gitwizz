@@ -32,8 +32,10 @@ public static partial class Analyzer
     public static void Analyze(Git git, string target, PullRequest pr)
     {
         pr.BaseSha = git.MergeBase(target, pr.HeadSha);
-        pr.Files = ParseNameStatus(git.Run("diff", "--name-status", "-M", pr.BaseSha, pr.HeadSha));
-        pr.Hunks = ParseHunks(git.Run("diff", "-U0", "-M", "--no-color", pr.BaseSha, pr.HeadSha));
+        // Pin output format against user config (noprefix, external diff, quoted paths).
+        string[] diff = ["-c", "core.quotePath=false", "diff", "-M", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
+        pr.Files = ParseNameStatus(git.Run([.. diff, "--name-status", pr.BaseSha, pr.HeadSha]));
+        pr.Hunks = ParseHunks(git.Run([.. diff, "-U0", pr.BaseSha, pr.HeadSha]));
     }
 
     public static List<FileChange> ParseNameStatus(string output) =>
@@ -107,16 +109,16 @@ public static partial class Analyzer
     public static void ResolveDependencies(Git git, string target, List<PullRequest> prs)
     {
         var ids = prs.Select(p => p.Id).ToHashSet();
+        // Heads already in the target can't be dependencies; skip their n² ancestry checks.
+        var unmerged = prs.AsParallel().Where(a => !git.IsAncestor(a.HeadSha, target)).ToHashSet();
+        var structural = prs.SelectMany(b => prs.Select(a => (a, b)))
+            .Where(x => x.a != x.b && x.a.HeadSha != x.b.HeadSha && unmerged.Contains(x.a))
+            .AsParallel()
+            .Where(x => (x.a.HeadRef != "" && x.b.BaseRef == x.a.HeadRef) || git.IsAncestor(x.a.HeadSha, x.b.HeadSha))
+            .ToList();
+        foreach (var (a, b) in structural) b.Dependencies.Add(a.Id);
         foreach (var b in prs)
-        {
             foreach (var d in ExplicitDependencies(b).Where(d => ids.Contains(d) && d != b.Id)) b.Dependencies.Add(d);
-            foreach (var a in prs.Where(a => a != b && a.HeadSha != b.HeadSha))
-            {
-                var stacked = a.HeadRef != "" && b.BaseRef == a.HeadRef;
-                if (stacked || (!git.IsAncestor(a.HeadSha, target) && git.IsAncestor(a.HeadSha, b.HeadSha)))
-                    b.Dependencies.Add(a.Id);
-            }
-        }
         var cycle = FindCycle(prs);
         if (cycle != null) throw new InvalidOperationException("Dependency cycle: " + string.Join(" -> ", cycle));
     }

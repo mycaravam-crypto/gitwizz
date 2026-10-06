@@ -67,7 +67,8 @@ public class Git(string repoDir)
         foreach (var a in args) psi.ArgumentList.Add(a);
         if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
         using var p = Process.Start(psi)!;
-        var stderr = p.StandardError.ReadToEndAsync();
+        // Dedicated thread: a pool-based read starves when callers block pool threads (Parallel.ForEach).
+        var stderr = Task.Factory.StartNew(p.StandardError.ReadToEnd, TaskCreationOptions.LongRunning);
         var stdout = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         return new GitResult(p.ExitCode, stdout, stderr.Result);

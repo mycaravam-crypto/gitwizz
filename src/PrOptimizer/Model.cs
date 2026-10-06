@@ -40,7 +40,7 @@ public class PullRequest
     public override string ToString() => Id;
 }
 
-public record SimulationResult(bool Mergeable, string? Tree, List<string> ConflictFiles, string? Commit, List<string> RegenerateFiles);
+public record SimulationResult(bool Mergeable, List<string> ConflictFiles, List<string> RegenerateFiles, Lazy<string>? Commit);
 
 public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> RegenerateFiles);
 
