@@ -235,6 +235,31 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Rebase_replays_each_commit()
+    {
+        // flip edits line2 and reverts it in a second commit: its final tree only changes line9.
+        _git.Run("checkout", "-q", "-b", "flip", "main");
+        Write("billing.cs", Lines(10).Replace("line2\n", "flip2\n"));
+        Commit("flip 1");
+        Write("billing.cs", Lines(10).Replace("line9\n", "flip9\n"));
+        Commit("flip 2");
+        _git.Run("checkout", "-q", "main");
+
+        var (sha, prs) = Providers.Local(_git, "main", ["billing", "flip"]);
+        var afterBilling = new Simulator(_git, MergeStrategy.Squash).Simulate(sha, prs[0]).Commit!.Value;
+        Assert.Equal(MergeOutcome.Clean, new Simulator(_git, MergeStrategy.Squash).Simulate(afterBilling, prs[1]).Outcome);
+        var rebased = new Simulator(_git, MergeStrategy.Rebase).Simulate(afterBilling, prs[1]);
+        Assert.Equal(MergeOutcome.Conflict, rebased.Outcome); // the first commit conflicts with billing's line2
+        Assert.Contains("billing.cs (commit ", rebased.ConflictFiles[0]);
+
+        // The planner finds the order that rebases cleanly: flip first, then billing.
+        var plan = PlanFor(MergeStrategy.Rebase, 8, "billing", "flip");
+        Assert.Equal(["flip", "billing"], plan.Steps.Select(s => s.Pr.Id));
+        Assert.Contains("flip9", _git.Run("show", $"{plan.FinalState}:billing.cs"));
+        Assert.Equal(0, _git.Try("fsck", "--no-dangling").ExitCode);
+    }
+
+    [Fact]
     public void FfOnly_blocks_diverged_branches()
     {
         var plan = PlanFor(MergeStrategy.FfOnly, 8, "docs", "billing");

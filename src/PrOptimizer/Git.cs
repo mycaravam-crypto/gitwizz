@@ -35,10 +35,14 @@ public class Git(string repoDir)
     public bool IsAncestor(string ancestor, string descendant) =>
         Try("merge-base", "--is-ancestor", ancestor, descendant).ExitCode == 0;
 
-    /// <summary>git merge-tree --write-tree: returns tree sha and conflicted paths (empty when clean).</summary>
-    public (string Tree, List<string> Conflicts) MergeTree(string ours, string theirs)
+    /// <summary>
+    /// git merge-tree --write-tree: returns tree sha and conflicted paths (empty when clean).
+    /// mergeBase: explicit base instead of the computed one, e.g. a commit's parent to cherry-pick it (git ≥ 2.40).
+    /// </summary>
+    public (string Tree, List<string> Conflicts) MergeTree(string ours, string theirs, string? mergeBase = null)
     {
-        var r = Try("merge-tree", "--write-tree", "--name-only", "--no-messages", ours, theirs);
+        string[] args = ["merge-tree", "--write-tree", "--name-only", "--no-messages"];
+        var r = Try([.. args, .. mergeBase != null ? new[] { "--merge-base=" + mergeBase } : [], ours, theirs]);
         if (r.ExitCode > 1)
             throw new InvalidOperationException($"git merge-tree failed: {r.Stderr.Trim()}");
         var lines = r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -95,14 +99,18 @@ public class Git(string repoDir)
 
     /// <summary>
     /// Writes a synthetic commit as a loose object in-process: no git process per commit.
-    /// Fixed identity and epoch date keep commits deterministic, so identical merges get identical ids.
+    /// Fixed identity and date keep commits deterministic, so identical merges get identical ids. The date is far in
+    /// the future: date-ordered history walks (rev-list a..b) assume children are newer than parents, and a 1970
+    /// commit on top of real history makes them stop early and list commits that are actually reachable.
     /// </summary>
+    const long SyntheticDate = 4102444800; // 2100-01-01
+
     public string CommitTree(string tree, string message, params string[] parents)
     {
         var body = new StringBuilder($"tree {tree}\n");
         foreach (var p in parents) body.Append($"parent {p}\n");
-        body.Append("author pr-optimizer <pr-optimizer@localhost> 0 +0000\n");
-        body.Append("committer pr-optimizer <pr-optimizer@localhost> 0 +0000\n\n");
+        body.Append($"author pr-optimizer <pr-optimizer@localhost> {SyntheticDate} +0000\n");
+        body.Append($"committer pr-optimizer <pr-optimizer@localhost> {SyntheticDate} +0000\n\n");
         body.Append(message).Append('\n');
         var content = Encoding.UTF8.GetBytes(body.ToString());
         byte[] obj = [.. Encoding.ASCII.GetBytes($"commit {content.Length}\0"), .. content];

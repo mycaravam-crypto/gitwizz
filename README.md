@@ -10,7 +10,7 @@ Design rationale: [PLAN.md](PLAN.md) (German).
 ## Requirements
 
 - .NET 10 SDK
-- git ≥ 2.38 (needs `merge-tree --write-tree`)
+- git ≥ 2.38 (needs `merge-tree --write-tree`); ≥ 2.40 for `--strategy rebase` (`merge-tree --merge-base`)
 - `gh` CLI, authenticated, for the GitHub provider
 
 ## Quick start
@@ -153,7 +153,10 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    branch that requires linear history gets a warning.
 6. **Simulation** ([Simulator.cs](src/PrOptimizer/Simulator.cs)): `State₀ = target HEAD`;
    `git merge-tree --write-tree State PR`. If the merge is clean, `git commit-tree` creates the next synthetic state
-   (two parents for `merge`, one for `squash`/`rebase`; `ff-only` requires ancestry).
+   (two parents for `merge`, one for `squash`; `ff-only` requires ancestry). `rebase` **replays each commit** like
+   `git rebase`: `merge-tree --merge-base=<parent>` per commit, so a conflict in one commit blocks the PR even if
+   the final tree would merge cleanly. A PR that is a single commit on its merge-base is replayed as one batched merge,
+   since the result is identical.
    Results are cached by `(state, PR head)`, and commits are only created for states the search keeps.
 7. **Planner** ([Planner.cs](src/PrOptimizer/Planner.cs)): beam search minimising
    `Σ marginalCost(PRᵢ | Stateᵢ)`, where
@@ -196,7 +199,6 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 
 ## Known limitations
 
-- `rebase` is simulated as `squash`, with the same resulting tree. Conflicts in individual commits aren't replayed.
 - Hunk overlap assumes the PRs share a merge-base. With very different bases it's an approximation.
 - Dependencies on PRs outside the selected set are ignored.
 - `--verify` checks only the final state. There are no per-batch or per-step modes yet.
