@@ -159,9 +159,14 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    `Σ marginalCost(PRᵢ | Stateᵢ)`, where
 
    ```text
-   marginalCost = Σ conflictWeight(PR, pending PRs) + 0.5·regenerateFiles − 0.1·unblockedDependents
+   marginalCost = Σ risk(PR, pending PRs) + 0.5·regenerateFiles − 0.1·unblockedDependents
    ```
 
+   `risk` is **state-aware**: the simulation outranks the static graph. Each overlapping pending PR is judged by its
+   simulated outcome after this PR. A real conflict costs 1 (exact merge on the current search state), a forced
+   regenerate 0.5, and a clean merge keeps half the static weight as residual risk. Pairwise outcomes from the target
+   are computed once up front, and only pairs that conflict there get the per-state simulation.
+   The static weights still drive the heatmap, the explanations and the batching.
    Plans are compared **lexicographically**: first the number of unmerged PRs, then total cost, then cheaper PRs first,
    then name. A plan that merges every PR always beats a cheaper one that leaves a PR BLOCKED. Finished plans are kept
    outside the beam, so the search can't prune the best one.
@@ -179,6 +184,8 @@ Search cost is kept low in four ways:
 - **Batched merges:** the merges each beam level needs go through `git merge-tree --stdin`, one process per CPU core.
 - **In-process commits:** synthetic commits are written directly as loose git objects (SHA-1 or SHA-256), not with one `git commit-tree` process per commit.
 - **One `rev-list` per PR** for dependency detection, instead of an ancestry check per pair of PRs.
+- **State-aware cost only where it matters:** pairwise outcomes are batched once. Only conflicting pairs are simulated
+  again on each search state (about +35% on a dense 60-PR set: 2.5 s → 3.4 s).
 
 | Benchmark | v0.1 | now (ReadyToRun) |
 |---|---|---|

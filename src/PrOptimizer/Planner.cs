@@ -71,6 +71,15 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id])));
         var pool = prs.Where(p => !blocked.ContainsKey(p.Id)).ToList();
 
+        // Pairwise outcomes (first -> second from the target) for every overlapping pair, batched once up front.
+        var overlapping = pool.SelectMany(a => pool.Where(b => b != a && Weight(a, b) > 0).Select(b => (a, b))).ToList();
+        sim.Prefetch(overlapping.Select(x => x.a).Distinct().Select(a => (targetSha, a)));
+        var firsts = overlapping.Select(x => (x.a, r: sim.Simulate(targetSha, x.a))).Where(x => x.r.Mergeable).DistinctBy(x => x.a).ToDictionary(x => x.a, x => x.r);
+        firsts.Values.AsParallel().ForAll(r => _ = r.Commit!.Value);
+        sim.Prefetch(overlapping.Where(x => firsts.ContainsKey(x.a)).Select(x => (firsts[x.a].Commit!.Value, x.b)));
+        foreach (var (a, b) in overlapping)
+            _pairOutcome[(a.Id, b.Id)] = firsts.TryGetValue(a, out var r) ? sim.Simulate(r.Commit!.Value, b).Outcome : null;
+
         // Finished plans live outside the beam, so the best complete plan can never be pruned by unfinished ones.
         Node? best = null;
         var beam = new List<Node> { new([], new(targetSha), [], 0, null) };
@@ -83,6 +92,12 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
             fresh.Select(x => x.n).Distinct().AsParallel().ForAll(n => _ = n.State.Value);
             sim.Prefetch(fresh.Select(x => (x.n.State.Value, x.pr)));
             Parallel.ForEach(beam.SelectMany(n => Candidates(n, pool).Select(pr => (n, pr))), x => Result(x.n, x.pr));
+            // State-aware cost merges risky pending PRs onto each candidate's resulting state: batch those too.
+            var ahead = beam.SelectMany(n => Candidates(n, pool).Select(pr => (n, pr, r: Result(n, pr)))
+                .Where(x => x.r.Mergeable && Risky(n, pool, x.pr).Any())).ToList();
+            sim.Prefetch(ahead.Where(x => Reusable(x.n, x.pr)).Select(x => (x.n.State.Value, x.pr)));
+            ahead.AsParallel().ForAll(x => _ = x.r.Commit!.Value);
+            sim.Prefetch(ahead.SelectMany(x => Risky(x.n, pool, x.pr).Select(o => (x.r.Commit!.Value, o))));
             var next = beam.SelectMany(n => Expand(n, pool)).ToList();
             foreach (var done in next.Where(n => n.Done))
                 if (best == null || Better(done, best)) best = done;
@@ -102,6 +117,22 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
             .Where(c => c.Weight > 0).OrderByDescending(c => c.Weight).ToList();
         return plan;
     }
+
+    /// <summary>
+    /// Outcome of second merged right after first, both from the target, for overlapping pairs. Computed once per
+    /// search, not once per state. Null when first doesn't merge on the target alone.
+    /// </summary>
+    readonly Dictionary<(string, string), MergeOutcome?> _pairOutcome = [];
+    MergeOutcome? PairOutcome(PullRequest first, PullRequest second) => _pairOutcome[(first.Id, second.Id)];
+
+    /// <summary>
+    /// Pending PRs that pr's merge may block: they overlap pr and, merged after pr from the target, conflict.
+    /// Only these get the exact simulation on each state; the others take their pairwise outcome.
+    /// </summary>
+    // ponytail: pairwise clean/regenerate outcomes are assumed to hold on later states too (a regenerate pair needs it
+    // in either order anyway). Three-way interactions still surface when that PR is simulated as a candidate.
+    IEnumerable<PullRequest> Risky(Node n, List<PullRequest> pool, PullRequest pr) =>
+        pool.Where(o => o != pr && !n.Merged.Contains(o.Id) && Weight(pr, o) > 0 && PairOutcome(pr, o) is null or MergeOutcome.Conflict);
 
     static bool Better(Node a, Node b) =>
         a.Objective.CompareTo(b.Objective) is var c && (c < 0 || (c == 0 && string.CompareOrdinal(a.Key, b.Key) < 0));
@@ -139,19 +170,30 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         yield return n with { Blocked = blocked };
     }
 
-    /// <summary>Marginal cost: risk pushed onto still-pending PRs, regeneration work, minus unblock bonus.</summary>
+    /// <summary>
+    /// Marginal cost of merging pr now: regeneration work, minus an unblock bonus, plus the risk it pushes onto pending
+    /// PRs that overlap it. That risk is state-aware: each risky one is simulated on the state after pr, and the simulation
+    /// outranks the static graph. A real conflict costs 1, a forced regenerate 0.5, and a clean merge keeps half the
+    /// static weight as residual (semantic) risk.
+    /// </summary>
     (double Cost, string Reason) Score(PullRequest pr, List<PullRequest> others, SimulationResult r)
     {
         var reasons = new List<string>();
         var overlaps = others.Where(o => Weight(pr, o) > 0).OrderByDescending(o => Weight(pr, o)).ToList();
         var unlocks = others.Where(o => o.Dependencies.Contains(pr.Id)).ToList();
+        var after = overlaps.ToLookup(o => PairOutcome(pr, o) is { } p && p != MergeOutcome.Conflict ? p : sim.Simulate(r.Commit!.Value, o).Outcome);
+        double Risk(PullRequest o) => after[MergeOutcome.Conflict].Contains(o) ? 1
+            : after[MergeOutcome.RegenerationRequired].Contains(o) ? 0.5 : 0.5 * Weight(pr, o);
 
-        double cost = overlaps.Sum(o => Weight(pr, o)) + 0.5 * r.RegenerateFiles.Count - 0.1 * unlocks.Count;
+        double cost = overlaps.Sum(Risk) + 0.5 * r.RegenerateFiles.Count - 0.1 * unlocks.Count;
 
         if (pr.Dependencies.Count > 0)
             reasons.Add("dependency: " + string.Join(", ", pr.Dependencies.Select(d => pr.DependencyNotes.TryGetValue(d, out var why) ? $"{d} ({why})" : d)));
         if (unlocks.Count > 0) reasons.Add("unlocks " + string.Join(", ", unlocks));
         if (r.RegenerateFiles.Count > 0) reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles));
+        if (after[MergeOutcome.Conflict].Any()) reasons.Add("then conflicts: " + string.Join(", ", after[MergeOutcome.Conflict]));
+        if (after[MergeOutcome.RegenerationRequired].Any())
+            reasons.Add("then needs regenerate: " + string.Join(", ", after[MergeOutcome.RegenerationRequired]));
         var hot = overlaps.SelectMany(o => _weights[(pr.Id, o.Id)].Files).Distinct()
             .Where(f => history?.GetValueOrDefault(f) > 0).ToList();
         var semantic = overlaps.SelectMany(o => Analyzer.SemanticRisks(pr, o)).ToList();
