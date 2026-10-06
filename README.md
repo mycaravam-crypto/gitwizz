@@ -54,6 +54,7 @@ pr-optimizer help                           # all options with examples
 | `--provider` | auto | `github` for numeric `--prs`, or for `--all-open` with a GitHub `origin` and `gh` installed; else `local` |
 | `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
 | `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
+| `--history` | `200` | Learn per-file conflict rates from this many past merges into the target; `0` = off |
 | `--verify` | `none` | Shell command run in a temporary worktree on the final merged state |
 | `-f`, `--format` | `pretty` / `text` | `pretty` (default on a terminal), `text` (default when piped), `json`, `html` |
 | `-o`, `--output` | stdout | Write the report to a file; the format comes from the extension (`.html`, `.json`, else text) |
@@ -124,6 +125,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    (e.g. `Billing.Charge(decimal)`), so two PRs editing different lines of the same method are still flagged.
    A pairwise **conflict weight** in [0,1] combines file overlap, hunk overlap, shared members
    and delete/rename-vs-modify risk.
+   **History**: the target's last 200 merge commits are replayed with `git merge-tree` (batched) to see which files
+   really conflicted. Each file gets a rate, `conflicts / (merges that brought it in + 1)`, and a shared file with
+   rate r weighs `(1 + 2r)`× more. Step reasons name conflict-prone files ("billing.cs (33 %)").
 3. **File classes**: lockfiles and generated files (`package-lock.json`, `*.Designer.cs`, …) aren't ignored.
    If a merge conflicts *only* in such files, it counts as mergeable with a "regenerate after merge" note (cost 0.5 per file).
 4. **Dependencies**: explicit (`depends on #N` / `blocked by #N` in the body or labels) and structural
@@ -176,6 +180,7 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 - Dependencies on PRs outside the selected set are ignored.
 - `--verify` checks only the final state. There are no per-batch or per-step modes yet.
 - Synthetic commits are unreferenced objects. `git gc` cleans them up.
+- History needs true merge commits. Squash- or rebase-merged repositories have nothing to replay, so the history is empty there.
 - Structural overlap covers C# only. Other languages use file and hunk overlap.
 
 ## Roadmap

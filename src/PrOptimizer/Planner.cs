@@ -6,11 +6,12 @@ namespace PrOptimizer;
 /// Finds a sequence minimising Σ marginalCost(PR_i | State_i) via beam search over real merge simulations.
 /// Beam width 1 is plain greedy.
 /// </summary>
-public class Planner(Simulator sim, string targetName, string targetSha, List<PullRequest> prs)
+public class Planner(Simulator sim, string targetName, string targetSha, List<PullRequest> prs,
+    IReadOnlyDictionary<string, double>? history = null)
 {
     public const double BlockedCost = 10;
 
-    readonly Dictionary<(string, string), (double W, List<string> Files, bool Independent)> _weights = Pairwise(prs);
+    readonly Dictionary<(string, string), (double W, List<string> Files, bool Independent)> _weights = Pairwise(prs, history);
 
     record Node(List<PlanStep> Steps, Lazy<string> State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked, Node? Parent = null)
     {
@@ -20,13 +21,14 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         public ConcurrentDictionary<string, SimulationResult> Results { get; } = new();
     }
 
-    static Dictionary<(string, string), (double, List<string>, bool)> Pairwise(List<PullRequest> prs)
+    static Dictionary<(string, string), (double, List<string>, bool)> Pairwise(List<PullRequest> prs,
+        IReadOnlyDictionary<string, double>? history)
     {
         var d = new Dictionary<(string, string), (double, List<string>, bool)>();
         foreach (var a in prs)
             foreach (var b in prs.Where(b => b != a))
             {
-                var w = Analyzer.ConflictWeight(a, b, out var f);
+                var w = Analyzer.ConflictWeight(a, b, out var f, history);
                 // A stacked PR "overlaps" its parent only by containing the parent's own changes.
                 d[(a.Id, b.Id)] = a.Dependencies.Contains(b.Id) || b.Dependencies.Contains(a.Id) ? (0, [], false) : (w, f, f.Count == 0);
             }
@@ -148,6 +150,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         if (pr.Dependencies.Count > 0) reasons.Add("dependency: " + string.Join(", ", pr.Dependencies));
         if (unlocks.Count > 0) reasons.Add("unlocks " + string.Join(", ", unlocks));
         if (r.RegenerateFiles.Count > 0) reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles));
+        var hot = overlaps.SelectMany(o => _weights[(pr.Id, o.Id)].Files).Distinct()
+            .Where(f => history?.GetValueOrDefault(f) > 0).ToList();
+        if (hot.Count > 0) reasons.Add("conflict-prone in past merges: " + string.Join(", ", hot.Select(f => $"{f} ({history![f]:P0})")));
         reasons.Add(overlaps.Count == 0
             ? "no overlapping changes with pending PRs"
             : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Weight(pr, o):0.00}{SharedMembers(pr, o)})")));

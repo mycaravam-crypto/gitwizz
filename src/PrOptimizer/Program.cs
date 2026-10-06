@@ -46,7 +46,7 @@ public static partial class Cli
         ["-t"] = "target", ["-p"] = "prs", ["-s"] = "strategy", ["-b"] = "beam", ["-f"] = "format",
         ["-o"] = "output", ["-r"] = "repo", ["-a"] = "all-open", ["--all"] = "all-open",
     };
-    static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "verify", "format", "output", "repo"];
+    static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "history", "verify", "format", "output", "repo"];
     static readonly string[] Flags = ["all-open"];
 
     public static Dictionary<string, string> Parse(string[] args)
@@ -91,6 +91,8 @@ public static partial class Cli
         };
         var beam = int.TryParse(opt.GetValueOrDefault("beam", "8"), out var bw) && bw > 0
             ? bw : throw new ArgumentException("--beam must be a positive number");
+        var historyDepth = int.TryParse(opt.GetValueOrDefault("history", "200"), out var hd) && hd >= 0
+            ? hd : throw new ArgumentException("--history must be a number of merges (0 = off)");
 
         var output = opt.GetValueOrDefault("output");
         var format = opt.GetValueOrDefault("format")
@@ -117,11 +119,13 @@ public static partial class Cli
             status($"Analyzing {prs.Count} pull requests…");
             Parallel.ForEach(prs, pr => Analyzer.Analyze(git, targetSha, pr));
             Analyzer.ResolveDependencies(git, targetSha, prs);
+            if (historyDepth > 0) status($"Learning from the last {historyDepth} merges…");
+            var history = Analyzer.ConflictHistory(git, targetSha, historyDepth);
 
             status($"Simulating merge orders for {prs.Count} pull requests…");
             // No --strategy: plan for what the branch enforces (merge queue method, linear history), else merge.
             var strategy = chosen ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge);
-            var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs).Build(beam);
+            var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs, history).Build(beam);
             plan.Provider = provider;
             plan.MergeQueue = policy.MergeQueue;
             if (policy.MergeQueue)
@@ -208,6 +212,7 @@ public static partial class Cli
             [bold]Planning[/]
               -s, --strategy <name>     merge | squash | rebase | ff-only [grey](default: from branch rules, else merge)[/]
               -b, --beam <width>        search width, 1 = greedy [grey](default: 8)[/]
+                  --history <merges>    learn file conflict rates from past merges, 0 = off [grey](default: 200)[/]
                   --verify <command>    run a command on the final merged state, e.g. "dotnet test"
 
             [bold]Output[/]
