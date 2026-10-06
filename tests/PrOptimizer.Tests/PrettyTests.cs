@@ -25,6 +25,7 @@ public class PrettyTests
         plan.Steps.Add(new PlanStep(a, 0, "no overlapping changes [x]", []));
         plan.Steps.Add(new PlanStep(b, 0.7, "dependency: #1", ["yarn.lock"]));
         plan.Blocked.Add(new BlockedPr(x, "conflict: [src]/a.cs"));
+        plan.Blocked.Add(new BlockedPr(Pr("#4"), "draft", Policy: true));
         plan.Prs = [a, b, x, .. Enumerable.Range(10, extraPrs).Select(i => Pr($"#{i}"))];
         plan.Conflicts = [new ConflictPair("#1", "#3", 0.8), new ConflictPair("#2", "#3", 0.2)];
         plan.Parallelizable = ["#1"];
@@ -39,9 +40,18 @@ public class PrettyTests
     public void Renders_all_sections_with_escaped_text(int width)
     {
         var o = Render(Sample(), width);
-        foreach (var s in new[] { "summary", "merge order", "BLOCKED", "[WIP]", "[src]/a.cs", "dependencies",
+        foreach (var s in new[] { "summary", "merge order", "CLEAN", "REGENERATE", "BLOCKED", "POLICY BLOCKED", "[WIP]", "[src]/a.cs", "dependencies",
                                   "conflict risk", "why #1 before #3?", "A.Run()", "FAILED", "[CS0103]", "parallelizable" })
             Assert.Contains(s, o);
+    }
+
+    [Fact]
+    public void Shows_risk_levels_not_probabilities()
+    {
+        var o = Render(Sample(), 120);
+        Assert.Contains("high", o);   // #1-#3 weight 0.8
+        Assert.DoesNotContain("0.80", o);
+        Assert.Equal(["low", "medium", "high"], new[] { 0.2, 0.4, 0.8 }.Select(Report.RiskLevel));
     }
 
     [Fact]

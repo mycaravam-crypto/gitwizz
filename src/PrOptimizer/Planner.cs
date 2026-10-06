@@ -207,7 +207,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         if (hot.Count > 0) reasons.Add("conflict-prone in past merges: " + string.Join(", ", hot.Select(f => $"{f} ({history![f]:P0})")));
         reasons.Add(overlaps.Count == 0
             ? "no overlapping changes with pending PRs"
-            : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Weight(pr, o):0.00}{SharedMembers(pr, o)})")));
+            : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Report.RiskLevel(Weight(pr, o))}{SharedMembers(pr, o)})")));
         return (Math.Round(Math.Max(cost, 0), 2), string.Join("; ", reasons));
     }
 

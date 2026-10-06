@@ -73,12 +73,14 @@ On a terminal, `pretty` renders a rich report:
 
 - **summary**: target, strategy, totals, and a breakdown bar of clean / regenerate / blocked PRs
 - **merge order**: the plan as a flow (`main ➜ docs ➜ billing ➜ …  ✘ clash`) plus PRs you can merge in parallel right now
-- **plan table**: cost bars (green → gold → orange → red), status, and the reason for each step
+- **plan table**: cost bars (green → gold → orange → red), status (**CLEAN**, **REGENERATE**, **BLOCKED**,
+  **POLICY BLOCKED**), and the reason for each step
 - **dependency tree** of stacked and explicit dependencies
-- **conflict-risk heatmap** between all PRs (above 12 PRs it switches to a "riskiest pairs" bar chart)
+- **conflict-risk heatmap** between all PRs, as low / medium / high. Pair weights are heuristics, not probabilities,
+  so the tool never shows them as percentages. The only percentages come from measured merge history (above 12 PRs it switches to a "riskiest pairs" bar chart)
 - **"why A before B?"** panels comparing both simulated orders, a **verification** panel, and the **next step** command
 
-Every colour comes with an icon or a label (✔ ⟳ ✘ ⇉ `dep`), so the report still reads without colour.
+Every colour comes with an icon or a label (✔ ⟳ ✘ ⚑ ⇉ `dep`), so the report still reads without colour.
 Below 90 columns the layout turns compact. `NO_COLOR` is respected.
 For a rendered example, see [docs/sample-plan.html](docs/sample-plan.html).
 
@@ -98,12 +100,12 @@ Note: local branches: only structural mergeability is checked (no reviews, check
 2  billing  billing
    CLEAN
    Cost: 0.3
-   Reason: unlocks refactor; overlaps clash (0.40)
+   Reason: unlocks refactor; overlaps clash (medium)
 
 3  refactor  refactor
    CLEAN
    Cost: 0.4
-   Reason: dependency: billing; overlaps clash (0.40)
+   Reason: dependency: billing; overlaps clash (medium)
 
 4  clash  clash
    BLOCKED
