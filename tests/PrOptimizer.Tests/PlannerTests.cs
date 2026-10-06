@@ -135,6 +135,20 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Cost_comes_from_the_simulated_state_not_only_the_static_graph()
+    {
+        var plan = PlanFor(MergeStrategy.Merge, 8, "billing", "clash", "docs");
+        var billing = plan.Steps.Single(s => s.Pr.Id == "billing");
+        // Statically billing and clash overlap 0.4; simulated on the state after billing, clash really conflicts.
+        Assert.Contains("then conflicts: clash", billing.Reason);
+        Assert.True(billing.Cost >= 1);
+        // Lockfile PRs: after one, the other needs a regenerate (0.5), not a static guess.
+        var deps = PlanFor(MergeStrategy.Merge, 8, "deps1", "deps2").Steps[0];
+        Assert.Contains("then needs regenerate:", deps.Reason);
+        Assert.Equal(0.5, deps.Cost);
+    }
+
+    [Fact]
     public void Complete_plans_beat_cheaper_incomplete_ones()
     {
         var complete = new PlanObjective(Unmerged: 0, Cost: 8.2, TieBreak: 0);
