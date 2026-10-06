@@ -28,12 +28,18 @@ public static class FileClasses
 
 public static partial class Analyzer
 {
-    /// <summary>Fills BaseSha, Files and Hunks relative to the merge-base with the target.</summary>
+    /// <summary>Fills BaseSha, Files, Hunks and Members relative to the merge-base with the target.</summary>
     public static void Analyze(Git git, string target, PullRequest pr)
     {
         pr.BaseSha = git.MergeBase(target, pr.HeadSha);
-        pr.Files = ParseNameStatus(git.Run("diff", "--name-status", "-M", pr.BaseSha, pr.HeadSha));
-        pr.Hunks = ParseHunks(git.Run("diff", "-U0", "-M", "--no-color", pr.BaseSha, pr.HeadSha));
+        // Pin output format against user config (noprefix, external diff, quoted paths).
+        string[] diff = ["-c", "core.quotePath=false", "diff", "-M", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
+        pr.Files = ParseNameStatus(git.Run([.. diff, "--name-status", pr.BaseSha, pr.HeadSha]));
+        pr.Hunks = ParseHunks(git.Run([.. diff, "-U0", pr.BaseSha, pr.HeadSha]));
+        // Hunks of added files start at 0 and have no old-side members.
+        pr.Members = pr.Hunks.Where(h => h.Start > 0 && Structure.Supports(h.Path)).GroupBy(h => h.Path)
+            .SelectMany(g => Structure.TouchedMembers(git.Run("show", $"{pr.BaseSha}:{g.Key}"), g))
+            .ToHashSet();
     }
 
     public static List<FileChange> ParseNameStatus(string output) =>
@@ -93,6 +99,9 @@ public static partial class Analyzer
             p.Files.Any(c => (c.Kind is ChangeKind.Deleted && c.Path == f) || (c.Kind is ChangeKind.Renamed && c.OldPath == f));
         w += 0.4 * sharedFiles.Count(f => Risky(a, f) != Risky(b, f));
 
+        // Same member touched, even on different lines, is a likely semantic conflict.
+        w += 0.2 * a.Members.Intersect(b.Members).Count();
+
         return Math.Min(w, 1.0);
     }
 
@@ -107,16 +116,16 @@ public static partial class Analyzer
     public static void ResolveDependencies(Git git, string target, List<PullRequest> prs)
     {
         var ids = prs.Select(p => p.Id).ToHashSet();
-        foreach (var b in prs)
-        {
-            foreach (var d in ExplicitDependencies(b).Where(d => ids.Contains(d) && d != b.Id)) b.Dependencies.Add(d);
-            foreach (var a in prs.Where(a => a != b && a.HeadSha != b.HeadSha))
-            {
-                var stacked = a.HeadRef != "" && b.BaseRef == a.HeadRef;
-                if (stacked || (!git.IsAncestor(a.HeadSha, target) && git.IsAncestor(a.HeadSha, b.HeadSha)))
+        // One rev-list per PR instead of an ancestry check per pair: a is an ancestor of b iff a's head is among
+        // b's commits not yet in the target. An empty set means the PR is already merged and can't be a dependency.
+        var own = prs.AsParallel().ToDictionary(p => p, p =>
+            git.Run("rev-list", $"{target}..{p.HeadSha}").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToHashSet());
+        foreach (var a in prs.Where(a => own[a].Count > 0))
+            foreach (var b in prs.Where(b => b != a && b.HeadSha != a.HeadSha))
+                if ((a.HeadRef != "" && b.BaseRef == a.HeadRef) || own[b].Contains(a.HeadSha))
                     b.Dependencies.Add(a.Id);
-            }
-        }
+        foreach (var b in prs)
+            foreach (var d in ExplicitDependencies(b).Where(d => ids.Contains(d) && d != b.Id)) b.Dependencies.Add(d);
         var cycle = FindCycle(prs);
         if (cycle != null) throw new InvalidOperationException("Dependency cycle: " + string.Join(" -> ", cycle));
     }

@@ -65,6 +65,11 @@ public class PlannerTests : IDisposable
         // Lockfile conflict is not a block, but flagged for regeneration.
         Assert.Contains(plan.Steps, s => s.RegenerateFiles.Contains("package-lock.json"));
         Assert.Contains("docs", plan.Parallelizable);
+        if (beam > 1) Assert.Equal("docs", order[0]); // zero-cost PR goes first on equal totals
+
+        // In-process synthetic commits are valid git objects.
+        Assert.Equal("commit", _git.Run("cat-file", "-t", plan.FinalState!));
+        Assert.Equal(0, _git.Try("fsck", "--no-dangling").ExitCode);
 
         // Simulation must not touch the working tree or HEAD.
         Assert.Equal(headBefore, _git.RevParse("HEAD"));

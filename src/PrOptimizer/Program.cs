@@ -1,69 +1,217 @@
 using PrOptimizer;
+using Spectre.Console;
 
-const string Usage = """
-usage: pr-optimizer plan --target <branch> (--prs <a,b,...> | --all-open)
-         [--provider local|github] [--strategy merge|squash|rebase|ff-only]
-         [--beam <width>] [--verify <command>] [--format text|json] [--repo <dir>]
+var err = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) });
 
-  --provider  local: --prs are branches/refs.  github: PR numbers via gh (default when
-              --all-open or all --prs are numeric)
-  --beam      beam search width (default 8, 1 = greedy)
-  --verify    run command in a temporary worktree on the final merged state
-""";
-
-if (args.Length == 0 || args[0] != "plan") { Console.Error.Write(Usage); return 2; }
-
-var opt = new Dictionary<string, string>();
-for (int i = 1; i < args.Length; i++)
+// Command: first non-option argument; bare options mean "plan".
+var command = args.Length == 0 ? "help" : args[0].StartsWith('-') ? "plan" : args[0];
+var rest = args.Length > 0 && !args[0].StartsWith('-') ? args[1..] : args;
+if (command is "help" or "-h" || rest.Contains("-h") || rest.Contains("--help")) { Cli.Help(AnsiConsole.Console); return 0; }
+if (command is "version" || rest.Contains("--version"))
 {
-    if (!args[i].StartsWith("--")) { Console.Error.Write($"unexpected argument: {args[i]}\n{Usage}"); return 2; }
-    var key = args[i][2..];
-    opt[key] = key == "all-open" ? "true" : i + 1 < args.Length ? args[++i] : "";
+    Console.WriteLine(typeof(Cli).Assembly.GetName().Version?.ToString(3));
+    return 0;
 }
 
 try
 {
-    var git = new Git(opt.GetValueOrDefault("repo", Directory.GetCurrentDirectory()));
-    var target = opt.GetValueOrDefault("target", "main");
-    var prArgs = opt.GetValueOrDefault("prs", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(p => p.TrimStart('#')).ToList();
-    var allOpen = opt.ContainsKey("all-open");
-    if (prArgs.Count == 0 && !allOpen) throw new ArgumentException("need --prs or --all-open");
-
-    var provider = opt.GetValueOrDefault("provider") ?? (allOpen || prArgs.All(p => p.All(char.IsDigit)) ? "github" : "local");
-    var strategy = opt.GetValueOrDefault("strategy", "merge") switch
+    var opt = Cli.Parse(rest);
+    if (command == "example")
     {
-        "merge" => MergeStrategy.Merge,
-        "squash" => MergeStrategy.Squash,
-        "rebase" => MergeStrategy.Rebase,
-        "ff-only" => MergeStrategy.FfOnly,
-        var s => throw new ArgumentException($"unknown strategy: {s}"),
+        var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "pr-optimizer-example");
+        Example.Create(dir);
+        err.MarkupLine($"[grey]example repository:[/] [bold]{Markup.Escape(dir)}[/]\n");
+        opt["repo"] = dir;
+        opt["all-open"] = "true";
+        opt.TryAdd("target", "main");
+        var code = Cli.Plan(opt, err);
+        err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  pr-optimizer plan --all-open --strategy squash\n  pr-optimizer plan -p feature/billing-tax,fix/billing-rounding -f json\n  pr-optimizer plan --all-open -o plan.html");
+        return code;
+    }
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, example, help)");
+    return Cli.Plan(opt, err);
+}
+catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
+{
+    var msg = (e is AggregateException a2 ? a2.InnerException! : e).Message;
+    err.MarkupLine($"[bold indianred1]✘ error:[/] {Markup.Escape(msg)}");
+    if (Cli.Hint(msg) is { } hint) err.MarkupLine($"[grey]  hint: {Markup.Escape(hint)}[/]");
+    return msg.StartsWith("unknown") || msg.StartsWith("need") ? 2 : 1;
+}
+
+public static partial class Cli
+{
+    static readonly Dictionary<string, string> Aliases = new()
+    {
+        ["-t"] = "target", ["-p"] = "prs", ["-s"] = "strategy", ["-b"] = "beam", ["-f"] = "format",
+        ["-o"] = "output", ["-r"] = "repo", ["-a"] = "all-open", ["--all"] = "all-open",
     };
-    var beam = int.Parse(opt.GetValueOrDefault("beam", "8"));
+    static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "verify", "format", "output", "repo"];
+    static readonly string[] Flags = ["all-open"];
 
-    var (targetSha, prs) = provider switch
+    public static Dictionary<string, string> Parse(string[] args)
     {
-        "local" => Providers.Local(git, target, prArgs),
-        "github" => Providers.GitHub(git, target, allOpen ? null : prArgs.Select(int.Parse).ToHashSet()),
-        _ => throw new ArgumentException($"unknown provider: {provider}"),
-    };
-
-    foreach (var pr in prs) Analyzer.Analyze(git, targetSha, pr);
-    Analyzer.ResolveDependencies(git, targetSha, prs);
-
-    var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs).Build(beam);
-
-    if (opt.TryGetValue("verify", out var cmd) && cmd is not ("" or "none") && plan.FinalState != null)
-    {
-        var (ok, output) = Verify.Run(git, plan.FinalState, cmd);
-        plan.Verification = ok ? $"passed ({cmd})" : $"FAILED ({cmd})\n{output.TrimEnd()}";
+        var opt = new Dictionary<string, string>();
+        for (int i = 0; i < args.Length; i++)
+        {
+            var key = Aliases.GetValueOrDefault(args[i]) ?? (args[i].StartsWith("--") ? args[i][2..] : null);
+            if (key == null || !Options.Contains(key))
+            {
+                var near = Options.FirstOrDefault(o => key != null && key.Length >= 2 && (o.StartsWith(key[..2]) || o.Contains(key)));
+                throw new ArgumentException($"unknown option '{args[i]}'" + (near != null ? $" (did you mean --{near}?)" : ""));
+            }
+            if (Flags.Contains(key)) { opt[key] = "true"; continue; }
+            if (i + 1 >= args.Length) throw new ArgumentException($"need a value for --{key}");
+            opt[key] = args[++i];
+        }
+        return opt;
     }
 
-    Console.Write(opt.GetValueOrDefault("format") == "json" ? Report.Json(plan) + "\n" : Report.Text(plan));
-    return plan.Verification?.StartsWith("FAILED") == true ? 1 : 0;
-}
-catch (Exception e) when (e is InvalidOperationException or ArgumentException or FormatException)
-{
-    Console.Error.WriteLine("error: " + e.Message);
-    return 1;
+    public static int Plan(Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = new Git(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")));
+        if (git.Try("rev-parse", "--git-dir").ExitCode != 0) throw new InvalidOperationException($"not a git repository: {git.RepoDir}");
+
+        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        var prArgs = opt.GetValueOrDefault("prs", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => p.TrimStart('#')).ToList();
+        var allOpen = opt.ContainsKey("all-open");
+        if (prArgs.Count == 0 && !allOpen) throw new ArgumentException("need --prs <a,b,...> or --all-open");
+
+        var provider = opt.GetValueOrDefault("provider")
+            ?? (prArgs.Count > 0 ? (prArgs.All(p => p.All(char.IsDigit)) ? "github" : "local") : IsGitHub(git) ? "github" : "local");
+        var strategy = opt.GetValueOrDefault("strategy", "merge") switch
+        {
+            "merge" => MergeStrategy.Merge,
+            "squash" => MergeStrategy.Squash,
+            "rebase" => MergeStrategy.Rebase,
+            "ff-only" => MergeStrategy.FfOnly,
+            var s => throw new ArgumentException($"unknown strategy '{s}' (merge, squash, rebase, ff-only)"),
+        };
+        var beam = int.TryParse(opt.GetValueOrDefault("beam", "8"), out var bw) && bw > 0
+            ? bw : throw new ArgumentException("--beam must be a positive number");
+
+        var output = opt.GetValueOrDefault("output");
+        var format = opt.GetValueOrDefault("format")
+            ?? (output != null ? Path.GetExtension(output).ToLowerInvariant() switch { ".html" or ".htm" => "html", ".json" => "json", _ => "text" }
+                : Console.IsOutputRedirected ? "text" : "pretty");
+        if (format is not ("pretty" or "text" or "json" or "html"))
+            throw new ArgumentException($"unknown format '{format}' (pretty, text, json, html)");
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var timing = Environment.GetEnvironmentVariable("PR_OPT_TIMING") == "1";
+        Plan Pipeline(Action<string> status)
+        {
+            if (timing) status += m => Console.Error.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {m}");
+            status($"Loading pull requests ({provider})…");
+            var (targetSha, prs) = provider switch
+            {
+                "local" => Providers.Local(git, target, allOpen && prArgs.Count == 0 ? LocalBranches(git, target) : prArgs),
+                "github" => Providers.GitHub(git, target, allOpen ? null : prArgs.Select(int.Parse).ToHashSet()),
+                _ => throw new ArgumentException($"unknown provider '{provider}' (local, github)"),
+            };
+            if (prs.Count == 0) throw new InvalidOperationException($"no open pull requests found for '{target}'");
+
+            status($"Analyzing {prs.Count} pull requests…");
+            Parallel.ForEach(prs, pr => Analyzer.Analyze(git, targetSha, pr));
+            Analyzer.ResolveDependencies(git, targetSha, prs);
+
+            status($"Simulating merge orders for {prs.Count} pull requests…");
+            var plan = new Planner(new Simulator(git, strategy), target, targetSha, prs).Build(beam);
+            plan.Provider = provider;
+
+            if (opt.TryGetValue("verify", out var cmd) && cmd is not ("" or "none") && plan.FinalState != null)
+            {
+                status($"Verifying: {cmd}");
+                var (ok, log) = Verify.Run(git, plan.FinalState, cmd);
+                plan.Verification = ok ? $"passed ({cmd})" : $"FAILED ({cmd})\n{log.TrimEnd()}";
+            }
+            if (timing) status("done");
+            return plan;
+        }
+
+        Plan result;
+        if (format == "pretty" && output == null)
+        {
+            result = AnsiConsole.Status().Spinner(Spinner.Known.Dots).SpinnerStyle(Style.Parse("steelblue1"))
+                .Start("Starting…", ctx => Pipeline(m => ctx.Status(Markup.Escape(m))));
+            Pretty.Render(result, AnsiConsole.Console);
+        }
+        else
+        {
+            result = Pipeline(_ => { });
+            var text = format switch { "json" => Report.Json(result) + "\n", "html" => Pretty.Html(result), _ => Report.Text(result) };
+            if (output == null) Console.Write(text);
+            else
+            {
+                File.WriteAllText(output, text);
+                err.MarkupLine($"[springgreen3]✔[/] wrote {format} report to [bold]{Markup.Escape(output)}[/]");
+            }
+        }
+        return result.Verification?.StartsWith("FAILED") == true ? 1 : 0;
+    }
+
+    /// <summary>origin/HEAD, else main or master, else the current branch.</summary>
+    static string DefaultBranch(Git git)
+    {
+        var head = git.Try("symbolic-ref", "--short", "refs/remotes/origin/HEAD");
+        if (head.ExitCode == 0) return head.Stdout.Trim().Replace("origin/", "");
+        foreach (var b in new[] { "main", "master" })
+            if (git.Try("rev-parse", "--verify", "--quiet", $"refs/heads/{b}").ExitCode == 0) return b;
+        return git.Run("branch", "--show-current");
+    }
+
+    static bool IsGitHub(Git git) =>
+        git.Try("remote", "get-url", "origin").Stdout.Contains("github.com") && Git.Exec(git.RepoDir, "sh", ["-c", "command -v gh"]).ExitCode == 0;
+
+    static List<string> LocalBranches(Git git, string target) =>
+        git.Run("for-each-ref", "--format=%(refname:short)", "--no-merged", target, "refs/heads")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+    public static string? Hint(string msg) =>
+        msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
+        : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
+        : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
+        : msg.Contains("no open pull requests") ? "use --prs to pick branches/PRs explicitly, or --target for another branch"
+        : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'pr-optimizer help'"
+        : null;
+
+    public static void Help(IAnsiConsole c)
+    {
+        c.MarkupLine("""
+            [bold steelblue1]pr-optimizer[/] finds the merge order for pull requests with the fewest conflicts,
+            by simulating real git merges. Your working tree and branches are never touched.
+
+            [bold]Usage[/]
+              pr-optimizer [grey]plan[/] [[options]]      plan a merge order (default command)
+              pr-optimizer example [[-r <dir>]]  build a demo repository and plan it
+              pr-optimizer help | version
+
+            [bold]Choose pull requests[/]
+              -a, --all-open            all open PRs (GitHub) or all unmerged local branches
+              -p, --prs <a,b,...>       PR numbers (GitHub) or branch names (local)
+              -t, --target <branch>     branch to merge into [grey](default: origin/HEAD, main or master)[/]
+                  --provider <name>     local | github [grey](default: auto-detected)[/]
+
+            [bold]Planning[/]
+              -s, --strategy <name>     merge | squash | rebase | ff-only [grey](default: merge)[/]
+              -b, --beam <width>        search width, 1 = greedy [grey](default: 8)[/]
+                  --verify <command>    run a command on the final merged state, e.g. "dotnet test"
+
+            [bold]Output[/]
+              -f, --format <name>       pretty | text | json | html [grey](default: pretty on a terminal, text when piped)[/]
+              -o, --output <file>       write the report to a file; format from the extension (.html, .json, .txt)
+              -r, --repo <dir>          repository directory [grey](default: current directory)[/]
+
+            [bold]Examples[/]
+              [grey]# all open GitHub PRs, squash merges[/]
+              pr-optimizer --all-open -s squash
+              [grey]# specific local branches, verified with the test suite[/]
+              pr-optimizer -p feature/a,feature/b --verify "dotnet test"
+              [grey]# shareable HTML report[/]
+              pr-optimizer --all-open -o plan.html
+              [grey]# try it on a demo repository[/]
+              pr-optimizer example
+            """);
+    }
 }

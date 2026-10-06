@@ -35,10 +35,28 @@ public static class Report
             foreach (var p in plan.Parallelizable) sb.AppendLine($"    {p}");
             sb.AppendLine();
         }
-        foreach (var e in plan.Explanations) sb.AppendLine(e).AppendLine();
+        foreach (var e in plan.Explanations) sb.AppendLine(e.ToString()).AppendLine();
         if (plan.Verification != null) sb.AppendLine($"Verification: {plan.Verification}");
+        if (NextCommand(plan) is { } next) sb.AppendLine($"Next: {next}");
         sb.AppendLine($"Total cost: {plan.TotalCost:0.##}");
         return sb.ToString();
+    }
+
+    /// <summary>Shell command that performs the first step of the plan, or null if nothing can merge.</summary>
+    public static string? NextCommand(Plan plan)
+    {
+        if (plan.Steps.Count == 0) return null;
+        var (id, t) = (plan.Steps[0].Pr.Id, plan.Target);
+        if (plan.Provider == "github")
+            return $"gh pr merge {id.TrimStart('#')} --" + plan.Strategy switch
+            { MergeStrategy.Squash => "squash", MergeStrategy.Merge => "merge", _ => "rebase" };
+        return plan.Strategy switch
+        {
+            MergeStrategy.Squash => $"git checkout {t} && git merge --squash {id} && git commit",
+            MergeStrategy.Rebase => $"git rebase {t} {id} && git checkout {t} && git merge --ff-only {id}",
+            MergeStrategy.FfOnly => $"git checkout {t} && git merge --ff-only {id}",
+            _ => $"git checkout {t} && git merge --no-ff {id}",
+        };
     }
 
     public static string Json(Plan plan) => JsonSerializer.Serialize(new
@@ -52,9 +70,11 @@ public static class Report
         }),
         blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, reason = b.Reason }),
         parallelizable = plan.Parallelizable,
-        explanations = plan.Explanations,
+        explanations = plan.Explanations.Select(e => new { a = e.A, b = e.B, shared = e.Shared, aThenB = e.AThenB, bThenA = e.BThenA }),
+        conflicts = plan.Conflicts.Select(c => new { a = c.A, b = c.B, weight = c.Weight }),
         finalState = plan.FinalState,
         verification = plan.Verification,
         totalCost = plan.TotalCost,
-    }, new JsonSerializerOptions { WriteIndented = true });
+        next = NextCommand(plan),
+    }, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 }

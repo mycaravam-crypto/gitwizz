@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace PrOptimizer;
 
 /// <summary>
@@ -8,25 +10,46 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 {
     public const double BlockedCost = 10;
 
-    readonly Dictionary<(string, string), (double W, List<string> Files)> _weights = Pairwise(prs);
+    readonly Dictionary<(string, string), (double W, List<string> Files, bool Independent)> _weights = Pairwise(prs);
 
-    record Node(List<PlanStep> Steps, string State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked)
+    record Node(List<PlanStep> Steps, Lazy<string> State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked, Node? Parent = null)
     {
         public bool Done => Blocked != null;
         public string Key => string.Join(",", Steps.Select(s => s.Pr.Id));
+        public PullRequest? Last => Steps.Count > 0 ? Steps[^1].Pr : null;
+        public ConcurrentDictionary<string, SimulationResult> Results { get; } = new();
     }
 
-    static Dictionary<(string, string), (double, List<string>)> Pairwise(List<PullRequest> prs)
+    static Dictionary<(string, string), (double, List<string>, bool)> Pairwise(List<PullRequest> prs)
     {
-        var d = new Dictionary<(string, string), (double, List<string>)>();
+        var d = new Dictionary<(string, string), (double, List<string>, bool)>();
         foreach (var a in prs)
             foreach (var b in prs.Where(b => b != a))
+            {
+                var w = Analyzer.ConflictWeight(a, b, out var f);
                 // A stacked PR "overlaps" its parent only by containing the parent's own changes.
-                d[(a.Id, b.Id)] = a.Dependencies.Contains(b.Id) || b.Dependencies.Contains(a.Id)
-                    ? (0, [])
-                    : (Analyzer.ConflictWeight(a, b, out var f), f);
+                d[(a.Id, b.Id)] = a.Dependencies.Contains(b.Id) || b.Dependencies.Contains(a.Id) ? (0, [], false) : (w, f, f.Count == 0);
+            }
         return d;
     }
+
+    /// <summary>
+    /// Merge result of pr on node n. If the PR merged last into n touches none of pr's files and they share no
+    /// history, pr's result on n equals its result on n's parent: the files pr touches and its merge-base are
+    /// unchanged. Then the parent's result is reused and the real merge only runs if the commit is ever needed.
+    /// </summary>
+    bool Reusable(Node n, PullRequest pr) =>
+        sim.Strategy != MergeStrategy.FfOnly && n.Parent != null && _weights[(n.Last!.Id, pr.Id)].Independent;
+
+    SimulationResult Result(Node n, PullRequest pr) => n.Results.GetOrAdd(pr.Id, _ =>
+    {
+        if (Reusable(n, pr))
+        {
+            var r = Result(n.Parent!, pr);
+            return r with { Commit = r.Mergeable ? new(() => sim.Simulate(n.State.Value, pr).Commit!.Value) : null };
+        }
+        return sim.Simulate(n.State.Value, pr);
+    });
 
     public double Weight(PullRequest a, PullRequest b) => _weights[(a.Id, b.Id)].W;
 
@@ -47,23 +70,41 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id])));
         var pool = prs.Where(p => !blocked.ContainsKey(p.Id)).ToList();
 
-        var beam = new List<Node> { new([], targetSha, [], 0, null) };
+        var beam = new List<Node> { new([], new(targetSha), [], 0, null) };
         while (beam.Any(n => !n.Done))
         {
+            // Batch-simulate what can't be reused, then evaluate all candidates in parallel; Expand reads the results.
+            var live = beam.Where(n => !n.Done).ToList();
+            var fresh = live.SelectMany(n => Candidates(n, pool).Where(pr => !Reusable(n, pr)).Select(pr => (n, pr))).ToList();
+            // Materialize states: kept nodes built on reused results still need their real merge; batch those first.
+            sim.Prefetch(live.Where(n => !n.State.IsValueCreated && n.Parent != null).Select(n => (n.Parent!.State.Value, n.Last!)));
+            fresh.Select(x => x.n).Distinct().AsParallel().ForAll(n => _ = n.State.Value);
+            sim.Prefetch(fresh.Select(x => (x.n.State.Value, x.pr)));
+            Parallel.ForEach(beam.Where(n => !n.Done).SelectMany(n => Candidates(n, pool).Select(pr => (n, pr))),
+                x => Result(x.n, x.pr));
             var next = beam.Where(n => n.Done).ToList();
             foreach (var n in beam.Where(n => !n.Done)) next.AddRange(Expand(n, pool));
-            beam = next.DistinctBy(n => n.Key).OrderBy(n => n.Cost).ThenBy(n => n.Key, StringComparer.Ordinal)
+            // Equal totals: prefer cheap PRs early (maximising Σ cost·position pushes expensive ones late), then a stable order.
+            beam = next.DistinctBy(n => n.Key).OrderBy(n => Math.Round(n.Cost, 6))
+                .ThenByDescending(n => n.Steps.Select((s, i) => s.Cost * (i + 1)).Sum())
+                .ThenBy(n => n.Key, StringComparer.Ordinal)
                 .Take(beamWidth).ToList();
         }
 
         var best = beam[0];
         plan.Steps.AddRange(best.Steps);
         plan.Blocked.AddRange(best.Blocked!);
-        plan.FinalState = best.State;
+        plan.FinalState = best.State.Value;
         plan.Parallelizable = Parallelizable(pool);
         plan.Explanations = Explain(best.Steps);
+        plan.Prs = prs;
+        plan.Conflicts = prs.SelectMany((a, i) => prs.Skip(i + 1).Select(b => new ConflictPair(a.Id, b.Id, Weight(a, b))))
+            .Where(c => c.Weight > 0).OrderByDescending(c => c.Weight).ToList();
         return plan;
     }
+
+    static IEnumerable<PullRequest> Candidates(Node n, List<PullRequest> pool) =>
+        pool.Where(p => !n.Merged.Contains(p.Id) && p.Dependencies.All(n.Merged.Contains));
 
     IEnumerable<Node> Expand(Node n, List<PullRequest> pool)
     {
@@ -71,15 +112,15 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         if (remaining.Count == 0) { yield return n with { Blocked = [] }; yield break; }
 
         var any = false;
-        foreach (var pr in remaining.Where(p => p.Dependencies.All(n.Merged.Contains)))
+        foreach (var pr in Candidates(n, pool))
         {
-            var r = sim.Simulate(n.State, pr);
+            var r = Result(n, pr);
             if (!r.Mergeable) continue;
             any = true;
             var others = remaining.Where(o => o != pr).ToList();
             var (cost, reason) = Score(pr, others, r);
             yield return new Node([.. n.Steps, new PlanStep(pr, cost, reason, r.RegenerateFiles)], r.Commit!,
-                [.. n.Merged, pr.Id], n.Cost + cost, null);
+                [.. n.Merged, pr.Id], n.Cost + cost, null, n);
         }
         if (any) yield break;
 
@@ -88,7 +129,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         {
             var missing = pr.Dependencies.Where(d => !n.Merged.Contains(d)).ToList();
             if (missing.Count > 0) return new BlockedPr(pr, $"depends on {string.Join(", ", missing)}");
-            var r = sim.Simulate(n.State, pr);
+            var r = Result(n, pr);
             var after = n.Steps.Count > 0 ? $" after {n.Steps[^1].Pr.Id}" : "";
             return new BlockedPr(pr, $"conflict{after}: {string.Join(", ", r.ConflictFiles)}");
         }).ToList();
@@ -109,9 +150,12 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         if (r.RegenerateFiles.Count > 0) reasons.Add("regenerate after merge: " + string.Join(", ", r.RegenerateFiles));
         reasons.Add(overlaps.Count == 0
             ? "no overlapping changes with pending PRs"
-            : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Weight(pr, o):0.00})")));
+            : "overlaps " + string.Join(", ", overlaps.Select(o => $"{o} ({Weight(pr, o):0.00}{SharedMembers(pr, o)})")));
         return (Math.Round(Math.Max(cost, 0), 2), string.Join("; ", reasons));
     }
+
+    static string SharedMembers(PullRequest a, PullRequest b) =>
+        a.Members.Intersect(b.Members).ToList() is { Count: > 0 } m ? ": " + string.Join(", ", m) : "";
 
     /// <summary>Ready PRs with no dependencies that merge cleanly now and touch nothing any other PR touches.</summary>
     List<string> Parallelizable(List<PullRequest> pool) =>
@@ -121,9 +165,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
             .Select(p => p.Id).ToList();
 
     /// <summary>For overlapping, independent pairs: show that the chosen order matters by simulating both.</summary>
-    List<string> Explain(List<PlanStep> steps)
+    List<Explanation> Explain(List<PlanStep> steps)
     {
-        var res = new List<string>();
+        var res = new List<Explanation>();
         for (int i = 0; i < steps.Count; i++)
             for (int j = i + 1; j < steps.Count; j++)
             {
@@ -132,9 +176,8 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
                 var ab = Pair(a, b);
                 var ba = Pair(b, a);
                 if (ab == ba) continue;
-                res.Add($"Why {a} before {b}?\n" +
-                        $"  both modify: {string.Join(", ", _weights[(a.Id, b.Id)].Files)}\n" +
-                        $"  {a} -> {b} = {ab}\n  {b} -> {a} = {ba}");
+                var members = a.Members.Intersect(b.Members).ToList();
+                res.Add(new(a.Id, b.Id, members.Count > 0 ? members : _weights[(a.Id, b.Id)].Files, ab, ba));
             }
         return res;
     }
@@ -143,6 +186,6 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
     {
         var r1 = sim.Simulate(targetSha, first);
         if (!r1.Mergeable) return $"conflict on {first}";
-        return sim.Simulate(r1.Commit!, second).Mergeable ? "clean" : "conflict";
+        return sim.Simulate(r1.Commit!.Value, second).Mergeable ? "clean" : "conflict";
     }
 }
