@@ -52,7 +52,10 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         {
             var next = beam.Where(n => n.Done).ToList();
             foreach (var n in beam.Where(n => !n.Done)) next.AddRange(Expand(n, pool));
-            beam = next.DistinctBy(n => n.Key).OrderBy(n => n.Cost).ThenBy(n => n.Key, StringComparer.Ordinal)
+            // Equal totals: prefer cheap PRs early (maximising Σ cost·position pushes expensive ones late), then a stable order.
+            beam = next.DistinctBy(n => n.Key).OrderBy(n => Math.Round(n.Cost, 6))
+                .ThenByDescending(n => n.Steps.Select((s, i) => s.Cost * (i + 1)).Sum())
+                .ThenBy(n => n.Key, StringComparer.Ordinal)
                 .Take(beamWidth).ToList();
         }
 
