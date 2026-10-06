@@ -65,6 +65,18 @@ public record Explanation(string A, string B, List<string> Shared, string AThenB
         $"Why {A} before {B}?\n  both modify: {string.Join(", ", Shared)}\n  {A} -> {B} = {AThenB}\n  {B} -> {A} = {BThenA}";
 }
 
+/// <summary>
+/// Plan quality, compared lexicographically (lower is better): first merge as many PRs as possible, then lowest cost,
+/// then cheap PRs early (TieBreak = -Σ cost·position). No numeric penalty can trade a blocked PR for a lower cost.
+/// </summary>
+public readonly record struct PlanObjective(int Unmerged, double Cost, double TieBreak) : IComparable<PlanObjective>
+{
+    public int CompareTo(PlanObjective o) =>
+        Unmerged != o.Unmerged ? Unmerged.CompareTo(o.Unmerged)
+        : Math.Round(Cost, 6) != Math.Round(o.Cost, 6) ? Cost.CompareTo(o.Cost)
+        : Math.Round(TieBreak, 6).CompareTo(Math.Round(o.TieBreak, 6));
+}
+
 public record ConflictPair(string A, string B, double Weight);
 
 /// <summary>Target branch rules (GitHub branch protection + rulesets). Empty when unknown or unprotected.</summary>
@@ -85,5 +97,5 @@ public class Plan
     public string? Verification { get; set; }
     public bool MergeQueue { get; set; }
     public List<string> Notes { get; } = []; // policy remarks shown with the plan
-    public double TotalCost => Steps.Sum(s => s.Cost) + Blocked.Count * Planner.BlockedCost;
+    public double TotalCost => Steps.Sum(s => s.Cost);
 }

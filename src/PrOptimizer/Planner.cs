@@ -9,8 +9,6 @@ namespace PrOptimizer;
 public class Planner(Simulator sim, string targetName, string targetSha, List<PullRequest> prs,
     IReadOnlyDictionary<string, double>? history = null)
 {
-    public const double BlockedCost = 10;
-
     readonly Dictionary<(string, string), (double W, List<string> Files, bool Independent)> _weights = Pairwise(prs, history);
 
     record Node(List<PlanStep> Steps, Lazy<string> State, HashSet<string> Merged, double Cost, List<BlockedPr>? Blocked, Node? Parent = null)
@@ -19,6 +17,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         public string Key => string.Join(",", Steps.Select(s => s.Pr.Id));
         public PullRequest? Last => Steps.Count > 0 ? Steps[^1].Pr : null;
         public ConcurrentDictionary<string, SimulationResult> Results { get; } = new();
+        public PlanObjective Objective => new(Blocked?.Count ?? 0, Cost, -Steps.Select((s, i) => s.Cost * (i + 1)).Sum());
     }
 
     static Dictionary<(string, string), (double, List<string>, bool)> Pairwise(List<PullRequest> prs,
@@ -72,38 +71,40 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         plan.Blocked.AddRange(prs.Where(p => blocked.ContainsKey(p.Id)).Select(p => new BlockedPr(p, blocked[p.Id])));
         var pool = prs.Where(p => !blocked.ContainsKey(p.Id)).ToList();
 
+        // Finished plans live outside the beam, so the best complete plan can never be pruned by unfinished ones.
+        Node? best = null;
         var beam = new List<Node> { new([], new(targetSha), [], 0, null) };
-        while (beam.Any(n => !n.Done))
+        while (beam.Count > 0)
         {
             // Batch-simulate what can't be reused, then evaluate all candidates in parallel; Expand reads the results.
-            var live = beam.Where(n => !n.Done).ToList();
-            var fresh = live.SelectMany(n => Candidates(n, pool).Where(pr => !Reusable(n, pr)).Select(pr => (n, pr))).ToList();
+            var fresh = beam.SelectMany(n => Candidates(n, pool).Where(pr => !Reusable(n, pr)).Select(pr => (n, pr))).ToList();
             // Materialize states: kept nodes built on reused results still need their real merge; batch those first.
-            sim.Prefetch(live.Where(n => !n.State.IsValueCreated && n.Parent != null).Select(n => (n.Parent!.State.Value, n.Last!)));
+            sim.Prefetch(beam.Where(n => !n.State.IsValueCreated && n.Parent != null).Select(n => (n.Parent!.State.Value, n.Last!)));
             fresh.Select(x => x.n).Distinct().AsParallel().ForAll(n => _ = n.State.Value);
             sim.Prefetch(fresh.Select(x => (x.n.State.Value, x.pr)));
-            Parallel.ForEach(beam.Where(n => !n.Done).SelectMany(n => Candidates(n, pool).Select(pr => (n, pr))),
-                x => Result(x.n, x.pr));
-            var next = beam.Where(n => n.Done).ToList();
-            foreach (var n in beam.Where(n => !n.Done)) next.AddRange(Expand(n, pool));
-            // Equal totals: prefer cheap PRs early (maximising Σ cost·position pushes expensive ones late), then a stable order.
-            beam = next.DistinctBy(n => n.Key).OrderBy(n => Math.Round(n.Cost, 6))
-                .ThenByDescending(n => n.Steps.Select((s, i) => s.Cost * (i + 1)).Sum())
-                .ThenBy(n => n.Key, StringComparer.Ordinal)
+            Parallel.ForEach(beam.SelectMany(n => Candidates(n, pool).Select(pr => (n, pr))), x => Result(x.n, x.pr));
+            var next = beam.SelectMany(n => Expand(n, pool)).ToList();
+            foreach (var done in next.Where(n => n.Done))
+                if (best == null || Better(done, best)) best = done;
+            beam = next.Where(n => !n.Done).DistinctBy(n => n.Key)
+                .OrderBy(n => n.Objective).ThenBy(n => n.Key, StringComparer.Ordinal)
                 .Take(beamWidth).ToList();
         }
 
-        var best = beam[0];
-        plan.Steps.AddRange(best.Steps);
-        plan.Blocked.AddRange(best.Blocked!);
-        plan.FinalState = best.State.Value;
+        var final = best!; // the search always finishes at least one plan
+        plan.Steps.AddRange(final.Steps);
+        plan.Blocked.AddRange(final.Blocked!);
+        plan.FinalState = final.State.Value;
         plan.Parallelizable = Parallelizable(pool);
-        plan.Explanations = Explain(best.Steps);
+        plan.Explanations = Explain(final.Steps);
         plan.Prs = prs;
         plan.Conflicts = prs.SelectMany((a, i) => prs.Skip(i + 1).Select(b => new ConflictPair(a.Id, b.Id, Weight(a, b))))
             .Where(c => c.Weight > 0).OrderByDescending(c => c.Weight).ToList();
         return plan;
     }
+
+    static bool Better(Node a, Node b) =>
+        a.Objective.CompareTo(b.Objective) is var c && (c < 0 || (c == 0 && string.CompareOrdinal(a.Key, b.Key) < 0));
 
     static IEnumerable<PullRequest> Candidates(Node n, List<PullRequest> pool) =>
         pool.Where(p => !n.Merged.Contains(p.Id) && p.Dependencies.All(n.Merged.Contains));
@@ -135,7 +136,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
             var after = n.Steps.Count > 0 ? $" after {n.Steps[^1].Pr.Id}" : "";
             return new BlockedPr(pr, $"conflict{after}: {string.Join(", ", r.ConflictFiles)}");
         }).ToList();
-        yield return n with { Blocked = blocked, Cost = n.Cost + blocked.Count * BlockedCost };
+        yield return n with { Blocked = blocked };
     }
 
     /// <summary>Marginal cost: risk pushed onto still-pending PRs, regeneration work, minus unblock bonus.</summary>

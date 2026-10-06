@@ -77,6 +77,21 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Complete_plans_beat_cheaper_incomplete_ones()
+    {
+        var complete = new PlanObjective(Unmerged: 0, Cost: 8.2, TieBreak: 0);
+        var cheaper = new PlanObjective(Unmerged: 1, Cost: 2.1, TieBreak: 0);
+        Assert.True(complete.CompareTo(cheaper) < 0);
+        Assert.True(new PlanObjective(0, 1, 0).CompareTo(new PlanObjective(0, 2, -100)) < 0); // then cost
+        Assert.True(new PlanObjective(0, 1, -5).CompareTo(new PlanObjective(0, 1, -3)) < 0);  // then cheap-first order
+
+        // Blocked PRs no longer add a numeric penalty to the reported cost.
+        var plan = PlanFor(MergeStrategy.Merge, 8, "billing", "clash");
+        Assert.Single(plan.Blocked);
+        Assert.Equal(plan.Steps.Sum(s => s.Cost), plan.TotalCost);
+    }
+
+    [Fact]
     public void Regenerable_conflicts_never_become_a_conflicted_state()
     {
         Branch("deps3", "main", () => Write("package-lock.json", "{\n\"v\": 4\n}\n"));
