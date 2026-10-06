@@ -35,7 +35,7 @@ public static class Report
             foreach (var p in plan.Parallelizable) sb.AppendLine($"    {p}");
             sb.AppendLine();
         }
-        foreach (var e in plan.Explanations) sb.AppendLine(e).AppendLine();
+        foreach (var e in plan.Explanations) sb.AppendLine(e.ToString()).AppendLine();
         if (plan.Verification != null) sb.AppendLine($"Verification: {plan.Verification}");
         sb.AppendLine($"Total cost: {plan.TotalCost:0.##}");
         return sb.ToString();
@@ -52,7 +52,8 @@ public static class Report
         }),
         blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, reason = b.Reason }),
         parallelizable = plan.Parallelizable,
-        explanations = plan.Explanations,
+        explanations = plan.Explanations.Select(e => new { a = e.A, b = e.B, shared = e.Shared, aThenB = e.AThenB, bThenA = e.BThenA }),
+        conflicts = plan.Conflicts.Select(c => new { a = c.A, b = c.B, weight = c.Weight }),
         finalState = plan.FinalState,
         verification = plan.Verification,
         totalCost = plan.TotalCost,

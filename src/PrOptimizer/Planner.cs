@@ -68,6 +68,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         plan.FinalState = best.State.Value;
         plan.Parallelizable = Parallelizable(pool);
         plan.Explanations = Explain(best.Steps);
+        plan.Prs = prs;
+        plan.Conflicts = prs.SelectMany((a, i) => prs.Skip(i + 1).Select(b => new ConflictPair(a.Id, b.Id, Weight(a, b))))
+            .Where(c => c.Weight > 0).OrderByDescending(c => c.Weight).ToList();
         return plan;
     }
 
@@ -133,9 +136,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
             .Select(p => p.Id).ToList();
 
     /// <summary>For overlapping, independent pairs: show that the chosen order matters by simulating both.</summary>
-    List<string> Explain(List<PlanStep> steps)
+    List<Explanation> Explain(List<PlanStep> steps)
     {
-        var res = new List<string>();
+        var res = new List<Explanation>();
         for (int i = 0; i < steps.Count; i++)
             for (int j = i + 1; j < steps.Count; j++)
             {
@@ -145,9 +148,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
                 var ba = Pair(b, a);
                 if (ab == ba) continue;
                 var members = a.Members.Intersect(b.Members).ToList();
-                res.Add($"Why {a} before {b}?\n" +
-                        $"  both modify: {string.Join(", ", members.Count > 0 ? members : _weights[(a.Id, b.Id)].Files)}\n" +
-                        $"  {a} -> {b} = {ab}\n  {b} -> {a} = {ba}");
+                res.Add(new(a.Id, b.Id, members.Count > 0 ? members : _weights[(a.Id, b.Id)].Files, ab, ba));
             }
         return res;
     }

@@ -35,6 +35,9 @@ pr-optimizer plan --target main --prs 101,102,105 --strategy squash --format jso
 
 # Local branches as "PRs", verify the final merged state
 pr-optimizer plan --target main --prs feature-a,feature-b --verify "dotnet test"
+
+# Shareable HTML report (same visuals as the terminal)
+pr-optimizer plan --target main --all-open --format html > plan.html
 ```
 
 | Option | Default | Meaning |
@@ -46,12 +49,27 @@ pr-optimizer plan --target main --prs feature-a,feature-b --verify "dotnet test"
 | `--strategy` | `merge` | `merge`, `squash`, `rebase`, `ff-only` |
 | `--beam` | `8` | Beam search width; `1` = greedy |
 | `--verify` | `none` | Shell command run in a temporary worktree on the final merged state |
-| `--format` | `text` | `text` or `json` |
+| `--format` | `pretty` / `text` | `pretty` (default on a terminal), `text` (default when piped), `json`, `html` |
 | `--repo` | cwd | Repository directory |
 
 Exit codes: `0` ok, `1` error or failed verification, `2` usage error.
 
-### Example output
+### Terminal UI
+
+On a terminal, `pretty` renders a rich report:
+
+- **summary**: target, strategy, totals, and a breakdown bar of clean / regenerate / blocked PRs
+- **merge order**: the plan as a flow (`main ➜ docs ➜ billing ➜ …  ✘ clash`) plus PRs you can merge in parallel right now
+- **plan table**: cost bars (green → gold → orange → red), status, and the reason for each step
+- **dependency tree** of stacked and explicit dependencies
+- **conflict-risk heatmap** between all PRs (above 12 PRs it switches to a "riskiest pairs" bar chart)
+- **"why A before B?"** panels comparing both simulated orders, and a **verification** panel
+
+Every colour comes with an icon or a label (✔ ⟳ ✘ ⇉ `dep`), so the report still reads without colour.
+Below 90 columns the layout turns compact. `NO_COLOR` is respected.
+For a rendered example, see [docs/sample-plan.html](docs/sample-plan.html).
+
+### Plain text output (`--format text`)
 
 ```text
 PR MERGE PLAN

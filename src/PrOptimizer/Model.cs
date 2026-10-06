@@ -47,6 +47,15 @@ public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> 
 
 public record BlockedPr(PullRequest Pr, string Reason);
 
+/// <summary>"Why A before B?": both orders simulated from the target. Outcomes are "clean", "conflict" or "conflict on X".</summary>
+public record Explanation(string A, string B, List<string> Shared, string AThenB, string BThenA)
+{
+    public override string ToString() =>
+        $"Why {A} before {B}?\n  both modify: {string.Join(", ", Shared)}\n  {A} -> {B} = {AThenB}\n  {B} -> {A} = {BThenA}";
+}
+
+public record ConflictPair(string A, string B, double Weight);
+
 public class Plan
 {
     public required string Target { get; init; }
@@ -54,7 +63,9 @@ public class Plan
     public List<PlanStep> Steps { get; } = [];
     public List<BlockedPr> Blocked { get; } = [];
     public List<string> Parallelizable { get; set; } = [];
-    public List<string> Explanations { get; set; } = [];
+    public List<Explanation> Explanations { get; set; } = [];
+    public List<PullRequest> Prs { get; set; } = [];
+    public List<ConflictPair> Conflicts { get; set; } = []; // pairwise risk > 0, each pair once
     public string? FinalState { get; set; }
     public string? Verification { get; set; }
     public double TotalCost => Steps.Sum(s => s.Cost) + Blocked.Count * Planner.BlockedCost;
