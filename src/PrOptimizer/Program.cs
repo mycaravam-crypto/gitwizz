@@ -46,7 +46,7 @@ public static partial class Cli
         ["-t"] = "target", ["-p"] = "prs", ["-s"] = "strategy", ["-b"] = "beam", ["-f"] = "format",
         ["-o"] = "output", ["-r"] = "repo", ["-a"] = "all-open", ["--all"] = "all-open",
     };
-    static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "history", "verify", "format", "output", "repo"];
+    static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "history", "verify", "verify-at", "format", "output", "repo"];
     static readonly string[] Flags = ["all-open"];
 
     public static Dictionary<string, string> Parse(string[] args)
@@ -91,6 +91,8 @@ public static partial class Cli
         };
         var beam = int.TryParse(opt.GetValueOrDefault("beam", "8"), out var bw) && bw > 0
             ? bw : throw new ArgumentException("--beam must be a positive number");
+        var verifyAt = opt.GetValueOrDefault("verify-at", "final");
+        if (!Verify.Levels.Contains(verifyAt)) throw new ArgumentException($"unknown verify level '{verifyAt}' (final, critical, step)");
         var historyDepth = int.TryParse(opt.GetValueOrDefault("history", "200"), out var hd) && hd >= 0
             ? hd : throw new ArgumentException("--history must be a number of merges (0 = off)");
 
@@ -139,11 +141,10 @@ public static partial class Cli
             if (policy.RequiredChecks.Count > 0)
                 plan.Notes.Add("required checks: " + string.Join(", ", policy.RequiredChecks.Order()));
 
-            if (opt.TryGetValue("verify", out var cmd) && cmd is not ("" or "none") && plan.FinalState != null)
+            if (opt.TryGetValue("verify", out var cmd) && cmd is not ("" or "none"))
             {
-                status($"Verifying: {cmd}");
-                var (ok, log) = Verify.Run(git, plan.FinalState, cmd);
-                plan.Verification = ok ? $"passed ({cmd})" : $"FAILED ({cmd})\n{log.TrimEnd()}";
+                status($"Verifying ({verifyAt}): {cmd}");
+                plan.Verification = Verify.Plan(git, plan, cmd, verifyAt).Summary;
             }
             if (timing) status("done");
             return plan;
@@ -217,7 +218,8 @@ public static partial class Cli
               -s, --strategy <name>     merge | squash | rebase | ff-only [grey](default: from branch rules, else merge)[/]
               -b, --beam <width>        search width, 1 = greedy [grey](default: 8)[/]
                   --history <merges>    learn file conflict rates from past merges, 0 = off [grey](default: 200)[/]
-                  --verify <command>    run a command on the final merged state, e.g. "dotnet test"
+                  --verify <command>    run a command on merged states, e.g. "dotnet test"
+                  --verify-at <level>   final | critical (after high-risk steps) | step [grey](default: final)[/]
 
             [bold]Output[/]
               -f, --format <name>       pretty | text | json | html [grey](default: pretty on a terminal, text when piped)[/]

@@ -335,6 +335,15 @@ public class PlannerTests : IDisposable
         var plan = PlanFor(MergeStrategy.Merge, 8, "docs", "billing");
         Assert.True(Verify.Run(_git, plan.FinalState!, "grep -q billing2 billing.cs && grep -q better docs.md").Ok);
         Assert.False(Verify.Run(_git, plan.FinalState!, "false").Ok);
+
+        // Levels verify the plan's own states; a failure names the step that introduced it.
+        Assert.Equal(plan.FinalState, plan.Steps[^1].State);
+        Assert.Equal("passed (true) at 2 states: step", Verify.Plan(_git, plan, "true", "step").Summary);
+        Assert.Equal("passed (true) at 1 state: final", Verify.Plan(_git, plan, "true", "final").Summary);
+        Assert.Equal("passed (true) at 1 state: critical", Verify.Plan(_git, plan, "true", "critical").Summary); // no high-risk step
+        var (ok, summary) = Verify.Plan(_git, plan, "! grep -q billing2 billing.cs", "step");
+        Assert.False(ok);
+        Assert.StartsWith("FAILED after billing", summary);
         Assert.DoesNotContain("pr-optimizer-", _git.Run("worktree", "list"));
     }
 

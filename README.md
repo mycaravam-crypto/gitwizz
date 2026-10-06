@@ -55,7 +55,8 @@ pr-optimizer help                           # all options with examples
 | `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
 | `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
 | `--history` | `200` | Learn per-file conflict rates from this many past merges into the target; `0` = off |
-| `--verify` | `none` | Shell command run in a temporary worktree on the final merged state |
+| `--verify` | `none` | Shell command run in a temporary worktree on merged plan states |
+| `--verify-at` | `final` | Which states: `final`, `critical` (after each high-risk step, cost ≥ 1, plus the final one), or `step` (after every step) |
 | `-f`, `--format` | `pretty` / `text` | `pretty` (default on a terminal), `text` (default when piped), `json`, `html` |
 | `-o`, `--output` | stdout | Write the report to a file; the format comes from the extension (`.html`, `.json`, else text) |
 | `-r`, `--repo` | cwd | Repository directory |
@@ -207,8 +208,10 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    outside the beam, so the search can't prune the best one.
    The report also lists PRs that are parallelizable right now, and gives "Why A before B?" for overlapping pairs
    whose two orders give different results in simulation.
-8. **Verification** ([Verify.cs](src/PrOptimizer/Verify.cs)): `git worktree add --detach` on the final synthetic commit,
-   run the command, then remove the worktree.
+8. **Verification** ([Verify.cs](src/PrOptimizer/Verify.cs)): `git worktree add --detach` on a synthetic plan state,
+   run the command, then remove the worktree. `--verify-at` chooses the states (`final`, `critical`, `step`). Only the
+   chosen plan's states are verified, never search candidates, so the test count stays linear. The first failure stops
+   verification and names the step ("FAILED after #108").
 
 ## Performance
 
@@ -233,7 +236,6 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 
 - Hunk overlap assumes the PRs share a merge-base. With very different bases it's an approximation.
 - Dependencies on PRs outside the selected set are ignored.
-- `--verify` checks only the final state. There are no per-batch or per-step modes yet.
 - After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one. Later lockfile edits
   are judged against that version.
 - Synthetic commits are unreferenced objects. `git gc` cleans them up.
@@ -244,5 +246,4 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 
 ## Roadmap
 
-All planned v1 and v2 issues are done. Ideas from [PLAN.md](PLAN.md) that are still open: per-step/batch `--verify` modes,
-structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+All planned v1 and v2 issues are done. Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

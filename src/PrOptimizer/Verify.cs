@@ -2,8 +2,30 @@ namespace PrOptimizer;
 
 public static class Verify
 {
+    public static readonly string[] Levels = ["final", "critical", "step"];
+
+    /// <summary>
+    /// Verifies the chosen plan's states only, never search candidates: final = the last state, critical = after each
+    /// high-risk step and the last, step = after every step. Stops at the first failure and names the step.
+    /// </summary>
+    public static (bool Ok, string Summary) Plan(Git git, Plan plan, string command, string level)
+    {
+        if (plan.Steps.Count == 0) return (true, $"nothing to verify ({command})");
+        var steps = level switch
+        {
+            "step" => plan.Steps,
+            "critical" => plan.Steps.Where((s, i) => s.Cost >= PlanStep.HighRisk || i == plan.Steps.Count - 1).ToList(),
+            _ => [plan.Steps[^1]],
+        };
+        foreach (var s in steps)
+        {
+            var (ok, log) = Run(git, s.State, command);
+            if (!ok) return (false, $"FAILED after {s.Pr.Id} ({command})\n{log.TrimEnd()}");
+        }
+        return (true, $"passed ({command}) at {steps.Count} state{(steps.Count == 1 ? "" : "s")}: {level}");
+    }
+
     /// <summary>Runs a command in a temporary detached worktree on the given commit, then removes it.</summary>
-    // ponytail: only verifies the final state; per-batch/critical-step modes can call this per step later.
     public static (bool Ok, string Output) Run(Git git, string commit, string command)
     {
         var dir = Path.Combine(Path.GetTempPath(), "pr-optimizer-" + Guid.NewGuid().ToString("N")[..8]);
