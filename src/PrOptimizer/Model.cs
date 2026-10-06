@@ -59,7 +59,11 @@ public record SimulationResult(MergeOutcome Outcome, List<string> ConflictFiles,
     public bool Mergeable => Outcome != MergeOutcome.Conflict;
 }
 
-public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> RegenerateFiles);
+public record PlanStep(PullRequest Pr, double Cost, string Reason, List<string> RegenerateFiles)
+{
+    public string State { get; init; } = ""; // synthetic commit after this step
+    public const double HighRisk = 1; // cost from which a step counts as high risk (critical verification, report level)
+}
 
 /// <summary>Policy: blocked by repository rules (draft, reviews, checks, GitHub), not by the merge itself.</summary>
 public record BlockedPr(PullRequest Pr, string Reason, bool Policy = false);

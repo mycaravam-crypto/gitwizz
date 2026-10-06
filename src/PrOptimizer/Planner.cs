@@ -107,7 +107,10 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
         }
 
         var final = best!; // the search always finishes at least one plan
-        plan.Steps.AddRange(final.Steps);
+        // Node i on the path holds the state after step i (the finished node copies the last live one).
+        var states = new List<string>();
+        for (var n = final; n.Parent != null; n = n.Parent) states.Insert(0, n.State.Value);
+        plan.Steps.AddRange(final.Steps.Select((s, i) => s with { State = states[i] }));
         plan.Blocked.AddRange(final.Blocked!);
         plan.FinalState = final.State.Value;
         plan.Parallelizable = Parallelizable(pool);
