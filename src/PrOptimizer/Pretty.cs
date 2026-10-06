@@ -10,7 +10,7 @@ public static class Pretty
     static readonly Color Ok = Color.SpringGreen3, Warn = Color.Gold1, Risk = Color.Orange1, Bad = Color.IndianRed1,
         Accent = Color.SteelBlue1, Muted = Color.Grey;
 
-    const string IconOk = "✔", IconRegen = "⟳", IconBlocked = "✘", Arrow = "➜";
+    const string IconOk = "✔", IconRegen = "⟳", IconBlocked = "✘", IconPolicy = "⚑", Arrow = "➜";
     const int HeatmapMaxPrs = 12;
 
     static string Hex(Color c) => c.ToMarkup();
@@ -66,7 +66,9 @@ public static class Pretty
         var chart = new BreakdownChart().Width(Math.Min(c.Profile.Width - 6, 70)).ShowTagValues();
         if (plan.Steps.Count - regen > 0) chart.AddItem($"{IconOk} clean", plan.Steps.Count - regen, Ok);
         if (regen > 0) chart.AddItem($"{IconRegen} regenerate", regen, Warn);
-        if (plan.Blocked.Count > 0) chart.AddItem($"{IconBlocked} blocked", plan.Blocked.Count, Bad);
+        var policy = plan.Blocked.Count(b => b.Policy);
+        if (plan.Blocked.Count - policy > 0) chart.AddItem($"{IconBlocked} blocked", plan.Blocked.Count - policy, Bad);
+        if (policy > 0) chart.AddItem($"{IconPolicy} policy blocked", policy, Risk);
 
         var notes = plan.Notes.Select(n => (IRenderable)new Markup($"[{Hex(Warn)}]⚑[/] [{Hex(Muted)}]{Esc(n)}[/]"));
         c.Write(new Panel(new Rows([facts, new Text(""), chart, .. notes])).Header(" summary ").RoundedBorder().BorderColor(Muted).Expand());
@@ -112,11 +114,12 @@ public static class Pretty
         int i = 1;
         foreach (var s in plan.Steps)
             Row($"{i++}", Id(s.Pr.Id), s.Pr.Title, CostBar(s.Cost, max),
-                s.RegenerateFiles.Count > 0 ? $"[{Hex(Warn)}]{IconRegen} regen[/]" : $"[{Hex(Ok)}]{IconOk} clean[/]",
+                s.RegenerateFiles.Count > 0 ? $"[{Hex(Warn)}]{IconRegen} REGENERATE[/]" : $"[{Hex(Ok)}]{IconOk} CLEAN[/]",
                 $"[{Hex(Muted)}]{Esc(s.Reason)}[/]");
         foreach (var b in plan.Blocked)
             Row($"[{Hex(Bad)}]{i++}[/]", $"[bold {Hex(Bad)}]{Esc(b.Pr.Id)}[/]", b.Pr.Title, $"[{Hex(Bad)}]—[/]",
-                $"[bold {Hex(Bad)}]{IconBlocked} BLOCKED[/]", $"[{Hex(Bad)}]{Esc(b.Reason)}[/]");
+                b.Policy ? $"[bold {Hex(Risk)}]{IconPolicy} POLICY BLOCKED[/]" : $"[bold {Hex(Bad)}]{IconBlocked} BLOCKED[/]",
+                $"[{Hex(b.Policy ? Risk : Bad)}]{Esc(b.Reason)}[/]");
 
         c.Write(t);
     }
@@ -162,7 +165,7 @@ public static class Pretty
             t.AddRow(ordered.Select(b => a == b ? $"[{Hex(Muted)}]—[/]"
                 : a.Dependencies.Contains(b.Id) || b.Dependencies.Contains(a.Id) ? $"[{Hex(Accent)}]dep[/]"
                 : W(a.Id, b.Id) is var x && x <= 0 ? $"[{Hex(Muted)}]·[/]"
-                : $"[black on {Hex(CostColor(x * 1.5))}]{x:0.00}[/]").Prepend(Id(a.Id)).Prepend($"{i + 1}").ToArray());
+                : $"[black on {Hex(CostColor(x * 1.5))}] {Report.RiskLevel(x)} [/]").Prepend(Id(a.Id)).Prepend($"{i + 1}").ToArray());
         }
         c.Write(t);
         c.MarkupLine($"  [{Hex(Muted)}]· none[/]  [{Hex(Accent)}]dep[/] dependency  [black on {Hex(Warn)}] low [/] [black on {Hex(Risk)}] medium [/] [black on {Hex(Bad)}] high [/]");

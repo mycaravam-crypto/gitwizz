@@ -5,6 +5,12 @@ namespace PrOptimizer;
 
 public static class Report
 {
+    public static string Status(PlanStep s) => s.RegenerateFiles.Count > 0 ? "REGENERATE" : "CLEAN";
+    public static string Status(BlockedPr b) => b.Policy ? "POLICY BLOCKED" : "BLOCKED";
+
+    /// <summary>Pair weights are heuristics, not probabilities, so they are shown as levels, never as percentages.</summary>
+    public static string RiskLevel(double weight) => weight < 0.3 ? "low" : weight < 0.6 ? "medium" : "high";
+
     public static string Text(Plan plan)
     {
         var sb = new StringBuilder();
@@ -18,7 +24,8 @@ public static class Report
         foreach (var s in plan.Steps)
         {
             sb.AppendLine($"{i++,-3}{s.Pr.Id}  {s.Pr.Title}");
-            sb.AppendLine(s.RegenerateFiles.Count > 0 ? $"   REGENERATE REQUIRED: {string.Join(", ", s.RegenerateFiles)}" : "   CLEAN");
+            sb.AppendLine($"   {Status(s)}");
+            if (s.RegenerateFiles.Count > 0) sb.AppendLine($"   {string.Join(", ", s.RegenerateFiles)}");
             sb.AppendLine($"   Cost: {s.Cost:0.##}");
             sb.AppendLine($"   Reason: {s.Reason}");
             sb.AppendLine();
@@ -26,7 +33,7 @@ public static class Report
         foreach (var b in plan.Blocked)
         {
             sb.AppendLine($"{i++,-3}{b.Pr.Id}  {b.Pr.Title}");
-            sb.AppendLine(b.Policy ? "   POLICY BLOCKED" : "   BLOCKED");
+            sb.AppendLine($"   {Status(b)}");
             sb.AppendLine($"   Reason: {b.Reason}");
             sb.AppendLine();
         }
@@ -71,13 +78,13 @@ public static class Report
         notes = plan.Notes,
         steps = plan.Steps.Select(s => new
         {
-            id = s.Pr.Id, title = s.Pr.Title, cost = s.Cost, reason = s.Reason,
+            id = s.Pr.Id, title = s.Pr.Title, status = Status(s), cost = s.Cost, reason = s.Reason,
             dependencies = s.Pr.Dependencies, regenerate = s.RegenerateFiles,
         }),
-        blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, reason = b.Reason, policy = b.Policy }),
+        blocked = plan.Blocked.Select(b => new { id = b.Pr.Id, title = b.Pr.Title, status = Status(b), reason = b.Reason }),
         parallelizable = plan.Parallelizable,
         explanations = plan.Explanations.Select(e => new { a = e.A, b = e.B, shared = e.Shared, aThenB = e.AThenB, bThenA = e.BThenA }),
-        conflicts = plan.Conflicts.Select(c => new { a = c.A, b = c.B, weight = c.Weight }),
+        conflicts = plan.Conflicts.Select(c => new { a = c.A, b = c.B, risk = RiskLevel(c.Weight), weight = c.Weight }),
         finalState = plan.FinalState,
         verification = plan.Verification,
         totalCost = plan.TotalCost,

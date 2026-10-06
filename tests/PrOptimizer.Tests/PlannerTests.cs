@@ -192,7 +192,7 @@ public class PlannerTests : IDisposable
         // merge-tree sees the lockfile conflict; the step is planned as REGENERATE, never as clean.
         Assert.Equal(3, plan.Steps.Count);
         Assert.Equal(2, plan.Steps.Count(s => s.RegenerateFiles.SequenceEqual(["package-lock.json"])));
-        Assert.Contains("REGENERATE REQUIRED: package-lock.json", Report.Text(plan));
+        Assert.Contains("   REGENERATE\n   package-lock.json", Report.Text(plan));
 
         // No state along the plan carries conflict markers, so later PRs never merge against them.
         for (var c = plan.FinalState!; _git.Try("rev-parse", "--verify", "-q", c + "^").ExitCode == 0 && c != _git.RevParse("main"); c = _git.RevParse(c + "^"))
