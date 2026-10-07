@@ -1,6 +1,6 @@
 # gitwizz — PR Merge Optimizer
 
-`pr-optimizer` finds a low-conflict order for merging a set of pull requests into a target branch.
+`gitwizz` finds a low-conflict order for merging a set of pull requests into a target branch.
 It doesn't sort PRs by size or file overlap. It **simulates** the merges with real git
 (`git merge-tree`) on synthetic commits and searches for the order with the lowest total cost.
 Your working tree, index and branches are never touched.
@@ -26,40 +26,60 @@ It ends with commands to try on the demo repo yourself.
 
 ## Build & test
 
+The same commands work on Linux, macOS and Windows (PowerShell, cmd or Git Bash).
+
 ```bash
 dotnet build
 dotnet test
-# fastest: precompiled (ReadyToRun) single-file binary
-dotnet publish src/PrOptimizer -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
 ```
+
+Fastest: a precompiled (ReadyToRun) single-file binary. Pick the runtime identifier for your platform:
+
+```bash
+dotnet publish src/PrOptimizer -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
+dotnet publish src/PrOptimizer -c Release -r win-x64   --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
+dotnet publish src/PrOptimizer -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
+```
+
+The binary lands in `src/PrOptimizer/bin/Release/net10.0/<rid>/publish/` (`pr-optimizer`, or `pr-optimizer.exe` on Windows).
+ReadyToRun compiles for the target platform, so build the Windows binary on Windows (or drop `-p:PublishReadyToRun=true`).
 
 ## Install as a command
 
-Publish the DLL to a fixed folder, then point a shell alias at it.
+Publish the DLL to a fixed folder, then point a `gitwizz` command at it. The DLL keeps its name, `pr-optimizer.dll`.
+
+**Linux / macOS / Git Bash on Windows** (bash or zsh): add the alias to your startup file so every new shell has it.
 
 ```bash
-dotnet publish src/PrOptimizer -c Release -o ~/tools/pr-optimizer   # creates ~/tools/pr-optimizer/pr-optimizer.dll
-```
-
-**Bash / zsh**: add the alias to your startup file so every new shell has it.
-
-```bash
-echo "alias pr-optimizer='dotnet ~/tools/pr-optimizer/pr-optimizer.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
+dotnet publish src/PrOptimizer -c Release -o ~/tools/gitwizz   # creates ~/tools/gitwizz/pr-optimizer.dll
+echo "alias gitwizz='dotnet ~/tools/gitwizz/pr-optimizer.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
 source ~/.bashrc
 ```
 
-**PowerShell**: `Set-Alias` can't pass arguments, so use a function. `$PROFILE` runs at every start.
+**Windows PowerShell / PowerShell 7**: `Set-Alias` can't pass arguments, so use a function. `$PROFILE` runs at every start.
 
 ```powershell
-dotnet publish src/PrOptimizer -c Release -o $HOME\tools\pr-optimizer
+dotnet publish src/PrOptimizer -c Release -o "$HOME\tools\gitwizz"
 if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
-Add-Content $PROFILE 'function pr-optimizer { dotnet "$HOME\tools\pr-optimizer\pr-optimizer.dll" @args }'
+Add-Content $PROFILE 'function gitwizz { dotnet "$HOME\tools\gitwizz\pr-optimizer.dll" @args }'
 . $PROFILE
 ```
 
 If PowerShell refuses to load the profile, allow local scripts once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Then run `pr-optimizer --all-open` in any repository. After pulling changes, re-run the `dotnet publish` line to update.
+**Windows cmd** (also works from PowerShell): cmd has no persistent aliases, so put a small `gitwizz.cmd` on your `PATH`.
+Run this once in PowerShell, then open a new terminal:
+
+```powershell
+dotnet publish src/PrOptimizer -c Release -o "$HOME\tools\gitwizz"
+New-Item -Type Directory -Force "$HOME\bin" | Out-Null
+Set-Content "$HOME\bin\gitwizz.cmd" "@dotnet `"$HOME\tools\gitwizz\pr-optimizer.dll`" %*" -Encoding ASCII
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (";$userPath;" -notlike "*;$HOME\bin;*") { [Environment]::SetEnvironmentVariable('Path', "$userPath;$HOME\bin", 'User') }
+```
+
+Then run `gitwizz --all-open` in any repository. After pulling changes, re-run the `dotnet publish` line to update.
+The built-in help and the demo still print the old name `pr-optimizer`; type `gitwizz` instead.
 
 ## Documentation gaps
 
@@ -75,15 +95,15 @@ docwizz check . --since origin/main      # only what your branch introduces, as 
 
 ## Usage
 
-Run inside the repository. `plan` is the default command, so `pr-optimizer --all-open` is enough.
+Run inside the repository. `plan` is the default command, so `gitwizz --all-open` is enough.
 
 ```bash
-pr-optimizer --all-open                     # all open GitHub PRs (or all unmerged local branches)
-pr-optimizer -a -s squash                   # same, planned for squash merges
-pr-optimizer -p 101,102,105 -f json         # specific GitHub PRs as JSON
-pr-optimizer -p feature/a,feature/b --verify "dotnet test"
-pr-optimizer -a -o plan.html                # shareable HTML report (format from the extension)
-pr-optimizer help                           # all options with examples
+gitwizz --all-open                      # all open GitHub PRs (or all unmerged local branches)
+gitwizz -a -s squash                    # same, planned for squash merges
+gitwizz -p 101,102,105 -f json          # specific GitHub PRs as JSON
+gitwizz -p feature/a,feature/b --verify "dotnet test"
+gitwizz -a -o plan.html                 # shareable HTML report (format from the extension)
+gitwizz help                            # all options with examples
 ```
 
 | Option | Default | Meaning |
