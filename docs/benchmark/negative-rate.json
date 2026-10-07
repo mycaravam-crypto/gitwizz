@@ -1,0 +1,20 @@
+{
+  "id": "negative-rate",
+  "notes": "Labelled case: the change lets Rate return a negative value, which ADR 001 forbids. Built with `gitwizz evidence`, then labelled by adding expected.",
+  "expected": [ { "file": "src/Tax.cs", "line": 6, "rule": "adr-001" } ],
+  "schema": "gitwizz.evidence/v1",
+  "pr": { "id": "#12", "title": "Reduced tax rate", "description": "" },
+  "requirements": [],
+  "changes": { "files": [ { "path": "src/Tax.cs", "change": "modified", "class": "normal" } ], "symbols": [ "Tax.Rate(decimal)" ], "apiChanges": [] },
+  "diff": [
+    {
+      "path": "src/Tax.cs",
+      "patch": "diff --git a/src/Tax.cs b/src/Tax.cs\n--- a/src/Tax.cs\n+++ b/src/Tax.cs\n@@ -5,3 +5,3 @@ class Tax\n     {\n-        return 0.19m;\n+        return amount > 0 ? 0.07m : -1m;\n     }"
+    }
+  ],
+  "callers": [],
+  "rules": [ { "source": "docs/adr/001-tax.md", "text": "adr-001: Rate must never return a negative value." } ],
+  "docs": [],
+  "tests": [],
+  "omitted": []
+}

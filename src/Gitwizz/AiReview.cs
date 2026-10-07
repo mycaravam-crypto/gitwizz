@@ -197,10 +197,3 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
     }
 }
 
-/// <summary>When an AI gate may block a merge. Until a benchmark validates the model and prompt, AI review is advisory.</summary>
-public static class Promotion
-{
-    /// <summary>Null if the ai-review gate may block, else why not.</summary>
-    public static string? Check(GateContext ctx) =>
-        "AI review stays advisory until a benchmark baseline for this model and prompt meets the configured thresholds";
-}

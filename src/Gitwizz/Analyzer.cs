@@ -47,6 +47,7 @@ public record RepoConfig
     public List<TestSuite> Tests { get; init; } = [];            // test suites for risk-based selection and traceability
     public TraceabilityPolicy Traceability { get; init; } = new();
     public ReviewPolicy Review { get; init; } = new();           // AI review: self-hosted endpoint and context bounds
+    public BenchmarkPolicy Benchmark { get; init; } = new();     // AI quality benchmark: cases, baseline, thresholds
 
     /// <summary>Where the rules came from, for the audit trail: "built-in", or the file and the commit it was read at.</summary>
     [YamlDotNet.Serialization.YamlIgnore] public string Source { get; init; } = "built-in";
@@ -124,6 +125,10 @@ public record RepoConfig
             if (Endpoints.Problem(c.Review.Endpoint, c.Review.AllowedHosts) is { } endpoint) return endpoint;
             if (string.IsNullOrWhiteSpace(c.Review.Model)) return "review.model is required for an ai-review gate";
         }
+        if (c.Benchmark?.Thresholds is not { } bt || string.IsNullOrWhiteSpace(c.Benchmark.Cases) || string.IsNullOrWhiteSpace(c.Benchmark.Baseline))
+            return "benchmark: needs cases, baseline and thresholds";
+        if (new[] { bt.MinPrecision, bt.MinRecall, bt.MaxFalsePositiveRate, bt.MaxRegression }.Any(x => x is < 0 or > 1 || double.IsNaN(x)) || bt.MinCases < 1)
+            return "benchmark.thresholds: rates must be between 0 and 1, min_cases at least 1";
         if (c.Review.Timeout <= 0 || c.Review.MaxTokens <= 0 || c.Review.MaxContextChars < 4000 || c.Review.MinConfidence is < 0 or > 1)
             return "review: timeout and max_tokens must be positive, max_context_chars at least 4000, min_confidence between 0 and 1";
         if (c.Risk is null || c.Risk.MaxFiles < 1) return "risk.max_files must be at least 1";
