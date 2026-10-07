@@ -81,6 +81,9 @@ public sealed class GateContext : IDisposable
     /// <summary>Extra environment for workspace commands; starts with the GITWIZZ_* variables.</summary>
     public Dictionary<string, string> Env { get; } = [];
 
+    /// <summary>Teardown actions (e.g. a test environment), run in reverse order when the context is disposed.</summary>
+    public List<Action> Cleanup { get; } = [];
+
     /// <summary>Requirement-to-test trace, set by the traceability gate.</summary>
     public Trace? Trace { get; set; }
 
@@ -92,8 +95,14 @@ public sealed class GateContext : IDisposable
     /// <summary>A checkout of the merged state (the PR head without one), created on first use and shared.</summary>
     public string Workspace => (_worktree ??= new Worktree(Git, MergedState ?? Pr.HeadSha)).Dir;
 
-    /// <summary>Removes the workspace, if one was created.</summary>
-    public void Dispose() => _worktree?.Dispose();
+    /// <summary>Runs the cleanup actions (a failing one doesn't stop the rest), then removes the workspace.</summary>
+    public void Dispose()
+    {
+        foreach (var undo in Enumerable.Reverse(Cleanup))
+            try { undo(); } catch (Exception e) when (e is InvalidOperationException or ProvisionerUnavailableException or IOException) { }
+        Cleanup.Clear();
+        _worktree?.Dispose();
+    }
 }
 
 /// <summary>Masks secret values (declared environment variables and well-known tokens) in anything gitwizz prints or stores.</summary>
@@ -125,21 +134,25 @@ public sealed class Redactor
 public static partial class Gates
 {
     /// <summary>Known gate types.</summary>
-    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability", "ai-review"];
+    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability", "ai-review", "environment"];
 
     /// <summary>Types that work on the merged state, so they need the merge gate.</summary>
-    public static readonly string[] Workspace = ["build", "test", "docwizz", "command", "traceability", "ai-review"];
+    public static readonly string[] Workspace = ["build", "test", "docwizz", "command", "traceability", "ai-review", "environment"];
 
     /// <summary>Available without configuration: structural mergeability and repository policy (reviews, checks).</summary>
     public static readonly GateSpec[] BuiltIn = [new() { Id = "merge" }, new() { Id = "policy" }];
 
+    /// <summary>Test seam: returns a replacement implementation for a gate type, or null. Per thread.</summary>
+    [ThreadStatic] public static Func<string, IQualityGate?>? Override;
+
     /// <summary>The implementation for a gate type.</summary>
-    public static IQualityGate Create(string kind) => kind switch
+    public static IQualityGate Create(string kind) => Override?.Invoke(kind) ?? kind switch
     {
         "merge" => new MergeGate(),
         "policy" => new PolicyGate(),
         "traceability" => new TraceabilityGate(),
         "ai-review" => new AiReviewGate(),
+        "environment" => new EnvironmentGate(),
         _ => new CommandGate(),
     };
 

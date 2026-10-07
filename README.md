@@ -219,7 +219,8 @@ Built-in gates, active without configuration:
 - **policy**: draft, review decision, failing or pending required checks, branch protection, declared dependencies on
   open PRs, and a PR that targets another branch. Skipped for local branches (they carry no such data).
 
-Gate types to configure: `ai-review` (self-hosted model, advisory; see
+Gate types to configure: `environment` (a per-PR test environment; see
+[Ephemeral PR test environments](#ephemeral-pr-test-environments)), `ai-review` (self-hosted model, advisory; see
 [AI review](#ai-review-with-a-bounded-evidence-package)), `traceability` (the tests the change needs, traced to its acceptance criteria; see
 [below](#requirement-to-test-traceability-and-test-selection)), `build` and `test` (command detected from the project: `dotnet`, `npm`, `go`, `cargo`, Maven,
 Gradle, Python, `make`, or set `run:`), `docwizz` (`docwizz check . --since $GITWIZZ_TARGET_SHA`, the documentation
@@ -266,6 +267,46 @@ Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes 
 
 `--evidence <dir>` keeps each command gate's full log (`<gate>.log`) and the result (`evaluation.json`) for the
 audit trail; the JSON references the logs.
+
+### Ephemeral PR test environments
+
+An `environment` gate deploys the merged state of a PR into its own isolated environment, so integration, contract,
+UI, smoke and E2E tests run against deployable software, not just a build. The first provisioner is Docker Compose
+(behind a provisioner interface, so others can be added).
+
+```yaml
+environment:
+  file: docker-compose.test.yml        # in the merged tree (default docker-compose.yml)
+  env: { APP_MODE: test, SEED: demo }  # configuration and test data settings
+  secrets: [DB_PASSWORD]               # passed through from gitwizz's environment; never printed or stored
+  ready:
+    - url: http://localhost:${GITWIZZ_PORT_WEB_8080}/health   # must answer 2xx
+    - command: ./scripts/db-ready.sh                            # or exit 0
+  ready_timeout: 180                   # seconds, for all checks together
+  up_timeout: 900
+  smoke: ./scripts/smoke.sh            # once ready
+  keep: false                          # true: leave it running after the evaluation (remove with gitwizz env down)
+gates:
+  - id: environment
+  - id: e2e
+    run: npm run e2e                    # sees GITWIZZ_PORT_WEB_8080, GITWIZZ_ENV_PROJECT, ...
+    needs: [environment]
+profiles:
+  fast: [build, test]                  # no environment: provisioning is off for fast PR profiles
+  full: [build, test, environment, e2e]
+```
+
+- **Isolation**: each PR gets its own compose project, `gitwizz-<repo>-<pr>`, so environments of several PRs coexist.
+  Publish container ports without a host port (`ports: ["8080"]`): Docker picks a free one, and gitwizz exposes it to
+  later gates and readiness URLs as `GITWIZZ_PORT_<SERVICE>_<PORT>` (plus `GITWIZZ_ENV_PROJECT`, `GITWIZZ_ENV_HOST`).
+- **Lifecycle**: leftovers of an earlier run are removed first; after the evaluation the environment is always torn down
+  (`docker compose down -v --remove-orphans`), also when a gate failed. Teardown is idempotent, and
+  `gitwizz env down <pr>` does the same by hand.
+- **Root causes**: a failed build/start (`deployment failed`), a readiness check that misses its deadline (`not ready
+  after 180 s: <check>`) or a failing smoke check fails the gate, with the output and service logs as evidence. Gates
+  that `need` it are skipped and block with that cause. Docker missing, the daemon unreachable or a secret not set is an
+  `error`, not a failure.
+- **Secrets** reach only the provisioner and the commands; their values are masked in every log, report and JSON.
 
 ### Requirement-to-test traceability and test selection
 
@@ -615,5 +656,5 @@ Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 
 All planned v1, v2 and v0.4 issues are done. The PR quality & merge orchestrator epic (#53) adds quality gates and
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), and requirement-to-test
-traceability with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), and the AI quality
-benchmark that decides when AI review may block (#59). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+traceability with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), the AI quality
+benchmark that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

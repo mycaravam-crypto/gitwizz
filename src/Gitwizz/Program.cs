@@ -19,8 +19,8 @@ if (command is "version" || rest.Contains("--version"))
 try
 {
     // evaluate / explain take the pull request as their first argument.
-    string? subject = command is "evaluate" or "explain" or "context" or "trace" or "evidence" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
-    var opt = Cli.Parse(subject != null ? rest[1..] : rest, command);
+    string? subject = command is "evaluate" or "explain" or "context" or "trace" or "evidence" or "env" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    var opt = Cli.Parse(command == "env" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
         var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
@@ -34,6 +34,9 @@ try
         return code;
     }
     if (command == "benchmark") return Cli.Benchmark(opt, err);
+    if (command == "env")
+        return Cli.EnvDown(subject is "down" && rest.Length > 1 && !rest[1].StartsWith('-') ? rest[1]
+            : throw new ArgumentException("need a pull request: gitwizz env down <pr>"), opt, err);
     if (command == "evidence")
         return Cli.EvidencePackage(subject ?? throw new ArgumentException("need a pull request: gitwizz evidence <pr>"), opt, err);
     if (command == "trace")
@@ -42,7 +45,7 @@ try
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, evidence, benchmark, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, evidence, benchmark, env, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -71,6 +74,7 @@ public static partial class Cli
         ["trace"] = [.. Common, "run", "evidence"],
         ["evidence"] = ["target", "provider", "strategy", "output", "repo"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
+        ["env"] = ["repo"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept"];
 
@@ -208,7 +212,7 @@ public static partial class Cli
             {
                 Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config,
                 Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
-                Redactor = new Redactor(config.Secrets), EvidenceDir = evidenceDir,
+                Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)), EvidenceDir = evidenceDir,
             };
             return Evaluator.Run(ctx, opt.GetValueOrDefault("profile"), status);
         }
@@ -284,7 +288,7 @@ public static partial class Cli
         if (config.Tests.Count == 0) err.MarkupLine($"[grey]no tests: in {RepoConfig.FileName} at {Markup.Escape(target)}: only acceptance criteria are listed[/]");
         using var ctx = new GateContext
         {
-            Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config, Redactor = new Redactor(config.Secrets),
+            Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config, Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)),
             Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
             EvidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null,
         };
@@ -299,6 +303,20 @@ public static partial class Cli
         }
         Write(format == "json" ? Traceability.Json(trace) + "\n" : Traceability.Text(trace), format, output, err);
         return trace.Runs.Any(r => r.Status != GateStatus.Pass) ? 3 : 0;
+    }
+
+    /// <summary>
+    /// Removes a PR's test environment (gitwizz env down 42), e.g. one kept with environment.keep or left by an
+    /// interrupted run. Idempotent: removing a missing environment succeeds.
+    /// </summary>
+    public static int EnvDown(string subject, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var config = RepoConfig.Load(git);
+        var project = Environments.ProjectName(git.Run("rev-parse", "--show-toplevel"), subject.TrimStart('#'));
+        Environments.Create(config.Environment.Provisioner).Down(project);
+        err.MarkupLine($"[springgreen3]✔[/] environment [bold]{Markup.Escape(project)}[/] removed");
+        return 0;
     }
 
     /// <summary>
@@ -362,7 +380,7 @@ public static partial class Cli
         var commit = ctx.MergedState ?? pr.HeadSha;
         var trace = config.Tests.Count > 0 ? Traceability.Build(git, pr, config, commit) : null;
         var package = Evidence.Build(git, pr, config, target, targetSha, commit, trace);
-        Write(new Redactor(config.Secrets).Apply(Evidence.Json(package)) + "\n", "json", opt.GetValueOrDefault("output"), err);
+        Write(new Redactor(config.Secrets.Concat(config.Environment.Secrets)).Apply(Evidence.Json(package)) + "\n", "json", opt.GetValueOrDefault("output"), err);
         return 0;
     }
 
@@ -447,6 +465,7 @@ public static partial class Cli
     /// <summary>A next step to suggest for a known error message, or null.</summary>
     public static string? Hint(string msg) =>
         msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
+        : msg.Contains("docker compose is not available") ? "install Docker with the compose plugin and start the daemon"
         : msg.Contains("not logged in to Azure DevOps") ? "run 'ado auth login <server-url>', or set ADO_SERVER and ADO_PAT"
         : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
@@ -468,6 +487,7 @@ public static partial class Cli
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
               gitwizz evidence <pr>             the bounded evidence package an AI review would see (JSON)
+              gitwizz env down <pr>             remove a PR's test environment (idempotent)
               gitwizz benchmark [[--accept]]       measure AI review quality on labelled cases; --accept saves the baseline
               gitwizz trace <pr> [[--run]]       which tests the change needs and why; acceptance criteria -> tests -> results
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
