@@ -128,19 +128,48 @@ public class Git(string repoDir)
         return id;
     }
 
+    /// <summary>
+    /// Contents of many blobs ("rev:path") from one git cat-file process instead of one git show each: process
+    /// start-up dominates on Windows. Throws if one is missing, as git show would.
+    /// </summary>
+    public List<string> ReadBlobs(IReadOnlyList<string> specs)
+    {
+        if (specs.Count == 0) return [];
+        using var p = Start(RepoDir, "git", ["cat-file", "--batch"], null, stdin: true);
+        var stderr = Task.Factory.StartNew(p.StandardError.ReadToEnd, TaskCreationOptions.LongRunning);
+        Task.Factory.StartNew(() => { p.StandardInput.Write(string.Concat(specs.Select(s => s + "\n"))); p.StandardInput.Close(); },
+            TaskCreationOptions.LongRunning);
+        var output = new BufferedStream(p.StandardOutput.BaseStream);
+        string Line()
+        {
+            var bytes = new List<byte>();
+            for (int b; (b = output.ReadByte()) != '\n';)
+                bytes.Add(b >= 0 ? (byte)b : throw new InvalidOperationException($"git cat-file failed: {stderr.Result.Trim()}"));
+            return Encoding.UTF8.GetString([.. bytes]);
+        }
+        // Per spec: "<sha> <type> <size>\n<content>\n", or "<spec> missing\n".
+        var res = new List<string>();
+        foreach (var spec in specs)
+        {
+            var header = Line().Split(' ');
+            if (header.Length != 3 || !long.TryParse(header[2], out var size))
+                throw new InvalidOperationException($"git show {spec} failed: {string.Join(' ', header.Skip(1))}");
+            var content = new byte[size];
+            output.ReadExactly(content);
+            output.ReadByte(); // trailing newline
+            res.Add(Encoding.UTF8.GetString(content).TrimStart('﻿')); // drop a BOM, as git show's reader did
+        }
+        p.WaitForExit();
+        return res;
+    }
+
     /// <summary>Runs any program in dir and captures exit code, stdout and stderr; never throws on a non-zero exit.</summary>
     public static GitResult Exec(string dir, string file, string[] args, IDictionary<string, string>? env = null, string? stdin = null)
     {
-        var psi = new ProcessStartInfo(file)
-        {
-            WorkingDirectory = dir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = stdin != null,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
-        using var p = Process.Start(psi)!;
+        Process p;
+        try { p = Start(dir, file, args, env, stdin != null); }
+        catch (System.ComponentModel.Win32Exception e) { return new GitResult(127, "", $"{file}: {e.Message}"); } // not installed
+        using var _ = p;
         // Dedicated thread: a pool-based read starves when callers block pool threads (Parallel.ForEach).
         var stderr = Task.Factory.StartNew(p.StandardError.ReadToEnd, TaskCreationOptions.LongRunning);
         if (stdin != null)
@@ -148,5 +177,24 @@ public class Git(string repoDir)
         var stdout = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         return new GitResult(p.ExitCode, stdout, stderr.Result);
+    }
+
+    static Process Start(string dir, string file, string[] args, IDictionary<string, string>? env, bool stdin)
+    {
+        var psi = new ProcessStartInfo(file)
+        {
+            WorkingDirectory = dir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = stdin,
+            // Windows: keep children off our console. Console processes coming and going (and resetting its mode)
+            // switch off ANSI processing under Git Bash, which garbles the live spinner into raw escape codes.
+            CreateNoWindow = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        // No console to prompt on: a credential prompt must fail fast instead of waiting unseen.
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
+        return Process.Start(psi)!;
     }
 }

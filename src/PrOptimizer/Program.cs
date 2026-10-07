@@ -189,7 +189,7 @@ public static partial class Cli
     }
 
     static bool IsGitHub(Git git) =>
-        git.Try("remote", "get-url", "origin").Stdout.Contains("github.com") && Git.Exec(git.RepoDir, "sh", ["-c", "command -v gh"]).ExitCode == 0;
+        git.Try("remote", "get-url", "origin").Stdout.Contains("github.com") && Git.Exec(git.RepoDir, "gh", ["--version"]).ExitCode == 0;
 
     static List<string> LocalBranches(Git git, string target) =>
         git.Run("for-each-ref", "--format=%(refname:short)", "--no-merged", target, "refs/heads")

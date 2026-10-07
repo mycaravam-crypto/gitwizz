@@ -92,11 +92,19 @@ public static partial class Analyzer
         var added = ParseHunks(patch, newSide: true);
 
         List<(string, int)> before = [], after = [];
-        foreach (var f in pr.Files.Where(f => Structure.Supports(f.Path)))
+        var files = pr.Files.Where(f => Structure.Supports(f.Path)).ToList();
+        // Both sides of every file from one git process.
+        var specs = files.SelectMany(f => new[]
+        {
+            f.Kind == ChangeKind.Added ? null : $"{pr.BaseSha}:{f.OldPath ?? f.Path}",
+            f.Kind == ChangeKind.Deleted ? null : $"{pr.HeadSha}:{f.Path}",
+        }).ToList();
+        var blobs = new Queue<string>(git.ReadBlobs(specs.OfType<string>().ToList()));
+        var sources = specs.Select(s => s == null ? "" : blobs.Dequeue()).ToList();
+        foreach (var (f, i) in files.Select((f, i) => (f, i)))
         {
             var oldPath = f.OldPath ?? f.Path;
-            var oldSrc = f.Kind == ChangeKind.Added ? "" : git.Run("show", $"{pr.BaseSha}:{oldPath}");
-            var newSrc = f.Kind == ChangeKind.Deleted ? "" : git.Run("show", $"{pr.HeadSha}:{f.Path}");
+            var (oldSrc, newSrc) = (sources[2 * i], sources[2 * i + 1]);
             pr.Members.UnionWith(Structure.TouchedMembers(oldSrc, pr.Hunks.Where(h => h.Path == oldPath && h.Start > 0)));
             before.AddRange(Structure.Declarations(oldSrc));
             after.AddRange(Structure.Declarations(newSrc));
