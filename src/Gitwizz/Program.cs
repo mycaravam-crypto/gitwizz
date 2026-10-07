@@ -328,8 +328,9 @@ public static partial class Cli
     }
 
     /// <summary>
-    /// Branch policy, target commit and pull requests from the provider. ids null: every open PR (GitHub) or every
-    /// unmerged branch (local).
+    /// Branch policy, target commit and pull requests from the provider. ids null: every open PR (GitHub, Azure DevOps)
+    /// or every unmerged branch (local). details: also read each PR's linked work items (meant for a single PR). Throws
+    /// ArgumentException for an unknown provider or a non-numeric PR id, InvalidOperationException when nothing is found.
     /// </summary>
     static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadPrs(Git git, string provider, string target, List<string>? ids,
         bool details = false)
