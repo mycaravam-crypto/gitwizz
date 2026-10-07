@@ -46,6 +46,7 @@ public record RepoConfig
     public List<string> Secrets { get; init; } = [];             // environment variables whose values never appear in output
     public List<TestSuite> Tests { get; init; } = [];            // test suites for risk-based selection and traceability
     public TraceabilityPolicy Traceability { get; init; } = new();
+    public ReviewPolicy Review { get; init; } = new();           // AI review: self-hosted endpoint and context bounds
 
     /// <summary>Where the rules came from, for the audit trail: "built-in", or the file and the commit it was read at.</summary>
     [YamlDotNet.Serialization.YamlIgnore] public string Source { get; init; } = "built-in";
@@ -117,6 +118,14 @@ public record RepoConfig
         if (c.Tests.FirstOrDefault(t => t.Kind != "manual" && string.IsNullOrWhiteSpace(t.Run)) is { } noRun) return $"test suite '{noRun.Id}' needs a run: command";
         if (c.Tests.FirstOrDefault(t => t.Timeout <= 0) is { } tt) return $"test suite '{tt.Id}': timeout must be a positive number of seconds";
         if (c.Traceability is null) return "traceability: needs keys (require)";
+        if (c.Review is null) return "review: needs keys (endpoint, model, ...)";
+        if (c.Gates.Any(g => g.Kind == "ai-review"))
+        {
+            if (Endpoints.Problem(c.Review.Endpoint, c.Review.AllowedHosts) is { } endpoint) return endpoint;
+            if (string.IsNullOrWhiteSpace(c.Review.Model)) return "review.model is required for an ai-review gate";
+        }
+        if (c.Review.Timeout <= 0 || c.Review.MaxTokens <= 0 || c.Review.MaxContextChars < 4000 || c.Review.MinConfidence is < 0 or > 1)
+            return "review: timeout and max_tokens must be positive, max_context_chars at least 4000, min_confidence between 0 and 1";
         if (c.Risk is null || c.Risk.MaxFiles < 1) return "risk.max_files must be at least 1";
         if (c.Risk.Profiles.FirstOrDefault(r => r.Key is not ("low" or "medium" or "high")) is { Key: not null } rk)
             return $"unknown risk level '{rk.Key}' (low, medium, high)";

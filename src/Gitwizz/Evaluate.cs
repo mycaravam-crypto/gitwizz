@@ -98,8 +98,15 @@ public static class Evaluator
                     r = GateResult.Of(GateStatus.Error, $"gate could not run: {e.Message}");
                 }
             }
-            r = r with { Id = spec.Id, Type = spec.Kind, Blocking = spec.Blocking, Duration = sw.Elapsed };
-            r = ctx.Redactor.Apply(r with { BlocksMerge = spec.Blocking && (r.Status is GateStatus.Fail or GateStatus.Error || r.NeedsUnmet) });
+            var blocking = spec.IsBlocking;
+            if (blocking && spec.Kind == "ai-review" && Promotion.Check(ctx) is { } why)
+            {
+                // AI judgement blocks only once a benchmark has validated it: until then it is advisory.
+                blocking = false;
+                r = r with { Findings = [.. r.Findings, new Finding($"blocking: true is not in effect: {why}", "info", Rule: "ai-promotion")] };
+            }
+            r = r with { Id = spec.Id, Type = spec.Kind, Blocking = blocking, Duration = sw.Elapsed };
+            r = ctx.Redactor.Apply(r with { BlocksMerge = blocking && (r.Status is GateStatus.Fail or GateStatus.Error || r.NeedsUnmet) });
             ctx.Results[spec.Id] = r;
         }
         return new Evaluation
