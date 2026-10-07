@@ -483,7 +483,7 @@ credential. Set `GITWIZZ_ADO` to use an `ado` executable that isn't on the `PATH
 | PRs, refs, source commit, description, author | `ado pr list --json --status active` |
 | review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
 | checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
-| linked work items, acceptance criteria | `ado pr context N` (for `evaluate` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
+| linked work items, acceptance criteria | `ado pr context N` names them (it returns only title, type and state), then `ado workitem show <id> --json` reads each in full (for `evaluate`, `trace` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
 
 Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; the plan says so.
 The next step is `ado pr merge N --yes` (`--squash` for squash plans). `ado` errors keep their meaning: not

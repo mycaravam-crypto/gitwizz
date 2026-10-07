@@ -72,25 +72,36 @@ public class ProviderTests : IDisposable
         ]
         """;
 
+    // As real ado prints it: pr context asks the server for title, type and state only.
     const string Context = """
         { "pullRequest": { "pullRequestId": 42 }, "commits": [], "changes": [],
           "workItems": [
-            { "id": 4711, "fields": { "System.WorkItemType": "User Story", "System.Title": "Reduced VAT", "System.State": "Active",
-              "Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Food uses 7&nbsp;%</li><li>Books use 7 %</li></ul>" } },
-            { "id": 4712, "fields": { "System.WorkItemType": "Bug", "System.Title": "Rounding", "System.State": "New",
-              "System.Description": "<div>Context</div><h2>Acceptance criteria</h2><div>- rounds half up</div><div>- two decimals</div>" } }
+            { "id": 4712, "fields": { "System.WorkItemType": "Bug", "System.Title": "Rounding", "System.State": "New" } },
+            { "id": 4711, "fields": { "System.WorkItemType": "User Story", "System.Title": "Reduced VAT", "System.State": "Active" } }
           ] }
         """;
+
+    // ado workitem show <id> --json: every field.
+    const string Story = """
+        { "id": 4711, "fields": { "System.WorkItemType": "User Story", "System.Title": "Reduced VAT", "System.State": "Active",
+          "System.AssignedTo": { "displayName": "Jane" },
+          "Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Food uses 7&nbsp;%</li><li>Books use 7 %</li></ul>" } }
+        """;
+    const string Bug = """
+        { "id": 4712, "fields": { "System.WorkItemType": "Bug", "System.Title": "Rounding", "System.State": "New",
+          "System.Description": "<div>Context</div><h2>Acceptance criteria</h2><div>- rounds half up</div><div>- two decimals</div>" } }
+        """;
+
+    static Dictionary<string, string> Ado(string prList) => new()
+    {
+        ["pr list --json --status active"] = prList, ["build list --json --limit 500"] = Builds, ["pr context 42"] = Context,
+        ["workitem show 4711 --json"] = Story, ["workitem show 4712 --json"] = Bug,
+    };
 
     [Fact]
     public void Azure_DevOps_provider_normalizes_prs_votes_builds_and_work_items()
     {
-        var ado = new FakeAdo(new()
-        {
-            ["pr list --json --status active"] = PrList(),
-            ["build list --json --limit 500"] = Builds,
-            ["pr context 42"] = Context,
-        });
+        var ado = new FakeAdo(Ado(PrList()));
         var (targetSha, prs) = AzureDevOps.Load(_git, "main", null, ado);
         Assert.Equal(_server.RevParse("main"), targetSha);
         Assert.Equal(["#42", "#43"], prs.Select(p => p.Id)); // #50 targets release; #43 is stacked on #42
@@ -109,6 +120,14 @@ public class ProviderTests : IDisposable
         Assert.Equal(["Food uses 7 %", "Books use 7 %"], items[0].AcceptanceCriteria);
         Assert.Equal(["rounds half up", "two decimals"], items[1].AcceptanceCriteria);
         Assert.Equal(("User Story", "Reduced VAT", "Active"), (items[0].Type, items[0].Title, items[0].State));
+        Assert.Contains("workitem show 4711 --json", ado.Calls); // criteria need the full work item, not pr context's summary
+
+        // A work item that can't be read in full keeps its summary, without criteria.
+        var noBug = Ado(PrList());
+        noBug.Remove("workitem show 4712 --json");
+        var (_, kept) = AzureDevOps.Load(_git, "main", [42], new FakeAdo(noBug), details: true);
+        Assert.Equal(["AB#4711", "AB#4712"], kept.Single().WorkItems.Select(w => w.Id));
+        Assert.Empty(kept.Single().WorkItems[1].AcceptanceCriteria);
     }
 
     [Fact]
@@ -126,10 +145,7 @@ public class ProviderTests : IDisposable
     [Fact]
     public void Context_json_is_provider_neutral_and_stable()
     {
-        var ado = new FakeAdo(new()
-        {
-            ["pr list --json --status active"] = PrList(), ["build list --json --limit 500"] = Builds, ["pr context 42"] = Context,
-        });
+        var ado = new FakeAdo(Ado(PrList()));
         var (sha, prs) = AzureDevOps.Load(_git, "main", [42], ado, details: true);
         var pr = prs.Single();
         Analyzer.Analyze(_git, sha, pr);
