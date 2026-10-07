@@ -48,6 +48,7 @@ public record RepoConfig
     public TraceabilityPolicy Traceability { get; init; } = new();
     public ReviewPolicy Review { get; init; } = new();           // AI review: self-hosted endpoint and context bounds
     public BenchmarkPolicy Benchmark { get; init; } = new();     // AI quality benchmark: cases, baseline, thresholds
+    public EnvironmentPolicy Environment { get; init; } = new(); // per-PR test environment for the environment gate
 
     /// <summary>Where the rules came from, for the audit trail: "built-in", or the file and the commit it was read at.</summary>
     [YamlDotNet.Serialization.YamlIgnore] public string Source { get; init; } = "built-in";
@@ -125,6 +126,10 @@ public record RepoConfig
             if (Endpoints.Problem(c.Review.Endpoint, c.Review.AllowedHosts) is { } endpoint) return endpoint;
             if (string.IsNullOrWhiteSpace(c.Review.Model)) return "review.model is required for an ai-review gate";
         }
+        if (c.Environment is not { } env) return "environment: needs keys (file, ready, ...)";
+        if (env.Provisioner != "compose") return $"unknown environment provisioner '{env.Provisioner}' (compose)";
+        if (env.Ready.Any(r => r is null || (r.Url is null) == (r.Command is null))) return "every environment.ready check needs exactly one of url or command";
+        if (env.ReadyTimeout <= 0 || env.UpTimeout <= 0) return "environment: ready_timeout and up_timeout must be positive numbers of seconds";
         if (c.Benchmark?.Thresholds is not { } bt || string.IsNullOrWhiteSpace(c.Benchmark.Cases) || string.IsNullOrWhiteSpace(c.Benchmark.Baseline))
             return "benchmark: needs cases, baseline and thresholds";
         if (new[] { bt.MinPrecision, bt.MinRecall, bt.MaxFalsePositiveRate, bt.MaxRegression }.Any(x => x is < 0 or > 1 || double.IsNaN(x)) || bt.MinCases < 1)
