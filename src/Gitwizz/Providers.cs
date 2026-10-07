@@ -12,11 +12,14 @@ public static class Providers
             Title = git.Run("log", "-1", "--format=%s", r), // head commit subject stands in for a PR title
         }).ToList());
 
-    /// <summary>GitHub provider via the gh CLI. Includes PRs stacked on other selected PRs.</summary>
-    public static (string TargetSha, List<PullRequest> Prs) GitHub(Git git, string target, HashSet<int>? only, BranchPolicy policy)
+    /// <summary>
+    /// GitHub provider via the gh CLI. Includes PRs stacked on other selected PRs. details: also read the issues each
+    /// PR closes, as linked work items with their acceptance criteria (two gh calls per PR, so meant for a single PR).
+    /// </summary>
+    public static (string TargetSha, List<PullRequest> Prs) GitHub(Git git, string target, HashSet<int>? only, BranchPolicy policy, bool details = false)
     {
         var json = Git.Exec(git.RepoDir, "gh", ["pr", "list", "--state", "open", "--limit", "500", "--json",
-            "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels,mergeStateStatus,autoMergeRequest"]);
+            "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels,mergeStateStatus,autoMergeRequest,author,url,latestReviews"]);
         if (json.ExitCode != 0) throw new InvalidOperationException("gh pr list failed: " + json.Stderr.Trim());
 
         var all = JsonDocument.Parse(json.Stdout).RootElement.EnumerateArray().Select(e => (
@@ -35,14 +38,30 @@ public static class Providers
                 MergeStateStatus = e.TryGetProperty("mergeStateStatus", out var ms) ? ms.GetString() : null,
                 AutoMerge = e.TryGetProperty("autoMergeRequest", out var am) && am.ValueKind == JsonValueKind.Object,
                 Labels = e.GetProperty("labels").EnumerateArray().Select(l => l.GetProperty("name").GetString()!).ToList(),
+                Author = e.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "",
+                Url = e.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "",
+                Reviewers = e.TryGetProperty("latestReviews", out var rv) && rv.ValueKind == JsonValueKind.Array ? Reviews(rv) : [],
+                Checks = Checks(e.GetProperty("statusCheckRollup")),
             })).ToList();
 
+        var prs = Select(all, target, only);
+        if (details)
+            foreach (var p in prs) p.WorkItems = LinkedIssues(git, int.Parse(p.Id[1..]));
+        git.Run([.. new[] { "fetch", "--quiet", "origin", target }, .. prs.Select(p => $"refs/pull/{p.Id[1..]}/head")]);
+        return (git.RevParse($"origin/{target}"), prs);
+    }
+
+    /// <summary>
+    /// The PRs to plan: the given numbers, or all PRs into target plus PRs stacked (transitively) on top of them. Records
+    /// each one's declared dependencies on open PRs outside the selection, which the plan can't satisfy.
+    /// </summary>
+    public static List<PullRequest> Select(List<(int Number, PullRequest Pr)> all, string target, HashSet<int>? only)
+    {
         List<PullRequest> prs;
         if (only != null)
             prs = all.Where(x => only.Contains(x.Number)).Select(x => x.Pr).ToList();
         else
         {
-            // All PRs targeting the branch, plus PRs stacked (transitively) on top of them.
             var bases = new HashSet<string> { target };
             prs = [];
             for (bool added = true; added;)
@@ -53,16 +72,54 @@ public static class Providers
                 added = next.Count > 0;
             }
         }
-
-        // A declared dependency on an open PR that isn't in the plan can't be satisfied by the plan: remember it.
         var open = all.Select(x => x.Pr.Id).ToHashSet();
         var selected = prs.Select(p => p.Id).ToHashSet();
         foreach (var p in prs)
             p.OpenOutsideDependencies = Analyzer.ExplicitDependencies(p).Where(d => open.Contains(d) && !selected.Contains(d)).Distinct().ToList();
-
-        git.Run([.. new[] { "fetch", "--quiet", "origin", target }, .. prs.Select(p => $"refs/pull/{p.Id[1..]}/head")]);
-        return (git.RevParse($"origin/{target}"), prs);
+        return prs;
     }
+
+    /// <summary>Latest review per reviewer, as a provider-neutral vote.</summary>
+    public static List<Reviewer> Reviews(JsonElement latestReviews) =>
+        latestReviews.EnumerateArray().Select(r => new Reviewer(
+            r.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var l) ? l.GetString() ?? "" : "",
+            (r.TryGetProperty("state", out var s) ? s.GetString() : null) switch
+            {
+                "APPROVED" => "approved",
+                "CHANGES_REQUESTED" => "changes-requested",
+                "COMMENTED" => "commented",
+                _ => "none",
+            })).ToList();
+
+    /// <summary>Every check in a GitHub status rollup, as success, failure or pending.</summary>
+    public static List<Check> Checks(JsonElement rollup)
+    {
+        string? S(JsonElement c, string p) => c.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        if (rollup.ValueKind != JsonValueKind.Array) return [];
+        return rollup.EnumerateArray().Select(c => new Check(
+            S(c, "name") ?? S(c, "context") ?? "check",
+            S(c, "conclusion") is "FAILURE" or "CANCELLED" or "TIMED_OUT" or "ACTION_REQUIRED" || S(c, "state") is "FAILURE" or "ERROR" ? "failure"
+            : (S(c, "status") is { } st && st != "COMPLETED") || S(c, "state") is "PENDING" or "EXPECTED" ? "pending"
+            : "success",
+            S(c, "detailsUrl") ?? S(c, "targetUrl"))).OrderBy(c => c.Name).ToList();
+    }
+
+    /// <summary>Issues the PR closes (closingIssuesReferences), with acceptance criteria from an "Acceptance criteria" section.</summary>
+    static List<WorkItem> LinkedIssues(Git git, int number)
+    {
+        var r = Git.Exec(git.RepoDir, "gh", ["pr", "view", number.ToString(), "--json", "closingIssuesReferences"]);
+        if (r.ExitCode != 0) return []; // older gh: no linked issues rather than no plan
+        var issues = JsonDocument.Parse(r.Stdout).RootElement.GetProperty("closingIssuesReferences").EnumerateArray()
+            .Select(i => i.GetProperty("number").GetInt32()).ToList();
+        return issues.Select(n => Git.Exec(git.RepoDir, "gh", ["issue", "view", n.ToString(), "--json", "number,title,state,body,url"]))
+            .Where(x => x.ExitCode == 0).Select(x => Issue(JsonDocument.Parse(x.Stdout).RootElement)).ToList();
+    }
+
+    /// <summary>A GitHub issue (gh issue view --json number,title,state,body,url) as a work item.</summary>
+    public static WorkItem Issue(JsonElement i) => new(
+        "#" + i.GetProperty("number").GetInt32(), "Issue", i.GetProperty("title").GetString() ?? "", i.GetProperty("state").GetString() ?? "",
+        Requirements.CriteriaSection(i.TryGetProperty("body", out var b) ? b.GetString() ?? "" : ""),
+        i.TryGetProperty("url", out var u) ? u.GetString() : null);
 
     /// <summary>Commits on origin/target missing from the local target, or 0 (no such remote branch, or up to date).</summary>
     public static int BehindRemote(Git git, string target) =>

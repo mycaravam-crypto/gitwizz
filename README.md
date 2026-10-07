@@ -19,6 +19,7 @@ Design rationale: [PLAN.md](PLAN.md) (German).
 - .NET 10 SDK
 - git ≥ 2.38 (needs `merge-tree --write-tree`); ≥ 2.40 for `--strategy rebase` (`merge-tree --merge-base`)
 - `gh` CLI, authenticated, for the GitHub provider
+- [`ado`](https://github.com/mycaravam-crypto/ado-devops), logged in (`ado auth login`), for the Azure DevOps Server provider
 
 ## Quick start
 
@@ -117,7 +118,7 @@ gitwizz help                            # all options with examples
 | `-a`, `--all-open` | | All open PRs into the target and PRs stacked on them (GitHub), or all local branches not yet merged (local) |
 | `-p`, `--prs` | | Comma-separated PR numbers (GitHub) or branch names (local) |
 | `-t`, `--target` | auto | Branch to merge into: `origin/HEAD`, else `main`/`master`, else the current branch |
-| `--provider` | auto | `github` for numeric `--prs`, or for `--all-open` with a GitHub `origin` and `gh` installed; else `local` |
+| `--provider` | auto | `local` for branch names. For PR numbers and `--all-open`: `azure-devops` with an Azure DevOps `origin`, `github` with a GitHub one (`--all-open` also needs `gh`), else `local` |
 | `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
 | `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
 | `--history` | `200` | Learn per-file conflict rates from this many past merges into the target; `0` = off |
@@ -264,6 +265,36 @@ Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes 
 `--evidence <dir>` keeps each command gate's full log (`<gate>.log`) and the result (`evaluation.json`) for the
 audit trail; the JSON references the logs.
 
+## Azure DevOps Server
+
+`--provider azure-devops` (alias `ado`; detected from an `origin` like `https://tfs.company.local/tfs/Coll/Proj/_git/repo`
+or `dev.azure.com`) plans and evaluates PRs of an on-prem Azure DevOps Server. All REST work is delegated to the
+[`ado`](https://github.com/mycaravam-crypto/ado-devops) CLI: server, project, PAT, API version (`ADO_API_VERSION`),
+TLS and proxy come from its configuration (`ado auth login`, `ADO_*` variables), so gitwizz never handles or logs a
+credential. Set `GITWIZZ_ADO` to use an `ado` executable that isn't on the `PATH`.
+
+| Data | From |
+|---|---|
+| PRs, refs, source commit, description, author | `ado pr list --json --status active` |
+| review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
+| checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
+| linked work items, acceptance criteria | `ado pr context N` (for `evaluate` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
+
+Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; the plan says so.
+The next step is `ado pr merge N --yes` (`--squash` for squash plans). `ado` errors keep their meaning: not
+installed, not logged in (exit 3, with a hint), permission denied, not found.
+
+### PR context as JSON
+
+```bash
+gitwizz context 42          # one PR from any provider, as one stable JSON document (schema gitwizz.context/v1)
+```
+
+It holds the PR (title, description, author, URL, draft, labels), source and target refs with commits, reviewers and
+their votes, checks, policy state (review decision, checks, problems, open dependencies), linked work items with their
+individual acceptance criteria (GitHub: the issues the PR closes, from their "Acceptance criteria" section), changed
+files, changed C# members and the PR's commits. Lists are sorted, so the same state gives the same document.
+
 ## Configuration
 
 Optional. Put a `.gitwizz.yml` at the repository root. Every key is optional, and anything you leave out keeps the
@@ -297,9 +328,11 @@ references to unknown gates or profiles. The `gates`, `profiles`, `risk` and `se
 provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─▶ beam search over simulations ─▶ report ─▶ verify
 ```
 
-1. **Providers** ([Providers.cs](src/Gitwizz/Providers.cs)): `local` treats each branch or ref as a PR.
-   `github` reads open PRs through `gh` (title, body, labels, draft, review decision, CI rollup)
-   and fetches `refs/pull/N/head`.
+1. **Providers** ([Providers.cs](src/Gitwizz/Providers.cs), [AzureDevOps.cs](src/Gitwizz/AzureDevOps.cs)): `local`
+   treats each branch or ref as a PR. `github` reads open PRs through `gh` (title, body, labels, draft, review decision,
+   reviews, CI rollup) and fetches `refs/pull/N/head`. `azure-devops` reads them through `ado` (see
+   [Azure DevOps Server](#azure-devops-server)) and fetches the source branches. All three fill the same
+   provider-neutral model, so the analysis below never knows where a PR came from.
 2. **Analysis** ([Analyzer.cs](src/Gitwizz/Analyzer.cs)): changed files (with renames and deletes) and
    `-U0` hunks against the merge-base. For C# files, hunks are mapped to the **members** they touch with Roslyn
    (e.g. `Billing.Charge(decimal)`), so two PRs editing different lines of the same method are still flagged.
@@ -416,4 +449,4 @@ Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 ## Roadmap
 
 All planned v1, v2 and v0.4 issues are done. The PR quality & merge orchestrator epic (#53) adds quality gates and
-`evaluate`/`explain` (#55). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+`evaluate`/`explain` (#55), and the Azure DevOps Server provider with `context` (#54). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

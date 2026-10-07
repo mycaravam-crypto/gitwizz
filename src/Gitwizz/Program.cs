@@ -19,7 +19,7 @@ if (command is "version" || rest.Contains("--version"))
 try
 {
     // evaluate / explain take the pull request as their first argument.
-    string? subject = command is "evaluate" or "explain" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    string? subject = command is "evaluate" or "explain" or "context" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
     var opt = Cli.Parse(subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
@@ -33,9 +33,11 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
+    if (command == "context")
+        return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, context, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -60,6 +62,7 @@ public static partial class Cli
         ["example"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
         ["evaluate"] = [.. Common, "profile", "evidence"],
         ["explain"] = [.. Common, "profile", "evidence"],
+        ["context"] = ["target", "provider", "output", "repo"],
     };
     static readonly string[] Flags = ["all-open"];
 
@@ -134,6 +137,8 @@ public static partial class Cli
             // Local branches carry no review/CI/protection data: say so instead of implying "mergeable".
             if (provider == "local")
                 plan.Notes.Add("local branches: only structural mergeability is checked (no reviews, checks or branch protection)");
+            if (provider == "azure-devops")
+                plan.Notes.Add("Azure DevOps: review state from reviewer votes, checks from PR builds; other branch policies aren't visible through ado");
             if (provider == "local" && Providers.BehindRemote(git, target) is > 0 and var behind)
                 plan.Notes.Add($"{target} is {behind} commit(s) behind origin/{target}: update it first (git pull on {target}), or the plan misses newer upstream changes");
             if (policy.MergeQueue)
@@ -184,15 +189,8 @@ public static partial class Cli
         Evaluation Pipeline(Action<string> status)
         {
             status($"Loading pull request {subject} ({provider})…");
-            var (policy, targetSha, prs) = LoadPrs(git, provider, target, [id]);
+            var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
             var pr = prs.Single();
-            // Without --target, judge a PR against the branch it targets.
-            if (!opt.ContainsKey("target") && pr.BaseRef != "" && pr.BaseRef != target)
-            {
-                target = pr.BaseRef;
-                (policy, targetSha, prs) = LoadPrs(git, provider, target, [id]);
-                pr = prs.Single();
-            }
             status($"Analyzing {pr.Id}…");
             Analyzer.Analyze(git, targetSha, pr);
             Analyzer.ResolveDependencies(git, targetSha, prs);
@@ -229,10 +227,45 @@ public static partial class Cli
         return git;
     }
 
-    /// <summary>--provider, else github for PR numbers (or --all-open with a GitHub origin and gh installed), else local.</summary>
-    static string ProviderFor(Git git, Dictionary<string, string> opt, List<string> prArgs) =>
-        opt.GetValueOrDefault("provider")
-        ?? (prArgs.Count > 0 ? (prArgs.All(p => p.All(char.IsDigit)) ? "github" : "local") : IsGitHub(git) ? "github" : "local");
+    /// <summary>
+    /// --provider, else local for branch names; for PR numbers (or --all-open) azure-devops with an Azure DevOps origin,
+    /// github with a GitHub origin (gh installed for --all-open), else local.
+    /// </summary>
+    static string ProviderFor(Git git, Dictionary<string, string> opt, List<string> prArgs)
+    {
+        if (opt.GetValueOrDefault("provider") is { } p) return p is "ado" or "azure" ? "azure-devops" : p;
+        if (prArgs.Count > 0 && !prArgs.All(x => x.All(char.IsDigit))) return "local";
+        if (AzureDevOps.IsRemote(git.Try("remote", "get-url", "origin").Stdout)) return "azure-devops";
+        return prArgs.Count > 0 || IsGitHub(git) ? "github" : "local";
+    }
+
+    /// <summary>
+    /// prints the provider-neutral context of one pull request as JSON (schema gitwizz.context/v1): refs, reviewers,
+    /// checks, policy state, linked work items with acceptance criteria, changed files and commits.
+    /// </summary>
+    public static int Context(string subject, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var id = subject.TrimStart('#');
+        var provider = ProviderFor(git, opt, [id]);
+        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        var (_, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+        var pr = prs.Single();
+        Analyzer.Analyze(git, targetSha, pr);
+        Analyzer.ResolveDependencies(git, targetSha, prs);
+        Write(Report.Context(git, pr, provider, target, targetSha) + "\n", "json", opt.GetValueOrDefault("output"), err);
+        return 0;
+    }
+
+    /// <summary>One pull request with its linked work items; without an explicit target, against the branch it targets.</summary>
+    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadOne(Git git, string provider, ref string target, string id, bool targetGiven)
+    {
+        var loaded = LoadPrs(git, provider, target, [id], details: true);
+        var pr = loaded.Prs.Single();
+        if (targetGiven || pr.BaseRef == "" || pr.BaseRef == target) return loaded;
+        target = pr.BaseRef;
+        return LoadPrs(git, provider, target, [id], details: true);
+    }
 
     static MergeStrategy? StrategyOption(Dictionary<string, string> opt) => opt.GetValueOrDefault("strategy") switch
     {
@@ -259,14 +292,18 @@ public static partial class Cli
     /// Branch policy, target commit and pull requests from the provider. ids null: every open PR (GitHub) or every
     /// unmerged branch (local).
     /// </summary>
-    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadPrs(Git git, string provider, string target, List<string>? ids)
+    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadPrs(Git git, string provider, string target, List<string>? ids,
+        bool details = false)
     {
+        HashSet<int>? Numbers() => ids?.Select(i => int.TryParse(i, out var n) ? n
+            : throw new ArgumentException($"{provider} pull requests are numbers, not '{i}' (use --provider local for branches)")).ToHashSet();
         var policy = provider == "github" ? Providers.GitHubPolicy(git, target) : new BranchPolicy([]);
         var (targetSha, prs) = provider switch
         {
             "local" => Providers.Local(git, target, ids ?? LocalBranches(git, target)),
-            "github" => Providers.GitHub(git, target, ids?.Select(int.Parse).ToHashSet(), policy),
-            _ => throw new ArgumentException($"unknown provider '{provider}' (local, github)"),
+            "github" => Providers.GitHub(git, target, Numbers(), policy, details),
+            "azure-devops" => AzureDevOps.Load(git, target, Numbers(), new AdoCli(git.RepoDir), details),
+            _ => throw new ArgumentException($"unknown provider '{provider}' (local, github, azure-devops)"),
         };
         if (prs.Count == 0)
             throw new InvalidOperationException(ids is [var one] ? $"no open pull request {one} found" : $"no open pull requests found for '{target}'");
@@ -300,6 +337,7 @@ public static partial class Cli
     /// <summary>A next step to suggest for a known error message, or null.</summary>
     public static string? Hint(string msg) =>
         msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
+        : msg.Contains("not logged in to Azure DevOps") ? "run 'ado auth login <server-url>', or set ADO_SERVER and ADO_PAT"
         : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
         : msg.Contains("no open pull request ") ? "check the number, or pass a branch name with --provider local"
@@ -318,6 +356,7 @@ public static partial class Cli
               gitwizz [grey]plan[/] [[options]]      plan a merge order (default command)
               gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
+              gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
               gitwizz help | version
 
@@ -325,7 +364,7 @@ public static partial class Cli
               -a, --all-open            all open PRs (GitHub) or all unmerged local branches
               -p, --prs <a,b,...>       PR numbers (GitHub) or branch names (local)
               -t, --target <branch>     branch to merge into [grey](default: origin/HEAD, main or master)[/]
-                  --provider <name>     local | github [grey](default: auto-detected)[/]
+                  --provider <name>     local | github | azure-devops [grey](default: auto-detected from origin)[/]
 
             [bold]Planning[/]
               -s, --strategy <name>     merge | squash | rebase | ff-only [grey](default: from branch rules, else merge)[/]
