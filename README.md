@@ -207,7 +207,7 @@ findings (message, file, line, rule, evidence), evidence references, duration, c
 | `error` | the gate could not run (tool missing, timeout, crash): nothing is known | yes |
 | `skipped` | not applicable (no changed file matches its `paths`), or a gate it `needs` didn't pass | only in the second case |
 
-One blocking gate that fails, errors or is left unrun makes the PR **not ready**. Advisory (`blocking: false`) gates stay
+One blocking gate that fails, errors or is left unrun makes the PR **not ready**. Advisory gates (`blocking: false`; `ai-review` by default) stay
 visible but never block. The verdict is `ready`, `blocked` (a gate failed) or `undetermined` (only gate errors), so a
 broken tool is never mistaken for a broken change.
 
@@ -219,7 +219,8 @@ Built-in gates, active without configuration:
 - **policy**: draft, review decision, failing or pending required checks, branch protection, declared dependencies on
   open PRs, and a PR that targets another branch. Skipped for local branches (they carry no such data).
 
-Gate types to configure: `traceability` (the tests the change needs, traced to its acceptance criteria; see
+Gate types to configure: `ai-review` (self-hosted model, advisory; see
+[AI review](#ai-review-with-a-bounded-evidence-package)), `traceability` (the tests the change needs, traced to its acceptance criteria; see
 [below](#requirement-to-test-traceability-and-test-selection)), `build` and `test` (command detected from the project: `dotnet`, `npm`, `go`, `cargo`, Maven,
 Gradle, Python, `make`, or set `run:`), `docwizz` (`docwizz check . --since $GITWIZZ_TARGET_SHA`, the documentation
 gaps the change introduces), and `command` (any command). Commands run with `sh -c` in a temporary worktree of the
@@ -321,6 +322,63 @@ A link alone, including a generated test proposal, is never evidence: only a sui
 criterion. The `traceability` gate fails when a selected suite fails; uncovered criteria only warn unless
 `traceability.require` is set. `evaluate` includes the whole trace in its JSON (`traceability`), and `explain` prints
 the criteria matrix.
+
+### AI review with a bounded evidence package
+
+```bash
+gitwizz evidence 42 -o pkg.json   # exactly what a review would send, without contacting any model
+```
+
+An `ai-review` gate asks a **self-hosted**, OpenAI-compatible model (vLLM, llama.cpp server, Ollama, TGI, LocalAI, …)
+to review the PR. It is optional, independent of the deterministic gates, and **advisory**: it never blocks a merge
+(even with `blocking: true`) until a benchmark has validated the model and prompt.
+
+```yaml
+gates:
+  - id: traceability                # optional; list it first so the package includes the selected tests
+  - id: review
+    type: ai-review
+review:
+  endpoint: http://llm.internal:8000/v1   # base URL; gitwizz calls {endpoint}/chat/completions
+  model: qwen2.5-coder-32b
+  api_key_env: LLM_KEY              # variable holding the key, if the endpoint needs one (never in the file)
+  allowed_hosts: []                 # self-hosted hosts whose names look public
+  timeout: 120                      # seconds
+  max_tokens: 2000                  # answer length
+  max_context_chars: 60000          # evidence package size
+  min_confidence: 0.5               # below: downgraded to info
+  rules: ["Money is decimal, never double", "Controllers never call repositories directly"]
+  rule_files: ["docs/CODING.md"]
+  docs: ["docs/adr/*.md"]
+```
+
+**No public inference.** Known public AI services (OpenAI, Azure OpenAI, Anthropic, Google, Mistral, Groq, Bedrock,
+OpenRouter, …) are refused, even when listed. Other endpoints must be loopback, a private IP, a single-label or
+internal host name (`.internal`, `.corp`, `.lan`, `.local`, …), or listed in `allowed_hosts`; anything else is a
+configuration error.
+
+**Bounded evidence, not the repository.** The model gets one JSON package (`gitwizz.evidence/v1`, the same as
+`gitwizz evidence`): PR title and description, linked requirements and their acceptance criteria, changed files,
+changed C# members and API changes, the diff (lockfiles, generated and binary files left out), where changed symbols
+are used outside the change (`git grep`), the configured rules, the paragraphs of `docs` that mention what changed, and
+the selected tests. Each section has a share of `max_context_chars`; what doesn't fit is cut and listed under
+`budget.truncated`. The package's sha256 is part of the result, so a review can always be traced to its input.
+
+**Repository content is data, never instructions.** The system prompt is fixed in code and versioned
+(`review-v1`). The package goes in as JSON-encoded data inside `<evidence_package>` tags, with `<` and `>` escaped,
+so code or comments can't close the block or pose as the system. The model is told to report injection attempts as
+`prompt-injection` findings. And the model never decides the outcome: gitwizz validates every finding and derives the
+status itself.
+
+| Finding | Result |
+|---|---|
+| names a file the PR doesn't change, quotes nothing, or quotes text that isn't in the diff | rejected (listed as evidence, not as a finding) |
+| points to a line outside the changed lines (±3), or confidence below `min_confidence` | downgraded to `info` |
+| otherwise | kept: `error` fails the gate, `warning` warns |
+
+The result records the model the endpoint reported, prompt version and hash, token usage and the package hash. With
+`--evidence <dir>`, the package is stored as `<gate>-package.json`. An unreachable endpoint, an HTTP error or an answer
+without a JSON `findings` array is an `error`, not a verdict.
 
 ## Azure DevOps Server
 
@@ -508,4 +566,4 @@ Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 
 All planned v1, v2 and v0.4 issues are done. The PR quality & merge orchestrator epic (#53) adds quality gates and
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), and requirement-to-test
-traceability with risk-based test selection (#57). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+traceability with risk-based test selection (#57), and advisory AI review on a bounded evidence package (#56). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

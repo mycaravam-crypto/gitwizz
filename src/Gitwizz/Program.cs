@@ -19,7 +19,7 @@ if (command is "version" || rest.Contains("--version"))
 try
 {
     // evaluate / explain take the pull request as their first argument.
-    string? subject = command is "evaluate" or "explain" or "context" or "trace" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    string? subject = command is "evaluate" or "explain" or "context" or "trace" or "evidence" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
     var opt = Cli.Parse(subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
@@ -33,13 +33,15 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
+    if (command == "evidence")
+        return Cli.EvidencePackage(subject ?? throw new ArgumentException("need a pull request: gitwizz evidence <pr>"), opt, err);
     if (command == "trace")
         return Cli.Trace(subject ?? throw new ArgumentException("need a pull request: gitwizz trace <pr>"), opt, err);
     if (command == "context")
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, evidence, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -66,6 +68,7 @@ public static partial class Cli
         ["explain"] = [.. Common, "profile", "evidence"],
         ["context"] = ["target", "provider", "output", "repo"],
         ["trace"] = [.. Common, "run", "evidence"],
+        ["evidence"] = ["target", "provider", "strategy", "output", "repo"],
     };
     static readonly string[] Flags = ["all-open", "run"];
 
@@ -296,6 +299,33 @@ public static partial class Cli
         return trace.Runs.Any(r => r.Status != GateStatus.Pass) ? 3 : 0;
     }
 
+    /// <summary>
+    /// Prints the bounded evidence package an AI review of the PR would get (schema gitwizz.evidence/v1), built on the
+    /// merged state, without contacting any model: to audit what leaves the machine, or to review it by other means.
+    /// </summary>
+    public static int EvidencePackage(string subject, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var id = subject.TrimStart('#');
+        var provider = ProviderFor(git, opt, [id]);
+        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+        var pr = prs.Single();
+        Analyzer.Analyze(git, targetSha, pr);
+        var config = RepoConfig.Load(git, targetSha);
+        using var ctx = new GateContext
+        {
+            Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config,
+            Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
+        };
+        new MergeGate().Run(ctx, new GateSpec { Id = "merge" });
+        var commit = ctx.MergedState ?? pr.HeadSha;
+        var trace = config.Tests.Count > 0 ? Traceability.Build(git, pr, config, commit) : null;
+        var package = Evidence.Build(git, pr, config, target, targetSha, commit, trace);
+        Write(new Redactor(config.Secrets).Apply(Evidence.Json(package)) + "\n", "json", opt.GetValueOrDefault("output"), err);
+        return 0;
+    }
+
     /// <summary>One pull request with its linked work items; without an explicit target, against the branch it targets.</summary>
     static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadOne(Git git, string provider, ref string target, string id, bool targetGiven)
     {
@@ -397,6 +427,7 @@ public static partial class Cli
               gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
+              gitwizz evidence <pr>             the bounded evidence package an AI review would see (JSON)
               gitwizz trace <pr> [[--run]]       which tests the change needs and why; acceptance criteria -> tests -> results
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
               gitwizz help | version

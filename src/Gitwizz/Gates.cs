@@ -45,12 +45,13 @@ public record GateSpec
     public string Id { get; init; } = "";
     public string? Type { get; init; }
     public string? Run { get; init; }               // command line, for workspace gates (build/test detect one when omitted)
-    public bool Blocking { get; init; } = true;
+    public bool? Blocking { get; init; }             // default: true, except ai-review (advisory)
     public int Timeout { get; init; } = 1800;       // seconds
     public List<string>? Needs { get; init; }       // gates that must pass first; workspace gates need merge by default
     public List<string> Paths { get; init; } = [];  // run only when a changed file matches; else skipped
 
     [YamlIgnore] public string Kind => Type ?? (Gates.Types.Contains(Id) ? Id : "command");
+    [YamlIgnore] public bool IsBlocking => Blocking ?? Kind != "ai-review";
     [YamlIgnore] public IReadOnlyList<string> Requires => Needs ?? (Gates.Workspace.Contains(Kind) ? ["merge"] : []);
 }
 
@@ -124,10 +125,10 @@ public sealed class Redactor
 public static partial class Gates
 {
     /// <summary>Known gate types.</summary>
-    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability"];
+    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability", "ai-review"];
 
-    /// <summary>Types that run a command in the merged workspace.</summary>
-    public static readonly string[] Workspace = ["build", "test", "docwizz", "command", "traceability"];
+    /// <summary>Types that work on the merged state, so they need the merge gate.</summary>
+    public static readonly string[] Workspace = ["build", "test", "docwizz", "command", "traceability", "ai-review"];
 
     /// <summary>Available without configuration: structural mergeability and repository policy (reviews, checks).</summary>
     public static readonly GateSpec[] BuiltIn = [new() { Id = "merge" }, new() { Id = "policy" }];
@@ -138,6 +139,7 @@ public static partial class Gates
         "merge" => new MergeGate(),
         "policy" => new PolicyGate(),
         "traceability" => new TraceabilityGate(),
+        "ai-review" => new AiReviewGate(),
         _ => new CommandGate(),
     };
 
