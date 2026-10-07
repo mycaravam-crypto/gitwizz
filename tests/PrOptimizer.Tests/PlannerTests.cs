@@ -413,6 +413,17 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Target_defaults_to_the_current_branch()
+    {
+        _git.Run("checkout", "-q", "billing");
+        Assert.Equal("billing", Cli.DefaultBranch(_git, out var why));
+        Assert.Equal("the current branch", why);
+        _git.Run("checkout", "-q", "--detach", "billing");
+        Assert.Equal("main", Cli.DefaultBranch(_git, out why));
+        Assert.StartsWith("detached HEAD", why);
+    }
+
+    [Fact]
     public void Parses_hunks_and_explicit_dependencies()
     {
         var hunks = Analyzer.ParseHunks("--- a/x.cs\n+++ b/x.cs\n@@ -3,2 +3,2 @@\n@@ -10 +10,0 @@\n--- /dev/null\n+++ b/new.cs\n@@ -0,0 +1,5 @@\n");

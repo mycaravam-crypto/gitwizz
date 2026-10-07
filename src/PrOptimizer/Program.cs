@@ -77,7 +77,11 @@ public static partial class Cli
         var git = new Git(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")));
         if (git.Try("rev-parse", "--git-dir").ExitCode != 0) throw new InvalidOperationException($"not a git repository: {git.RepoDir}");
 
-        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        if (opt.GetValueOrDefault("target") is not { } target)
+        {
+            target = DefaultBranch(git, out var why);
+            err.MarkupLine($"[grey]target:[/] [bold]{Markup.Escape(target)}[/] [grey]({why}; merge into another branch with --target <branch>)[/]");
+        }
         var prArgs = opt.GetValueOrDefault("prs", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(p => p.TrimStart('#')).ToList();
         var allOpen = opt.ContainsKey("all-open");
@@ -178,14 +182,17 @@ public static partial class Cli
         return result.Verification?.StartsWith("FAILED") == true ? 1 : 0;
     }
 
-    /// <summary>origin/HEAD, else main or master, else the current branch.</summary>
-    static string DefaultBranch(Git git)
+    /// <summary>The checked-out branch; on a detached HEAD origin/HEAD, else main or master. why: how it was chosen.</summary>
+    public static string DefaultBranch(Git git, out string why)
     {
+        why = "the current branch";
+        if (git.Try("branch", "--show-current").Stdout.Trim() is { Length: > 0 } current) return current;
+        why = "detached HEAD, so the repository's default branch";
         var head = git.Try("symbolic-ref", "--short", "refs/remotes/origin/HEAD");
         if (head.ExitCode == 0) return head.Stdout.Trim().Replace("origin/", "");
         foreach (var b in new[] { "main", "master" })
             if (git.Try("rev-parse", "--verify", "--quiet", $"refs/heads/{b}").ExitCode == 0) return b;
-        return git.Run("branch", "--show-current");
+        throw new InvalidOperationException("detached HEAD and no default branch found: pass --target <branch>");
     }
 
     static bool IsGitHub(Git git) =>
@@ -200,7 +207,7 @@ public static partial class Cli
         msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
         : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
-        : msg.Contains("no open pull requests") ? "use --prs to pick branches/PRs explicitly, or --target for another branch"
+        : msg.Contains("no open pull requests") ? "the target defaults to the current branch: pass --target <branch> (e.g. --target main), or pick PRs with --prs"
         : msg.StartsWith("invalid .gitwizz.yml") ? "fix the file or remove it to use the defaults; see the README section 'Configuration'"
         : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'pr-optimizer help'"
         : null;
@@ -219,7 +226,7 @@ public static partial class Cli
             [bold]Choose pull requests[/]
               -a, --all-open            all open PRs (GitHub) or all unmerged local branches
               -p, --prs <a,b,...>       PR numbers (GitHub) or branch names (local)
-              -t, --target <branch>     branch to merge into [grey](default: origin/HEAD, main or master)[/]
+              -t, --target <branch>     branch to merge into [grey](default: the current branch)[/]
                   --provider <name>     local | github [grey](default: auto-detected)[/]
 
             [bold]Planning[/]

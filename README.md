@@ -90,7 +90,7 @@ pr-optimizer help                           # all options with examples
 |---|---|---|
 | `-a`, `--all-open` | | All open PRs into the target and PRs stacked on them (GitHub), or all local branches not yet merged (local) |
 | `-p`, `--prs` | | Comma-separated PR numbers (GitHub) or branch names (local) |
-| `-t`, `--target` | auto | Branch to merge into: `origin/HEAD`, else `main`/`master`, else the current branch |
+| `-t`, `--target` | current branch | Branch to merge into. Defaults to the checked-out branch (on a detached HEAD: `origin/HEAD`, else `main`/`master`); the chosen target is printed at the start. Example: `--target main` |
 | `--provider` | auto | `github` for numeric `--prs`, or for `--all-open` with a GitHub `origin` and `gh` installed; else `local` |
 | `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
 | `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
