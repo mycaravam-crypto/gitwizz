@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>gitwizz</AssemblyName>
     <RootNamespace>Gitwizz</RootNamespace>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <TieredPGO>true</TieredPGO>
   </PropertyGroup>

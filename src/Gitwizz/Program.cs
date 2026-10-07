@@ -2,6 +2,9 @@ using Gitwizz;
 using Spectre.Console;
 
 var err = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) });
+// Redirected (CI, pipes), Spectre sees width -1 and renders nothing at all: errors would vanish.
+if (Console.IsErrorRedirected) err.Profile.Width = 120;
+if (Console.IsOutputRedirected) AnsiConsole.Profile.Width = 120;
 
 // Command: first non-option argument; bare options mean "plan".
 var command = args.Length == 0 ? "help" : args[0].StartsWith('-') ? "plan" : args[0];
@@ -15,7 +18,9 @@ if (command is "version" || rest.Contains("--version"))
 
 try
 {
-    var opt = Cli.Parse(rest);
+    // evaluate / explain take the pull request as their first argument.
+    string? subject = command is "evaluate" or "explain" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    var opt = Cli.Parse(subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
         var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
@@ -28,7 +33,9 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, example, help)");
+    if (command is "evaluate" or "explain")
+        return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -46,19 +53,32 @@ public static partial class Cli
         ["-t"] = "target", ["-p"] = "prs", ["-s"] = "strategy", ["-b"] = "beam", ["-f"] = "format",
         ["-o"] = "output", ["-r"] = "repo", ["-a"] = "all-open", ["--all"] = "all-open",
     };
-    static readonly string[] Options = ["target", "prs", "all-open", "provider", "strategy", "beam", "history", "verify", "verify-at", "format", "output", "repo"];
+    static readonly string[] Common = ["target", "provider", "strategy", "format", "output", "repo"];
+    static readonly Dictionary<string, string[]> Options = new()
+    {
+        ["plan"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
+        ["example"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
+        ["evaluate"] = [.. Common, "profile", "evidence"],
+        ["explain"] = [.. Common, "profile", "evidence"],
+    };
     static readonly string[] Flags = ["all-open"];
 
-    /// <summary>Parses arguments into option → value (flags become "true"), resolving aliases; unknown options suggest a near match.</summary>
-    public static Dictionary<string, string> Parse(string[] args)
+    /// <summary>
+    /// Parses arguments into option → value (flags become "true"), resolving aliases; options the command doesn't take
+    /// are errors, and unknown ones suggest a near match.
+    /// </summary>
+    public static Dictionary<string, string> Parse(string[] args, string command = "plan")
     {
+        var options = Options.GetValueOrDefault(command) ?? Options["plan"];
         var opt = new Dictionary<string, string>();
         for (int i = 0; i < args.Length; i++)
         {
             var key = Aliases.GetValueOrDefault(args[i]) ?? (args[i].StartsWith("--") ? args[i][2..] : null);
-            if (key == null || !Options.Contains(key))
+            if (key == null || !options.Contains(key))
             {
-                var near = Options.FirstOrDefault(o => key != null && key.Length >= 2 && (o.StartsWith(key[..2]) || o.Contains(key)));
+                if (key != null && Options.Values.Any(o => o.Contains(key)))
+                    throw new ArgumentException($"unknown option '{args[i]}' for {command} (it belongs to {string.Join(", ", Options.Where(o => o.Value.Contains(key)).Select(o => o.Key))})");
+                var near = options.FirstOrDefault(o => key != null && key.Length >= 2 && (o.StartsWith(key[..2]) || o.Contains(key)));
                 throw new ArgumentException($"unknown option '{args[i]}'" + (near != null ? $" (did you mean --{near}?)" : ""));
             }
             if (Flags.Contains(key)) { opt[key] = "true"; continue; }
@@ -74,26 +94,15 @@ public static partial class Cli
     /// </summary>
     public static int Plan(Dictionary<string, string> opt, IAnsiConsole err)
     {
-        var git = new Git(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")));
-        if (git.Try("rev-parse", "--git-dir").ExitCode != 0) throw new InvalidOperationException($"not a git repository: {git.RepoDir}");
-
+        var git = OpenRepo(opt);
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
         var prArgs = opt.GetValueOrDefault("prs", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(p => p.TrimStart('#')).ToList();
         var allOpen = opt.ContainsKey("all-open");
         if (prArgs.Count == 0 && !allOpen) throw new ArgumentException("need --prs <a,b,...> or --all-open");
 
-        var provider = opt.GetValueOrDefault("provider")
-            ?? (prArgs.Count > 0 ? (prArgs.All(p => p.All(char.IsDigit)) ? "github" : "local") : IsGitHub(git) ? "github" : "local");
-        MergeStrategy? chosen = opt.GetValueOrDefault("strategy") switch
-        {
-            null => null,
-            "merge" => MergeStrategy.Merge,
-            "squash" => MergeStrategy.Squash,
-            "rebase" => MergeStrategy.Rebase,
-            "ff-only" => MergeStrategy.FfOnly,
-            var s => throw new ArgumentException($"unknown strategy '{s}' (merge, squash, rebase, ff-only)"),
-        };
+        var provider = ProviderFor(git, opt, prArgs);
+        var chosen = StrategyOption(opt);
         var beam = int.TryParse(opt.GetValueOrDefault("beam", "8"), out var bw) && bw > 0
             ? bw : throw new ArgumentException("--beam must be a positive number");
         var verifyAt = opt.GetValueOrDefault("verify-at", "final");
@@ -101,12 +110,7 @@ public static partial class Cli
         var historyDepth = int.TryParse(opt.GetValueOrDefault("history", "200"), out var hd) && hd >= 0
             ? hd : throw new ArgumentException("--history must be a number of merges (0 = off)");
 
-        var output = opt.GetValueOrDefault("output");
-        var format = opt.GetValueOrDefault("format")
-            ?? (output != null ? Path.GetExtension(output).ToLowerInvariant() switch { ".html" or ".htm" => "html", ".json" => "json", _ => "text" }
-                : Console.IsOutputRedirected ? "text" : "pretty");
-        if (format is not ("pretty" or "text" or "json" or "html"))
-            throw new ArgumentException($"unknown format '{format}' (pretty, text, json, html)");
+        var (format, output) = FormatOption(opt, "pretty", "pretty", "text", "json", "html");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var timing = Environment.GetEnvironmentVariable("GITWIZZ_TIMING") == "1";
@@ -114,15 +118,7 @@ public static partial class Cli
         {
             if (timing) status += m => Console.Error.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {m}");
             status($"Loading pull requests ({provider})…");
-            var policy = provider == "github" ? Providers.GitHubPolicy(git, target) : new BranchPolicy([]);
-            var (targetSha, prs) = provider switch
-            {
-                "local" => Providers.Local(git, target, allOpen && prArgs.Count == 0 ? LocalBranches(git, target) : prArgs),
-                "github" => Providers.GitHub(git, target, allOpen ? null : prArgs.Select(int.Parse).ToHashSet(), policy),
-                _ => throw new ArgumentException($"unknown provider '{provider}' (local, github)"),
-            };
-            if (prs.Count == 0) throw new InvalidOperationException($"no open pull requests found for '{target}'");
-
+            var (policy, targetSha, prs) = LoadPrs(git, provider, target, allOpen && prArgs.Count == 0 ? null : prArgs);
             status($"Analyzing {prs.Count} pull requests…");
             Parallel.ForEach(prs, pr => Analyzer.Analyze(git, targetSha, pr));
             Analyzer.ResolveDependencies(git, targetSha, prs);
@@ -167,15 +163,121 @@ public static partial class Cli
         else
         {
             result = Pipeline(_ => { });
-            var text = format switch { "json" => Report.Json(result) + "\n", "html" => Pretty.Html(result), _ => Report.Text(result) };
-            if (output == null) Console.Write(text);
-            else
-            {
-                File.WriteAllText(output, text);
-                err.MarkupLine($"[springgreen3]✔[/] wrote {format} report to [bold]{Markup.Escape(output)}[/]");
-            }
+            Write(format switch { "json" => Report.Json(result) + "\n", "html" => Pretty.Html(result), _ => Report.Text(result) }, format, output, err);
         }
         return result.Verification?.StartsWith("FAILED") == true ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Runs evaluate (or explain): loads one pull request, runs the quality gates its target's policy selects and
+    /// reports the merge-readiness verdict. Returns 0 ready, 3 blocked, 4 undetermined.
+    /// </summary>
+    public static int Evaluate(string subject, Dictionary<string, string> opt, bool explain, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var id = subject.TrimStart('#');
+        var provider = ProviderFor(git, opt, [id]);
+        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        var (format, output) = explain ? FormatOption(opt, "text", "text", "json") : FormatOption(opt, "pretty", "pretty", "text", "json");
+        var evidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null;
+
+        Evaluation Pipeline(Action<string> status)
+        {
+            status($"Loading pull request {subject} ({provider})…");
+            var (policy, targetSha, prs) = LoadPrs(git, provider, target, [id]);
+            var pr = prs.Single();
+            // Without --target, judge a PR against the branch it targets.
+            if (!opt.ContainsKey("target") && pr.BaseRef != "" && pr.BaseRef != target)
+            {
+                target = pr.BaseRef;
+                (policy, targetSha, prs) = LoadPrs(git, provider, target, [id]);
+                pr = prs.Single();
+            }
+            status($"Analyzing {pr.Id}…");
+            Analyzer.Analyze(git, targetSha, pr);
+            Analyzer.ResolveDependencies(git, targetSha, prs);
+            var config = RepoConfig.Load(git, targetSha);
+            using var ctx = new GateContext
+            {
+                Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config,
+                Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
+                Redactor = new Redactor(config.Secrets), EvidenceDir = evidenceDir,
+            };
+            return Evaluator.Run(ctx, opt.GetValueOrDefault("profile"), status);
+        }
+
+        Evaluation result;
+        if (format == "pretty" && output == null)
+        {
+            result = AnsiConsole.Status().Spinner(Spinner.Known.Dots).SpinnerStyle(Style.Parse("steelblue1"))
+                .Start("Starting…", ctx => Pipeline(m => ctx.Status(Markup.Escape(m))));
+            Evaluator.Pretty(result, AnsiConsole.Console);
+        }
+        else
+        {
+            result = Pipeline(_ => { });
+            Write(format == "json" ? Evaluator.Json(result) + "\n" : explain ? Evaluator.Explain(result) : Evaluator.Text(result), format, output, err);
+        }
+        if (evidenceDir != null) File.WriteAllText(Path.Combine(evidenceDir, "evaluation.json"), Evaluator.Json(result) + "\n");
+        return result.ExitCode;
+    }
+
+    static Git OpenRepo(Dictionary<string, string> opt)
+    {
+        var git = new Git(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")));
+        if (git.Try("rev-parse", "--git-dir").ExitCode != 0) throw new InvalidOperationException($"not a git repository: {git.RepoDir}");
+        return git;
+    }
+
+    /// <summary>--provider, else github for PR numbers (or --all-open with a GitHub origin and gh installed), else local.</summary>
+    static string ProviderFor(Git git, Dictionary<string, string> opt, List<string> prArgs) =>
+        opt.GetValueOrDefault("provider")
+        ?? (prArgs.Count > 0 ? (prArgs.All(p => p.All(char.IsDigit)) ? "github" : "local") : IsGitHub(git) ? "github" : "local");
+
+    static MergeStrategy? StrategyOption(Dictionary<string, string> opt) => opt.GetValueOrDefault("strategy") switch
+    {
+        null => null,
+        "merge" => MergeStrategy.Merge,
+        "squash" => MergeStrategy.Squash,
+        "rebase" => MergeStrategy.Rebase,
+        "ff-only" => MergeStrategy.FfOnly,
+        var s => throw new ArgumentException($"unknown strategy '{s}' (merge, squash, rebase, ff-only)"),
+    };
+
+    /// <summary>--format, else from the --output extension, else the terminal default (text when piped).</summary>
+    static (string Format, string? Output) FormatOption(Dictionary<string, string> opt, string terminal, params string[] allowed)
+    {
+        var output = opt.GetValueOrDefault("output");
+        var format = opt.GetValueOrDefault("format")
+            ?? (output != null ? Path.GetExtension(output).ToLowerInvariant() switch { ".html" or ".htm" => "html", ".json" => "json", _ => "text" }
+                : Console.IsOutputRedirected ? "text" : terminal);
+        if (!allowed.Contains(format)) throw new ArgumentException($"unknown format '{format}' ({string.Join(", ", allowed)})");
+        return (format, output);
+    }
+
+    /// <summary>
+    /// Branch policy, target commit and pull requests from the provider. ids null: every open PR (GitHub) or every
+    /// unmerged branch (local).
+    /// </summary>
+    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadPrs(Git git, string provider, string target, List<string>? ids)
+    {
+        var policy = provider == "github" ? Providers.GitHubPolicy(git, target) : new BranchPolicy([]);
+        var (targetSha, prs) = provider switch
+        {
+            "local" => Providers.Local(git, target, ids ?? LocalBranches(git, target)),
+            "github" => Providers.GitHub(git, target, ids?.Select(int.Parse).ToHashSet(), policy),
+            _ => throw new ArgumentException($"unknown provider '{provider}' (local, github)"),
+        };
+        if (prs.Count == 0)
+            throw new InvalidOperationException(ids is [var one] ? $"no open pull request {one} found" : $"no open pull requests found for '{target}'");
+        return (policy, targetSha, prs);
+    }
+
+    static void Write(string text, string format, string? output, IAnsiConsole err)
+    {
+        if (output == null) { Console.Write(text); return; }
+        File.WriteAllText(output, text);
+        err.MarkupLine($"[springgreen3]✔[/] wrote {format} report to [bold]{Markup.Escape(output)}[/]");
     }
 
     /// <summary>origin/HEAD, else main or master, else the current branch.</summary>
@@ -200,6 +302,7 @@ public static partial class Cli
         msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
         : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
+        : msg.Contains("no open pull request ") ? "check the number, or pass a branch name with --provider local"
         : msg.Contains("no open pull requests") ? "use --prs to pick branches/PRs explicitly, or --target for another branch"
         : msg.StartsWith("invalid .gitwizz.yml") ? "fix the file or remove it to use the defaults; see the README section 'Configuration'"
         : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'gitwizz help'"
@@ -213,6 +316,8 @@ public static partial class Cli
 
             [bold]Usage[/]
               gitwizz [grey]plan[/] [[options]]      plan a merge order (default command)
+              gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
+              gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
               gitwizz help | version
 
@@ -229,8 +334,13 @@ public static partial class Cli
                   --verify <command>    run a command on merged states, e.g. "dotnet test"
                   --verify-at <level>   final | critical (after high-risk steps) | step [grey](default: final)[/]
 
+            [bold]Evaluate / explain[/]
+                  --profile <name>      gate profile from .gitwizz.yml [grey](default: by risk, else "default", else all)[/]
+                  --evidence <dir>      keep full gate logs and evaluation.json in dir
+              [grey]exit code: 0 ready, 3 blocked by a failed gate, 4 undetermined (a blocking gate could not run)[/]
+
             [bold]Output[/]
-              -f, --format <name>       pretty | text | json | html [grey](default: pretty on a terminal, text when piped)[/]
+              -f, --format <name>       pretty | text | json | html [grey](html: plan only; default: pretty on a terminal, text when piped)[/]
               -o, --output <file>       write the report to a file; format from the extension (.html, .json, .txt)
               -r, --repo <dir>          repository directory [grey](default: current directory)[/]
 
@@ -241,6 +351,8 @@ public static partial class Cli
               gitwizz -p feature/a,feature/b --verify "dotnet test"
               [grey]# shareable HTML report[/]
               gitwizz --all-open -o plan.html
+              [grey]# merge readiness of PR 57 as JSON, logs kept for the audit trail[/]
+              gitwizz evaluate 57 -f json --evidence .gitwizz-evidence
               [grey]# try it on a demo repository[/]
               gitwizz example
             """);
