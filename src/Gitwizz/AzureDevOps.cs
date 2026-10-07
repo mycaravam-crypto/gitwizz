@@ -70,7 +70,7 @@ public static class AzureDevOps
             var stub = stubs.Single(s => s.Pr.Id == pr.Id).Pr;
             pr.OpenOutsideDependencies = stub.OpenOutsideDependencies;
             if (details)
-                pr.WorkItems = WorkItems(JsonDocument.Parse(ado.Run("pr", "context", pr.Id[1..])).RootElement);
+                pr.WorkItems = LinkedWorkItems(ado, pr.Id[1..]);
         }
         git.Run([.. new[] { "fetch", "--quiet", "origin", target }, .. prs.Select(p => "refs/heads/" + p.HeadRef).Distinct()]);
         foreach (var pr in prs.Where(p => git.Try("cat-file", "-e", p.HeadSha + "^{commit}").ExitCode != 0))
@@ -141,21 +141,33 @@ public static class AzureDevOps
         checks.Any(c => c.Status == "failure") ? "FAILURE" : checks.Any(c => c.Status == "pending") ? "PENDING" : checks.Count > 0 ? "SUCCESS" : null;
 
     /// <summary>
-    /// Linked work items from ado pr context: type, title, state and acceptance criteria (the AcceptanceCriteria
+    /// The PR's linked work items with all their fields. ado pr context names them but returns only title, type and
+    /// state, so each is read again with ado workitem show, which returns every field (acceptance criteria and
+    /// description included). One that can't be read in full keeps its summary, without criteria.
+    /// </summary>
+    public static List<WorkItem> LinkedWorkItems(IAdoClient ado, string pr)
+    {
+        var context = JsonDocument.Parse(ado.Run("pr", "context", pr)).RootElement;
+        if (!context.TryGetProperty("workItems", out var items) || items.ValueKind != JsonValueKind.Array) return [];
+        return items.EnumerateArray().Select(summary =>
+        {
+            try { return ParseWorkItem(JsonDocument.Parse(ado.Run("workitem", "show", summary.GetProperty("id").GetInt32().ToString(), "--json")).RootElement); }
+            catch (InvalidOperationException) { return ParseWorkItem(summary); }
+        }).OrderBy(w => int.Parse(w.Id[3..])).ToList();
+    }
+
+    /// <summary>
+    /// A work item from ado's JSON ({id, fields}): type, title, state and acceptance criteria (the AcceptanceCriteria
     /// field, else an "Acceptance criteria" section in the description).
     /// </summary>
-    public static List<WorkItem> WorkItems(JsonElement context)
+    public static WorkItem ParseWorkItem(JsonElement w)
     {
-        if (!context.TryGetProperty("workItems", out var items) || items.ValueKind != JsonValueKind.Array) return [];
-        return items.EnumerateArray().Select(w =>
-        {
-            var f = w.TryGetProperty("fields", out var x) ? x : default;
-            string Field(string name) => f.ValueKind == JsonValueKind.Object && f.TryGetProperty(name, out var v)
-                ? v.ValueKind == JsonValueKind.Object && v.TryGetProperty("displayName", out var n) ? n.GetString() ?? "" : v.ValueKind == JsonValueKind.String ? v.GetString()! : v.ToString()
-                : "";
-            var ac = Field("Microsoft.VSTS.Common.AcceptanceCriteria");
-            return new WorkItem($"AB#{w.GetProperty("id").GetInt32()}", Field("System.WorkItemType"), Field("System.Title"), Field("System.State"),
-                ac.Trim() != "" ? Requirements.Criteria(ac) : Requirements.CriteriaSection(Field("System.Description")));
-        }).OrderBy(w => w.Id, StringComparer.Ordinal).ToList();
+        var f = w.TryGetProperty("fields", out var x) ? x : default;
+        string Field(string name) => f.ValueKind == JsonValueKind.Object && f.TryGetProperty(name, out var v)
+            ? v.ValueKind == JsonValueKind.Object && v.TryGetProperty("displayName", out var n) ? n.GetString() ?? "" : v.ValueKind == JsonValueKind.String ? v.GetString()! : v.ToString()
+            : "";
+        var ac = Field("Microsoft.VSTS.Common.AcceptanceCriteria");
+        return new WorkItem($"AB#{w.GetProperty("id").GetInt32()}", Field("System.WorkItemType"), Field("System.Title"), Field("System.State"),
+            ac.Trim() != "" ? Requirements.Criteria(ac) : Requirements.CriteriaSection(Field("System.Description")));
     }
 }
