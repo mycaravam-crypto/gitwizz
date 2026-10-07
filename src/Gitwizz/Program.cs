@@ -478,24 +478,24 @@ public static partial class Cli
     public static void Help(IAnsiConsole c)
     {
         c.MarkupLine("""
-            [bold steelblue1]gitwizz[/] finds the merge order for pull requests with the fewest conflicts,
-            by simulating real git merges. Your working tree and branches are never touched.
+            [bold steelblue1]gitwizz[/] finds the merge order for pull requests with the fewest conflicts, by simulating
+            real git merges, and runs quality gates to tell whether a PR is ready. Your working tree and branches are never touched.
 
             [bold]Usage[/]
               gitwizz [grey]plan[/] [[options]]      plan a merge order (default command)
               gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
-              gitwizz evidence <pr>             the bounded evidence package an AI review would see (JSON)
+              gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
-              gitwizz benchmark [[--accept]]       measure AI review quality on labelled cases; --accept saves the baseline
-              gitwizz trace <pr> [[--run]]       which tests the change needs and why; acceptance criteria -> tests -> results
+              gitwizz benchmark [[options]]      measure AI review quality on labelled cases
+              gitwizz trace <pr> [[options]]     which tests the change needs and why; acceptance criteria -> tests -> results
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
               gitwizz help | version
 
             [bold]Choose pull requests[/]
-              -a, --all-open            all open PRs (GitHub) or all unmerged local branches
-              -p, --prs <a,b,...>       PR numbers (GitHub) or branch names (local)
+              -a, --all-open            all open PRs (GitHub, Azure DevOps) or all unmerged local branches
+              -p, --prs <a,b,...>       PR numbers (GitHub, Azure DevOps) or branch names (local)
               -t, --target <branch>     branch to merge into [grey](default: origin/HEAD, main or master)[/]
                   --provider <name>     local | github | azure-devops [grey](default: auto-detected from origin)[/]
 
@@ -510,6 +510,16 @@ public static partial class Cli
                   --profile <name>      gate profile from .gitwizz.yml [grey](default: by risk, else "default", else all)[/]
                   --evidence <dir>      keep full gate logs and evaluation.json in dir
               [grey]exit code: 0 ready, 3 blocked by a failed gate, 4 undetermined (a blocking gate could not run)[/]
+
+            [bold]Trace[/]
+                  --run                 also run the selected test suites on the merged state [grey](exit 3 if one fails)[/]
+                  --evidence <dir>      keep each suite's full log in dir
+
+            [bold]Benchmark[/]
+                  --cases <dir>         labelled cases [grey](default: benchmark.cases in .gitwizz.yml, else benchmark)[/]
+                  --baseline <file>     accepted baseline [grey](default: benchmark.baseline, else .gitwizz/benchmark-baseline.json)[/]
+                  --accept              write the result as the new baseline
+              [grey]exit code: 0 thresholds met without regressions, 3 otherwise[/]
 
             [bold]Output[/]
               -f, --format <name>       pretty | text | json | html [grey](html: plan only; default: pretty on a terminal, text when piped)[/]

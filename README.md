@@ -115,8 +115,8 @@ gitwizz help                            # all options with examples
 
 | Option | Default | Meaning |
 |---|---|---|
-| `-a`, `--all-open` | | All open PRs into the target and PRs stacked on them (GitHub), or all local branches not yet merged (local) |
-| `-p`, `--prs` | | Comma-separated PR numbers (GitHub) or branch names (local) |
+| `-a`, `--all-open` | | All open PRs into the target and PRs stacked on them (GitHub, Azure DevOps), or all local branches not yet merged (local) |
+| `-p`, `--prs` | | Comma-separated PR numbers (GitHub, Azure DevOps) or branch names (local) |
 | `-t`, `--target` | auto | Branch to merge into: `origin/HEAD`, else `main`/`master`, else the current branch |
 | `--provider` | auto | `local` for branch names. For PR numbers and `--all-open`: `azure-devops` with an Azure DevOps `origin`, `github` with a GitHub one (`--all-open` also needs `gh`), else `local` |
 | `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
@@ -133,7 +133,8 @@ Every report ends with the **next step**, as a ready-to-run command (`gh pr merg
 `git merge --no-ff docs`). Re-run the tool after each real merge so the plan reflects the new state.
 
 Exit codes: `0` ok, `1` error or failed verification, `2` usage error. `evaluate` and `explain` add `3` (not ready: a
-blocking gate failed) and `4` (undetermined: a blocking gate could not run).
+blocking gate failed) and `4` (undetermined: a blocking gate could not run). `trace` exits `3` when a test suite it ran
+didn't pass, `benchmark` when thresholds are missed or the baseline regressed.
 
 ### Terminal UI
 
@@ -313,7 +314,10 @@ profiles:
 ```bash
 gitwizz trace 42                 # which tests the change needs and why; each acceptance criterion and its tests
 gitwizz trace 42 --run -f json   # also run them on the merged state (schema gitwizz.trace/v1)
+gitwizz trace 42 --run --evidence .gitwizz-evidence   # keep each suite's full log
 ```
+
+`trace` exits `3` when a suite it ran didn't pass.
 
 A PR's linked work items (Azure DevOps work items, or the GitHub issues it closes) are split into individual
 **acceptance criteria**, with ids like `AB#4711.2` or `#57.1`. Test suites are declared in `.gitwizz.yml`:
@@ -433,6 +437,7 @@ gitwizz evidence 42 -o benchmark/rate-sign.json   # then add "expected": [...] b
 gitwizz benchmark                                 # score every case, compare with the accepted baseline
 gitwizz benchmark -f json -o bench.json           # machine-readable result (schema gitwizz.benchmark/v1)
 gitwizz benchmark --accept                        # write the result as the baseline; commit it to promote the gate
+gitwizz benchmark --cases bench/ --baseline b.json # override benchmark.cases / benchmark.baseline from .gitwizz.yml
 ```
 
 A case is an evidence package plus `"expected"`: the findings a good review must report (`file`, new-side `line`
@@ -616,17 +621,18 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
 
 ## Performance
 
-Search cost is kept low in four ways:
+Search cost is kept low in five ways:
 
 - **Result reuse:** if the PR merged last touches none of a candidate's files and shares no history with it, the candidate's result
   carries over from the previous state unchanged. The real merge only runs if that branch of the search survives.
 - **Batched merges:** the merges each beam level needs go through `git merge-tree --stdin`, one process per CPU core.
 - **In-process commits:** synthetic commits are written directly as loose git objects (SHA-1 or SHA-256), not with one `git commit-tree` process per commit.
 - **One `rev-list` per PR** for dependency detection, instead of an ancestry check per pair of PRs.
-- v0.4 adds correctness work: state-aware cost, per-commit rebase, marker-free regenerate states. On the dense
-  synthetic set that costs about 10–15% (60 PRs: 3.2 s → 3.6 s), with identical plans.
 - **State-aware cost only where it matters:** pairwise outcomes are batched once. Only conflicting pairs are simulated
   again on each search state (about +35% on a dense 60-PR set: 2.5 s → 3.4 s).
+
+v0.4 added correctness work: state-aware cost, per-commit rebase, marker-free regenerate states. On the dense
+synthetic set that costs about 10–15% (60 PRs: 3.2 s → 3.6 s), with identical plans.
 
 | Benchmark | v0.1 | now (ReadyToRun) |
 |---|---|---|
