@@ -399,6 +399,20 @@ public class PlannerTests : IDisposable
     }
 
     [Fact]
+    public void Reads_blobs_in_one_process_like_git_show()
+    {
+        var head = _git.RevParse("main");
+        File.WriteAllBytes(P("bom file.cs"), [0xEF, 0xBB, 0xBF, .. "class Ä {}\n"u8]);
+        File.WriteAllText(P("empty.cs"), "");
+        Commit("more");
+        var now = _git.RevParse("main");
+        Assert.Equal([_git.Run("show", $"{head}:billing.cs") + "\n", "class Ä {}\n", "", "docs\n"],
+            _git.ReadBlobs([$"{head}:billing.cs", $"{now}:bom file.cs", $"{now}:empty.cs", $"{now}:docs.md"]));
+        Assert.Empty(_git.ReadBlobs([]));
+        Assert.Throws<InvalidOperationException>(() => _git.ReadBlobs([$"{now}:missing file.cs"]));
+    }
+
+    [Fact]
     public void Parses_hunks_and_explicit_dependencies()
     {
         var hunks = Analyzer.ParseHunks("--- a/x.cs\n+++ b/x.cs\n@@ -3,2 +3,2 @@\n@@ -10 +10,0 @@\n--- /dev/null\n+++ b/new.cs\n@@ -0,0 +1,5 @@\n");
