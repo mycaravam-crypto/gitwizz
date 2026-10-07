@@ -5,7 +5,8 @@ using System.Text;
 
 namespace PrOptimizer;
 
-public record GitResult(int ExitCode, string Stdout, string Stderr);
+/// <summary>A finished process. TimedOut: killed (with its children) after the timeout; ExitCode is then 124, as timeout(1) reports.</summary>
+public record GitResult(int ExitCode, string Stdout, string Stderr, bool TimedOut = false);
 
 /// <summary>Runs git as an external process so simulation matches real git behaviour.</summary>
 public class Git(string repoDir)
@@ -163,21 +164,39 @@ public class Git(string repoDir)
         return res;
     }
 
-    /// <summary>Runs any program in dir and captures exit code, stdout and stderr; never throws on a non-zero exit.</summary>
-    public static GitResult Exec(string dir, string file, string[] args, IDictionary<string, string>? env = null, string? stdin = null)
+    /// <summary>
+    /// Runs any program in dir and captures exit code, stdout and stderr; never throws on a non-zero exit.
+    /// timeout: kill the process tree after this long and return TimedOut (exit code 124).
+    /// </summary>
+    public static GitResult Exec(string dir, string file, string[] args, IDictionary<string, string>? env = null, string? stdin = null,
+        TimeSpan? timeout = null)
     {
         Process p;
         try { p = Start(dir, file, args, env, stdin != null); }
         catch (System.ComponentModel.Win32Exception e) { return new GitResult(127, "", $"{file}: {e.Message}"); } // not installed
         using var _ = p;
-        // Dedicated thread: a pool-based read starves when callers block pool threads (Parallel.ForEach).
+        // Dedicated threads: a pool-based read starves when callers block pool threads (Parallel.ForEach).
         var stderr = Task.Factory.StartNew(p.StandardError.ReadToEnd, TaskCreationOptions.LongRunning);
         if (stdin != null)
             Task.Factory.StartNew(() => { p.StandardInput.Write(stdin); p.StandardInput.Close(); }, TaskCreationOptions.LongRunning);
-        var stdout = p.StandardOutput.ReadToEnd();
+        if (timeout is null)
+        {
+            var stdout = p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+            return new GitResult(p.ExitCode, stdout, stderr.Result);
+        }
+        var output = Task.Factory.StartNew(p.StandardOutput.ReadToEnd, TaskCreationOptions.LongRunning);
+        if (p.WaitForExit(timeout.Value)) { p.WaitForExit(); return new GitResult(p.ExitCode, output.Result, stderr.Result); }
+        try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } // exited meanwhile
         p.WaitForExit();
-        return new GitResult(p.ExitCode, stdout, stderr.Result);
+        // A grandchild that escaped the kill may still hold the pipes: don't wait for it.
+        string Partial(Task<string> t) => t.Wait(TimeSpan.FromSeconds(5)) ? t.Result : "";
+        return new GitResult(124, Partial(output), Partial(stderr), TimedOut: true);
     }
+
+    /// <summary>Runs a shell command line (sh -c) in dir, like a CI step.</summary>
+    public static GitResult Shell(string dir, string command, IDictionary<string, string>? env = null, TimeSpan? timeout = null) =>
+        Exec(dir, "sh", ["-c", command], env, timeout: timeout);
 
     static Process Start(string dir, string file, string[] args, IDictionary<string, string>? env, bool stdin)
     {
@@ -197,4 +216,24 @@ public class Git(string repoDir)
         if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
         return Process.Start(psi)!;
     }
+}
+
+/// <summary>A temporary detached worktree on a commit, so commands can run on a synthetic state; removed on Dispose.</summary>
+public sealed class Worktree : IDisposable
+{
+    readonly Git _git;
+
+    /// <summary>Directory of the checkout.</summary>
+    public string Dir { get; }
+
+    /// <summary>Checks out commit (detached) into a new temporary directory.</summary>
+    public Worktree(Git git, string commit)
+    {
+        _git = git;
+        Dir = Path.Combine(Path.GetTempPath(), "pr-optimizer-" + Guid.NewGuid().ToString("N")[..8]);
+        git.Run("worktree", "add", "--detach", "--quiet", Dir, commit);
+    }
+
+    /// <summary>Removes the checkout and its worktree entry; safe to call twice.</summary>
+    public void Dispose() => _git.Try("worktree", "remove", "--force", Dir);
 }

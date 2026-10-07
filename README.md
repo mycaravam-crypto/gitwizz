@@ -1,6 +1,13 @@
-# gitwizz — PR Merge Optimizer
+# gitwizz — PR Quality & Merge Orchestrator
 
-`pr-optimizer` finds a low-conflict order for merging a set of pull requests into a target branch.
+`pr-optimizer` answers two questions with reproducible evidence:
+
+- **Is this pull request ready to merge, and if not, why?** `evaluate` runs the repository's quality gates
+  (mergeability, review policy, build, tests, docwizz, any command) and gives one verdict; `explain` lists every
+  blocking decision with its evidence. See [Merge readiness](#merge-readiness-evaluate-and-explain).
+- **In which order should a set of pull requests merge?** `plan` (below).
+
+`plan` finds a low-conflict order for merging a set of pull requests into a target branch.
 It doesn't sort PRs by size or file overlap. It **simulates** the merges with real git
 (`git merge-tree`) on synthetic commits and searches for the order with the lowest total cost.
 Your working tree, index and branches are never touched.
@@ -105,7 +112,8 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
 Every report ends with the **next step**, as a ready-to-run command (`gh pr merge 105 --squash` or
 `git merge --no-ff docs`). Re-run the tool after each real merge so the plan reflects the new state.
 
-Exit codes: `0` ok, `1` error or failed verification, `2` usage error.
+Exit codes: `0` ok, `1` error or failed verification, `2` usage error. `evaluate` and `explain` add `3` (not ready: a
+blocking gate failed) and `4` (undetermined: a blocking gate could not run).
 
 ### Terminal UI
 
@@ -158,6 +166,85 @@ Next: git checkout main && git merge --no-ff docs
 Total cost: 0.7
 ```
 
+## Merge readiness: evaluate and explain
+
+```bash
+pr-optimizer evaluate 57                       # GitHub PR 57: run its gates, print the verdict
+pr-optimizer evaluate feature/x -f json        # a local branch, stable JSON (schema gitwizz.evaluation/v1)
+pr-optimizer explain 57                        # why it is (not) ready, every blocking decision with evidence
+pr-optimizer evaluate 57 --profile fast --evidence .gitwizz-evidence   # pick a profile, keep full logs
+```
+
+`evaluate` loads one pull request (GitHub number or local branch; without `--target` it is judged against the branch it
+targets), then runs **quality gates** in order. Each gate produces the same result: a status, whether it is blocking,
+findings (message, file, line, rule, evidence), evidence references, duration, command and tool version.
+
+| Status | Meaning | Blocks the merge if the gate is blocking |
+|---|---|---|
+| `pass` | the check passed | no |
+| `warn` | passed with something to look at (e.g. a lockfile to regenerate) | no |
+| `fail` | a quality failure: the change needs work | yes |
+| `error` | the gate could not run (tool missing, timeout, crash): nothing is known | yes |
+| `skipped` | not applicable (no changed file matches its `paths`), or a gate it `needs` didn't pass | only in the second case |
+
+One blocking gate that fails, errors or is left unrun makes the PR **not ready**. Advisory (`blocking: false`) gates stay
+visible but never block. The verdict is `ready`, `blocked` (a gate failed) or `undetermined` (only gate errors), so a
+broken tool is never mistaken for a broken change.
+
+Built-in gates, active without configuration:
+
+- **merge**: simulates the merge into the target with the planned strategy (`git merge-tree`, nothing is touched).
+  A conflict fails; a conflict only in lockfiles/generated files warns (regenerate). Always runs first; its merged
+  state is the **workspace** the command gates run in.
+- **policy**: draft, review decision, failing or pending required checks, branch protection, declared dependencies on
+  open PRs, and a PR that targets another branch. Skipped for local branches (they carry no such data).
+
+Gate types to configure: `build` and `test` (command detected from the project: `dotnet`, `npm`, `go`, `cargo`, Maven,
+Gradle, Python, `make`, or set `run:`), `docwizz` (`docwizz check . --since $GITWIZZ_TARGET_SHA`, the documentation
+gaps the change introduces), and `command` (any command). Commands run with `sh -c` in a temporary worktree of the
+merged state and get `GITWIZZ_PR`, `GITWIZZ_TARGET`, `GITWIZZ_TARGET_SHA`, `GITWIZZ_HEAD_SHA` and `GITWIZZ_RISK`.
+Exit code 0 passes, any other fails; exit 126/127 (not installed) and a timeout are errors. Compiler errors
+(`file(line,col): error CS1002: …`, `file:line: error …`) and failed tests (`dotnet test`, pytest, `go test`) become
+findings with file and line. gitwizz runs these tools; it doesn't reimplement them.
+
+### Policy as code
+
+Gates live in `.gitwizz.yml` and are read **from the target branch's commit**, not from the working tree or the PR:
+the rules are versioned with the repository, and a pull request can't relax the gates it is judged by. The report names
+the source (`.gitwizz.yml@<commit>`).
+
+```yaml
+gates:
+  - id: build                    # type defaults to the id when it names one (build, test, docwizz, merge, policy)
+  - id: test
+    needs: [build]               # skipped, and blocking, when build doesn't pass (default for command gates: [merge])
+    timeout: 1800                # seconds (default 1800)
+  - id: docs
+    type: docwizz
+    blocking: false              # advisory
+  - id: e2e
+    type: command
+    run: ./scripts/e2e.sh
+    paths: ["web/*"]             # only when the PR changes a matching file
+profiles:                        # which gates each profile runs, in order
+  fast: [build]
+  default: [build, test, docs]
+  full: [build, test, docs, e2e]
+risk:
+  high_paths: ["src/Billing/*"]  # touching one of these makes a PR high risk
+  max_files: 25                  # so does changing more files than this
+  profiles: { low: fast, medium: default, high: full }
+secrets: [DEPLOY_TOKEN]          # values of these variables never appear in output, logs or JSON
+```
+
+The profile is `--profile`, else the one for the PR's **risk** (`high`: a `high_paths` file or more than `max_files`
+files; `medium`: an API signature, migration or configuration change; else `low`), else `default`, else every gate.
+Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes the built-in. Values of `secrets` and of
+`GITHUB_TOKEN`, `GH_TOKEN`, `ADO_PAT`, `SYSTEM_ACCESSTOKEN` are masked as `***` everywhere.
+
+`--evidence <dir>` keeps each command gate's full log (`<gate>.log`) and the result (`evaluation.json`) for the
+audit trail; the JSON references the logs.
+
 ## Configuration
 
 Optional. Put a `.gitwizz.yml` at the repository root. Every key is optional, and anything you leave out keeps the
@@ -181,7 +268,9 @@ costs:
 
 Patterns use `*` and `?`. They match the file name, or the whole path when they contain a `/`.
 A regenerator's command appears in the plan ("regenerate after merge: package-lock.json (npm install --package-lock-only)").
-Unknown keys, empty patterns and negative costs are errors.
+Unknown keys, empty patterns and negative costs are errors, as are unknown gate types, duplicate gate ids and
+references to unknown gates or profiles. The `gates`, `profiles`, `risk` and `secrets` keys are described in
+[Policy as code](#policy-as-code).
 
 ## How it works
 
@@ -307,4 +396,5 @@ Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
 
 ## Roadmap
 
-All planned v1, v2 and v0.4 issues are done. Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+All planned v1, v2 and v0.4 issues are done. The PR quality & merge orchestrator epic (#53) adds quality gates and
+`evaluate`/`explain` (#55). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

@@ -28,16 +28,8 @@ public static class Verify
     /// <summary>Runs a command in a temporary detached worktree on the given commit, then removes it.</summary>
     public static (bool Ok, string Output) Run(Git git, string commit, string command)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "pr-optimizer-" + Guid.NewGuid().ToString("N")[..8]);
-        git.Run("worktree", "add", "--detach", "--quiet", dir, commit);
-        try
-        {
-            var r = Git.Exec(dir, "sh", ["-c", command]);
-            return (r.ExitCode == 0, r.Stdout + r.Stderr);
-        }
-        finally
-        {
-            git.Try("worktree", "remove", "--force", dir);
-        }
+        using var wt = new Worktree(git, commit);
+        var r = Git.Shell(wt.Dir, command);
+        return (r.ExitCode == 0, r.Stdout + r.Stderr);
     }
 }

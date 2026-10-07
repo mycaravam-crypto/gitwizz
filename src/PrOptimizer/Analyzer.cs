@@ -40,32 +40,87 @@ public record RepoConfig
     public List<string> Generated { get; init; } = [];           // more generated (regenerable) files
     public List<string> Ignored { get; init; } = [];             // left out of overlap scoring; real conflicts still block
     public CostModel Costs { get; init; } = new();
+    public List<GateSpec> Gates { get; init; } = [];             // quality gates for evaluate (see Gates.cs)
+    public Dictionary<string, List<string>> Profiles { get; init; } = []; // profile name -> gate ids, in run order
+    public RiskPolicy Risk { get; init; } = new();
+    public List<string> Secrets { get; init; } = [];             // environment variables whose values never appear in output
+
+    /// <summary>Where the rules came from, for the audit trail: "built-in", or the file and the commit it was read at.</summary>
+    [YamlDotNet.Serialization.YamlIgnore] public string Source { get; init; } = "built-in";
 
     public record Regenerator { public string Match { get; init; } = ""; public string Command { get; init; } = ""; }
     public record CostModel { public double Regeneration { get; init; } = 0.5; public double Conflict { get; init; } = 1.0; public double DependencyUnblock { get; init; } = 0.1; }
+
+    /// <summary>
+    /// How risky a change is (low, medium, high), and which profile each level runs. HighPaths: a changed file matching
+    /// one makes the PR high risk, as does changing more than MaxFiles files.
+    /// </summary>
+    public record RiskPolicy
+    {
+        public List<string> HighPaths { get; init; } = [];
+        public int MaxFiles { get; init; } = 25;
+        public Dictionary<string, string> Profiles { get; init; } = []; // risk level -> profile
+    }
 
     /// <summary>Reads .gitwizz.yml from the repository root, or Default without one; throws on invalid YAML or values.</summary>
     public static RepoConfig Load(Git git)
     {
         var path = Path.Combine(git.Run("rev-parse", "--show-toplevel"), FileName);
-        if (!File.Exists(path)) return Default;
+        return File.Exists(path) ? Parse(File.ReadAllText(path)) with { Source = FileName } : Default;
+    }
+
+    /// <summary>
+    /// Reads .gitwizz.yml as committed at commit, or Default without one. Gates use this with the target's commit:
+    /// the rules are versioned with the repository, and a pull request can't relax the gates it is judged by.
+    /// </summary>
+    public static RepoConfig Load(Git git, string commit) =>
+        git.Try("show", $"{commit}:{FileName}") is { ExitCode: 0 } r ? Parse(r.Stdout) with { Source = $"{FileName}@{commit[..Math.Min(12, commit.Length)]}" } : Default;
+
+    /// <summary>Parses and validates the YAML text of a .gitwizz.yml.</summary>
+    public static RepoConfig Parse(string yaml)
+    {
         RepoConfig c;
         try
         {
             c = new YamlDotNet.Serialization.DeserializerBuilder()
                 .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
-                .Build().Deserialize<RepoConfig?>(File.ReadAllText(path)) ?? Default;
+                .Build().Deserialize<RepoConfig?>(yaml) ?? Default;
         }
         catch (YamlDotNet.Core.YamlException e) { throw new InvalidOperationException($"invalid {FileName}: {e.Message} {e.InnerException?.Message}".Trim()); }
         var error = c.Regenerators.Any(r => r is null || r.Match.Trim() == "" || r.Command.Trim() == "") ? "every regenerator needs a match and a command"
             : c.Generated.Concat(c.Ignored).Any(g => string.IsNullOrWhiteSpace(g)) ? "empty pattern in generated/ignored"
             : c.Costs is null || new[] { c.Costs.Regeneration, c.Costs.Conflict, c.Costs.DependencyUnblock }.Any(x => x < 0 || double.IsNaN(x)) ? "costs must be non-negative numbers"
-            : null;
+            : GateError(c);
         return error == null ? c : throw new InvalidOperationException($"invalid {FileName}: {error}");
     }
 
+    static string? GateError(RepoConfig c)
+    {
+        if (c.Gates.Any(g => g is null || string.IsNullOrWhiteSpace(g.Id))) return "every gate needs an id";
+        if (c.Gates.GroupBy(g => g.Id).FirstOrDefault(g => g.Count() > 1) is { } dup) return $"gate '{dup.Key}' is defined twice";
+        if (c.Gates.FirstOrDefault(g => !PrOptimizer.Gates.Types.Contains(g.Kind)) is { } bad)
+            return $"gate '{bad.Id}' has unknown type '{bad.Kind}' ({string.Join(", ", PrOptimizer.Gates.Types)})";
+        if (c.Gates.FirstOrDefault(g => g.Kind == "command" && string.IsNullOrWhiteSpace(g.Run)) is { } cmd) return $"gate '{cmd.Id}' needs a run: command";
+        if (c.Gates.FirstOrDefault(g => g.Timeout <= 0) is { } t) return $"gate '{t.Id}': timeout must be a positive number of seconds";
+        var ids = c.GateSpecs().Select(g => g.Id).ToHashSet();
+        if (c.Gates.SelectMany(g => (g.Needs ?? []).Select(n => (g.Id, n))).FirstOrDefault(x => !ids.Contains(x.n)) is { Id: not null } need)
+            return $"gate '{need.Id}' needs unknown gate '{need.n}'";
+        if (c.Profiles.SelectMany(p => (p.Value ?? []).Select(g => (p.Key, g))).FirstOrDefault(x => !ids.Contains(x.g)) is { Key: not null } pg)
+            return $"profile '{pg.Key}' names unknown gate '{pg.g}'";
+        if (c.Risk is null || c.Risk.MaxFiles < 1) return "risk.max_files must be at least 1";
+        if (c.Risk.Profiles.FirstOrDefault(r => r.Key is not ("low" or "medium" or "high")) is { Key: not null } rk)
+            return $"unknown risk level '{rk.Key}' (low, medium, high)";
+        if (c.Risk.Profiles.FirstOrDefault(r => !c.Profiles.ContainsKey(r.Value)) is { Key: not null } rp)
+            return $"risk level '{rp.Key}' names unknown profile '{rp.Value}'";
+        return null;
+    }
+
+    /// <summary>Configured gates, plus the built-in merge and policy gates unless the file redefines them.</summary>
+    public IEnumerable<GateSpec> GateSpecs() =>
+        Gates.Concat(PrOptimizer.Gates.BuiltIn.Where(b => Gates.All(g => g.Id != b.Id)));
+
     /// <summary>Glob with * and ?; matched against the file name, or the whole path when the pattern has a '/'.</summary>
-    static bool Matches(string glob, string path) =>
+    public static bool Matches(string glob, string path) =>
         System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(glob, glob.Contains('/') ? path : Path.GetFileName(path), ignoreCase: false);
 
     public FileClass Classify(string path) =>
@@ -318,12 +373,16 @@ public static partial class Analyzer
     /// Policy readiness; null means ready. Kept separate from the conflict score and from structural mergeability.
     /// GitHub's BLOCKED covers rules the other fields don't name (e.g. unresolved conversations, signed commits).
     /// </summary>
-    public static string? NotReadyReason(PullRequest pr) =>
-        pr.IsDraft ? "draft"
-        : pr.ReviewDecision is "CHANGES_REQUESTED" or "REVIEW_REQUIRED" ? $"review: {pr.ReviewDecision}"
-        : pr.CiStatus is "FAILURE" or "PENDING" ? $"checks: {pr.CiStatus}"
-        : pr.MergeStateStatus == "BLOCKED" ? "GitHub: merging is blocked by branch protection"
-        : null;
+    public static string? NotReadyReason(PullRequest pr) => PolicyProblems(pr).FirstOrDefault();
+
+    /// <summary>Every policy reason the PR can't merge yet (draft, reviews, checks, protection), most fundamental first.</summary>
+    public static IEnumerable<string> PolicyProblems(PullRequest pr)
+    {
+        if (pr.IsDraft) yield return "draft";
+        if (pr.ReviewDecision is "CHANGES_REQUESTED" or "REVIEW_REQUIRED") yield return $"review: {pr.ReviewDecision}";
+        if (pr.CiStatus is "FAILURE" or "PENDING") yield return $"checks: {pr.CiStatus}";
+        if (pr.MergeStateStatus == "BLOCKED") yield return "GitHub: merging is blocked by branch protection";
+    }
 
     /// <summary>What GitHub would say about merging a policy-ready PR, when that differs from "go ahead".</summary>
     public static string? GitHubNote(PullRequest pr) => pr.MergeStateStatus switch
