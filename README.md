@@ -8,16 +8,29 @@
 2. **In which order should a set of PRs merge?** `plan` simulates the merges with real git and searches for the
    order with the fewest conflicts.
 
-It works with GitHub, Azure DevOps Server and plain local branches. Some rules hold for every command:
+gitwizz owns orchestration, policy and the merge-readiness decision. It works with GitHub, Azure DevOps Server and
+plain local branches. `plan` still works on its own, with no gates configured.
 
-- **Nothing is touched.** Merges are simulated with `git merge-tree` on synthetic commits, and commands run in
-  temporary worktrees. Your working tree, index and branches stay as they are.
-- **The target branch sets the rules.** Gates are read from `.gitwizz.yml` at the target's commit, so a PR can't
-  relax the gates it is judged by.
-- **Deterministic gates decide.** A gate that can't run is an `error` (verdict *undetermined*), never mistaken for a
-  broken change. AI review is advisory until a benchmark proves the model, and it only talks to self-hosted models.
-- **Stable output.** Every command has versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
-  `gitwizz.context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`) and documented [exit codes](#exit-codes).
+### Principles
+
+- **Deterministic evidence before AI judgement.** Builds, tests and merge simulation decide. A gate that can't run is
+  an `error` (verdict *undetermined*), never mistaken for a broken change.
+- **AI is advisory** until a [benchmark](#ai-quality-benchmark-when-ai-review-may-block) has validated the model and
+  prompt for blocking. It only talks to **self-hosted** models and sees a bounded evidence package, never the
+  repository.
+- **One result shape for every gate**: status, blocking, findings, evidence, duration, command, tool version.
+- **Risk-based checks for PRs.** The PR's risk picks the gate profile and the test suites; full regression belongs
+  to release gates.
+- **Providers behind adapters.** GitHub (`gh`), Azure DevOps Server (`ado`) and local branches fill one
+  provider-neutral model.
+- **Reuse, don't reimplement.** Documentation gaps come from docwizz, tests from your test runner, security findings
+  from your scanners (as `command` gates). gitwizz runs them and reads their results.
+- **Traceable and auditable.** Policy is read from the target branch's commit, so a PR can't relax the gates it is
+  judged by. Every result names its policy source; `--evidence` keeps full logs and the result; AI reviews record
+  the hash of their input. Your working tree, index and branches are never touched: merges are simulated with
+  `git merge-tree`, commands run in temporary worktrees.
+- **Stable output.** Human-readable text and versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
+  `gitwizz.context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`), plus documented [exit codes](#exit-codes).
 
 Design rationale: [PLAN.md](PLAN.md) (German).
 
@@ -131,6 +144,20 @@ it blocks, findings (message, file, line, rule, evidence), evidence references, 
 The verdict is `ready`, `blocked` (a blocking gate failed or was left unrun) or `undetermined` (only gate errors).
 Advisory gates (`blocking: false`; `ai-review` by default) are reported but never block.
 
+### From PR to verdict
+
+| Step | What gitwizz does |
+|---|---|
+| Collect context and linked requirements | the provider loads the PR, reviews, checks and linked work items with their acceptance criteria ([`context`](#pr-context-as-json)) |
+| Calculate change impact | changed files and C# members, API changes, and the PR's **risk** (`low`/`medium`/`high`, with reasons) |
+| Select applicable gates | the profile from `--profile` or the risk; gates whose `paths` don't match are skipped |
+| Run deterministic checks and tests | merge simulation, policy, build, test, docwizz, commands, the test environment, and the test suites the change selects ([`trace`](#test-selection-and-traceability-trace)) |
+| Run AI-assisted review | an `ai-review` gate, if configured, on the [bounded evidence package](#ai-review) |
+| Aggregate evidence | one result per gate; `--evidence` keeps logs, packages and `evaluation.json` |
+| Evaluate the readiness policy | blocking vs advisory gates → `ready`, `blocked` or `undetermined` |
+| Explain blockers | `explain`: every blocking decision with its evidence, and the criteria matrix |
+| Optimize the merge | [`plan`](#merge-order-plan): the merge order and the next merge command. gitwizz proposes the command; it doesn't run it |
+
 ### Gates
 
 Two gates are built in and run without configuration:
@@ -147,7 +174,7 @@ Gate types to configure:
 |---|---|
 | `build`, `test` | the command detected from the project (`dotnet`, `npm`, `go`, `cargo`, Maven, Gradle, Python, `make`), or `run:` |
 | `docwizz` | `docwizz check . --since $GITWIZZ_TARGET_SHA`: the documentation gaps the change introduces |
-| `command` | any command |
+| `command` | any command, e.g. a security scanner or linter |
 | `traceability` | the test suites the change needs ([trace](#test-selection-and-traceability-trace)) |
 | `environment` | a per-PR deployment ([environments](#ephemeral-pr-test-environments)) |
 | `ai-review` | a self-hosted model, advisory ([AI review](#ai-review)) |
@@ -659,6 +686,11 @@ Done: the v1, v2 and v0.4 planner work, and the PR quality & merge orchestrator 
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), requirement-to-test traceability
 with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), the AI quality benchmark
 that decides when AI review may block (#59), and ephemeral per-PR test environments (#58).
+
+Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
+score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR
+builds aren't visible through `ado`; change impact is C#-only and doesn't check architecture rules (docwizz's
+`architecture` layers do); merges are proposed, not executed.
 
 Open, from [PLAN.md](PLAN.md): structural analysis beyond C#, and recording real merge outcomes (CI result,
 resolution) next to the git-history replay.
