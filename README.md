@@ -331,7 +331,8 @@ gitwizz evidence 42 -o pkg.json   # exactly what a review would send, without co
 
 An `ai-review` gate asks a **self-hosted**, OpenAI-compatible model (vLLM, llama.cpp server, Ollama, TGI, LocalAI, …)
 to review the PR. It is optional, independent of the deterministic gates, and **advisory**: it never blocks a merge
-(even with `blocking: true`) until a benchmark has validated the model and prompt.
+(even with `blocking: true`) until a benchmark has validated the model and prompt
+([promotion rule](#ai-quality-benchmark-when-ai-review-may-block)).
 
 ```yaml
 gates:
@@ -379,6 +380,54 @@ status itself.
 The result records the model the endpoint reported, prompt version and hash, token usage and the package hash. With
 `--evidence <dir>`, the package is stored as `<gate>-package.json`. An unreachable endpoint, an HTTP error or an answer
 without a JSON `findings` array is an `error`, not a verdict.
+
+### AI quality benchmark: when AI review may block
+
+AI review stays advisory until it has measurable evidence of quality. `gitwizz benchmark` runs the configured
+self-hosted model over **labelled cases** and scores it; only a committed, passing baseline for exactly this model and
+prompt lets an `ai-review` gate with `blocking: true` block.
+
+```bash
+gitwizz evidence 42 -o benchmark/rate-sign.json   # then add "expected": [...] by hand: a labelled case
+gitwizz benchmark                                 # score every case, compare with the accepted baseline
+gitwizz benchmark -f json -o bench.json           # machine-readable result (schema gitwizz.benchmark/v1)
+gitwizz benchmark --accept                        # write the result as the baseline; commit it to promote the gate
+```
+
+A case is an evidence package plus `"expected"`: the findings a good review must report (`file`, new-side `line`
+±3, optionally `rule`); `[]` marks a clean change, where any finding is a false positive. Build them from past PRs with
+known outcomes: human review findings, defects found before or after merge, rule violations, and changes that drew
+false alarms. `expected`, `id` and `notes` are stripped before the model sees the package. See
+[docs/benchmark/negative-rate.json](docs/benchmark/negative-rate.json).
+
+| Metric | Meaning |
+|---|---|
+| precision | reported findings (kept, not `info`) that match an expected one |
+| recall | expected findings that were reported |
+| false-positive rate | clean cases with any reported finding |
+| evidence rejection rate | findings rejected for missing or invented evidence (a model quality signal) |
+| `generatedTestPassRate`, `acceptanceCriterionCoverage`, `mutationScore` | `null`: gitwizz doesn't generate tests yet, so these aren't measured rather than made up |
+
+```yaml
+benchmark:
+  cases: benchmark                              # directory of *.json cases
+  baseline: .gitwizz/benchmark-baseline.json
+  thresholds:
+    min_precision: 0.8
+    min_recall: 0.5
+    max_false_positive_rate: 0.1
+    min_cases: 10
+    max_regression: 0.02                         # allowed drop per metric against the baseline
+```
+
+**Promotion rule.** An `ai-review` gate with `blocking: true` blocks only when the **target branch's commit** holds a
+baseline whose fingerprint (model, prompt version and prompt hash) matches the current configuration and whose metrics
+meet the current thresholds. Otherwise it runs advisory and says why (`ai-promotion` finding). A new model or prompt
+needs a new benchmark; a pull request can't promote the gate that judges it.
+
+The benchmark runs offline against the configured endpoint only (the same self-hosting rules as the gate), at
+temperature 0 with a fixed seed. It exits `0` when thresholds are met without regressions against the baseline, else
+`3`. It never changes the repository: it writes only `-o` and, with `--accept`, the baseline file.
 
 ## Azure DevOps Server
 
@@ -566,4 +615,5 @@ Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 
 All planned v1, v2 and v0.4 issues are done. The PR quality & merge orchestrator epic (#53) adds quality gates and
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), and requirement-to-test
-traceability with risk-based test selection (#57), and advisory AI review on a bounded evidence package (#56). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+traceability with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), and the AI quality
+benchmark that decides when AI review may block (#59). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.

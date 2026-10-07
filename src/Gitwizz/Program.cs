@@ -33,6 +33,7 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
+    if (command == "benchmark") return Cli.Benchmark(opt, err);
     if (command == "evidence")
         return Cli.EvidencePackage(subject ?? throw new ArgumentException("need a pull request: gitwizz evidence <pr>"), opt, err);
     if (command == "trace")
@@ -41,7 +42,7 @@ try
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, evidence, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, evidence, benchmark, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -69,8 +70,9 @@ public static partial class Cli
         ["context"] = ["target", "provider", "output", "repo"],
         ["trace"] = [.. Common, "run", "evidence"],
         ["evidence"] = ["target", "provider", "strategy", "output", "repo"],
+        ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
     };
-    static readonly string[] Flags = ["all-open", "run"];
+    static readonly string[] Flags = ["all-open", "run", "accept"];
 
     /// <summary>
     /// Parses arguments into option → value (flags become "true"), resolving aliases; options the command doesn't take
@@ -300,6 +302,44 @@ public static partial class Cli
     }
 
     /// <summary>
+    /// Runs the AI review benchmark: every labelled case against the configured self-hosted model, scored and compared
+    /// with the accepted baseline. --accept writes the result as the new baseline (commit it to promote the gate).
+    /// Returns 0 when thresholds are met without regressions, else 3. Writes nothing else.
+    /// </summary>
+    public static int Benchmark(Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var root = git.Run("rev-parse", "--show-toplevel");
+        var config = RepoConfig.Load(git); // the working tree: measure a configuration before committing it
+        if (string.IsNullOrWhiteSpace(config.Review.Model)) throw new InvalidOperationException($"review.model is not set in {RepoConfig.FileName}");
+        var (format, output) = FormatOption(opt, "text", "text", "json");
+        var cases = Gitwizz.Benchmark.LoadCases(Path.Combine(root, opt.GetValueOrDefault("cases") ?? config.Benchmark.Cases));
+        var baselinePath = Path.Combine(root, opt.GetValueOrDefault("baseline") ?? config.Benchmark.Baseline);
+        var baseline = File.Exists(baselinePath) ? System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(baselinePath)) : null;
+        var results = Gitwizz.Benchmark.Run(cases, config.Review, status: m => err.MarkupLine($"[grey]{Markup.Escape(m)}[/]"));
+        var result = Gitwizz.Benchmark.Result(results, config.Review, config.Benchmark.Thresholds, baseline);
+        var json = Gitwizz.Benchmark.Json(result);
+        var m = result["metrics"]!;
+        var regressions = result["baseline"]?["regressions"]?.AsArray().Select(r => r!.GetValue<string>()).ToList() ?? [];
+        var text = $"""
+            AI REVIEW BENCHMARK  {config.Review.Model}, prompt {AiReviewGate.PromptVersion}
+            Cases: {m["cases"]} ({m["errors"]} errored)
+            Precision: {m["precision"]}   Recall: {m["recall"]}   False-positive rate: {m["falsePositiveRate"]}   Evidence rejected: {m["evidenceRejectionRate"]}
+            Thresholds: {((bool)result["passed"]! ? "met" : "NOT met: " + string.Join("; ", result["failures"]!.AsArray().Select(f => f!.GetValue<string>())))}
+            Baseline: {(baseline is null ? "none" : result["baseline"]!["sameConfiguration"]!.GetValue<bool>() ? "same configuration" : $"other configuration ({baseline["fingerprint"]})")}{(regressions.Count > 0 ? "; regressions: " + string.Join("; ", regressions) : "")}
+
+            """;
+        Write(format == "json" ? json + "\n" : text, format, output, err);
+        if (opt.ContainsKey("accept"))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(baselinePath)!);
+            File.WriteAllText(baselinePath, json + "\n");
+            err.MarkupLine($"[springgreen3]✔[/] baseline written to [bold]{Markup.Escape(Path.GetRelativePath(root, baselinePath))}[/]; commit it to make it count");
+        }
+        return (bool)result["passed"]! && regressions.Count == 0 ? 0 : 3;
+    }
+
+    /// <summary>
     /// Prints the bounded evidence package an AI review of the PR would get (schema gitwizz.evidence/v1), built on the
     /// merged state, without contacting any model: to audit what leaves the machine, or to review it by other means.
     /// </summary>
@@ -428,6 +468,7 @@ public static partial class Cli
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
               gitwizz evidence <pr>             the bounded evidence package an AI review would see (JSON)
+              gitwizz benchmark [[--accept]]       measure AI review quality on labelled cases; --accept saves the baseline
               gitwizz trace <pr> [[--run]]       which tests the change needs and why; acceptance criteria -> tests -> results
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
               gitwizz help | version
