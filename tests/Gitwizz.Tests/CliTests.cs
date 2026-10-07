@@ -1,7 +1,7 @@
 using System.Text.Json;
-using PrOptimizer;
+using Gitwizz;
 
-namespace PrOptimizer.Tests;
+namespace Gitwizz.Tests;
 
 public class CliTests
 {
@@ -21,7 +21,7 @@ public class CliTests
     [Fact]
     public void Example_repository_shows_every_outcome()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "pr-opt-example-" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(Path.GetTempPath(), "gitwizz_example-" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
             Example.Create(dir);

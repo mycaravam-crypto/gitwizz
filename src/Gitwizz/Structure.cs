@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>
 /// Level 3/4 analysis on C# syntax (Roslyn): members touched by hunks, declared API and the names new code uses.

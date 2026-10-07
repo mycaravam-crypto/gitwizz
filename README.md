@@ -1,6 +1,6 @@
-# gitwizz — PR Merge Optimizer
+# gitwizz — PR merge order planner
 
-`pr-optimizer` finds a low-conflict order for merging a set of pull requests into a target branch.
+`gitwizz` finds a low-conflict order for merging a set of pull requests into a target branch.
 It doesn't sort PRs by size or file overlap. It **simulates** the merges with real git
 (`git merge-tree`) on synthetic commits and searches for the order with the lowest total cost.
 Your working tree, index and branches are never touched.
@@ -16,7 +16,7 @@ Design rationale: [PLAN.md](PLAN.md) (German).
 ## Quick start
 
 ```bash
-dotnet run --project src/PrOptimizer -- example   # builds a demo repo and plans it
+dotnet run --project src/Gitwizz -- example   # builds a demo repo and plans it
 ```
 
 The example repository has seven branches. Between them they show every outcome: independent PRs you can merge
@@ -26,40 +26,59 @@ It ends with commands to try on the demo repo yourself.
 
 ## Build & test
 
+The same commands work on Linux, macOS and Windows (PowerShell, cmd or Git Bash).
+
 ```bash
 dotnet build
 dotnet test
-# fastest: precompiled (ReadyToRun) single-file binary
-dotnet publish src/PrOptimizer -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
 ```
+
+Fastest: a precompiled (ReadyToRun) single-file binary. Pick the runtime identifier for your platform:
+
+```bash
+dotnet publish src/Gitwizz -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
+dotnet publish src/Gitwizz -c Release -r win-x64   --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
+dotnet publish src/Gitwizz -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
+```
+
+The binary lands in `src/Gitwizz/bin/Release/net10.0/<rid>/publish/` (`gitwizz`, or `gitwizz.exe` on Windows).
+ReadyToRun compiles for the target platform, so build the Windows binary on Windows (or drop `-p:PublishReadyToRun=true`).
 
 ## Install as a command
 
-Publish the DLL to a fixed folder, then point a shell alias at it.
+Publish the DLL to a fixed folder, then point a `gitwizz` command at it.
+
+**Linux / macOS / Git Bash on Windows** (bash or zsh): add the alias to your startup file so every new shell has it.
 
 ```bash
-dotnet publish src/PrOptimizer -c Release -o ~/tools/pr-optimizer   # creates ~/tools/pr-optimizer/pr-optimizer.dll
-```
-
-**Bash / zsh**: add the alias to your startup file so every new shell has it.
-
-```bash
-echo "alias pr-optimizer='dotnet ~/tools/pr-optimizer/pr-optimizer.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
+dotnet publish src/Gitwizz -c Release -o ~/tools/gitwizz   # creates ~/tools/gitwizz/gitwizz.dll
+echo "alias gitwizz='dotnet ~/tools/gitwizz/gitwizz.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
 source ~/.bashrc
 ```
 
-**PowerShell**: `Set-Alias` can't pass arguments, so use a function. `$PROFILE` runs at every start.
+**Windows PowerShell / PowerShell 7**: `Set-Alias` can't pass arguments, so use a function. `$PROFILE` runs at every start.
 
 ```powershell
-dotnet publish src/PrOptimizer -c Release -o $HOME\tools\pr-optimizer
+dotnet publish src/Gitwizz -c Release -o "$HOME\tools\gitwizz"
 if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
-Add-Content $PROFILE 'function pr-optimizer { dotnet "$HOME\tools\pr-optimizer\pr-optimizer.dll" @args }'
+Add-Content $PROFILE 'function gitwizz { dotnet "$HOME\tools\gitwizz\gitwizz.dll" @args }'
 . $PROFILE
 ```
 
 If PowerShell refuses to load the profile, allow local scripts once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Then run `pr-optimizer --all-open` in any repository. After pulling changes, re-run the `dotnet publish` line to update.
+**Windows cmd** (also works from PowerShell): cmd has no persistent aliases, so put a small `gitwizz.cmd` on your `PATH`.
+Run this once in PowerShell, then open a new terminal:
+
+```powershell
+dotnet publish src/Gitwizz -c Release -o "$HOME\tools\gitwizz"
+New-Item -Type Directory -Force "$HOME\bin" | Out-Null
+Set-Content "$HOME\bin\gitwizz.cmd" "@dotnet `"$HOME\tools\gitwizz\gitwizz.dll`" %*" -Encoding ASCII
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (";$userPath;" -notlike "*;$HOME\bin;*") { [Environment]::SetEnvironmentVariable('Path', "$userPath;$HOME\bin", 'User') }
+```
+
+Then run `gitwizz --all-open` in any repository. After pulling changes, re-run the `dotnet publish` line to update.
 
 ## Documentation gaps
 
@@ -75,15 +94,15 @@ docwizz check . --since origin/main      # only what your branch introduces, as 
 
 ## Usage
 
-Run inside the repository. `plan` is the default command, so `pr-optimizer --all-open` is enough.
+Run inside the repository. `plan` is the default command, so `gitwizz --all-open` is enough.
 
 ```bash
-pr-optimizer --all-open                     # all open GitHub PRs (or all unmerged local branches)
-pr-optimizer -a -s squash                   # same, planned for squash merges
-pr-optimizer -p 101,102,105 -f json         # specific GitHub PRs as JSON
-pr-optimizer -p feature/a,feature/b --verify "dotnet test"
-pr-optimizer -a -o plan.html                # shareable HTML report (format from the extension)
-pr-optimizer help                           # all options with examples
+gitwizz --all-open                      # all open GitHub PRs (or all unmerged local branches)
+gitwizz -a -s squash                    # same, planned for squash merges
+gitwizz -p 101,102,105 -f json          # specific GitHub PRs as JSON
+gitwizz -p feature/a,feature/b --verify "dotnet test"
+gitwizz -a -o plan.html                 # shareable HTML report (format from the extension)
+gitwizz help                            # all options with examples
 ```
 
 | Option | Default | Meaning |
@@ -189,10 +208,10 @@ Unknown keys, empty patterns and negative costs are errors.
 provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─▶ beam search over simulations ─▶ report ─▶ verify
 ```
 
-1. **Providers** ([Providers.cs](src/PrOptimizer/Providers.cs)): `local` treats each branch or ref as a PR.
+1. **Providers** ([Providers.cs](src/Gitwizz/Providers.cs)): `local` treats each branch or ref as a PR.
    `github` reads open PRs through `gh` (title, body, labels, draft, review decision, CI rollup)
    and fetches `refs/pull/N/head`.
-2. **Analysis** ([Analyzer.cs](src/PrOptimizer/Analyzer.cs)): changed files (with renames and deletes) and
+2. **Analysis** ([Analyzer.cs](src/Gitwizz/Analyzer.cs)): changed files (with renames and deletes) and
    `-U0` hunks against the merge-base. For C# files, hunks are mapped to the **members** they touch with Roslyn
    (e.g. `Billing.Charge(decimal)`), so two PRs editing different lines of the same method are still flagged.
    Roslyn also records each PR's **API delta** (declared names with the argument counts they accept, before vs after)
@@ -226,14 +245,14 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    Required reviews come through GitHub's review decision. With a **merge queue**, the tool only plans: the next step
    is `gh pr merge N` (which enqueues), and the strategy defaults to the queue's merge method. A `merge` plan on a
    branch that requires linear history gets a warning.
-6. **Simulation** ([Simulator.cs](src/PrOptimizer/Simulator.cs)): `State₀ = target HEAD`;
+6. **Simulation** ([Simulator.cs](src/Gitwizz/Simulator.cs)): `State₀ = target HEAD`;
    `git merge-tree --write-tree State PR`. If the merge is clean, `git commit-tree` creates the next synthetic state
    (two parents for `merge`, one for `squash`; `ff-only` requires ancestry). `rebase` **replays each commit** like
    `git rebase`: `merge-tree --merge-base=<parent>` per commit, so a conflict in one commit blocks the PR even if
    the final tree would merge cleanly. A PR that is a single commit on its merge-base is replayed as one batched merge,
    since the result is identical.
    Results are cached by `(state, PR head)`, and commits are only created for states the search keeps.
-7. **Planner** ([Planner.cs](src/PrOptimizer/Planner.cs)): beam search minimising
+7. **Planner** ([Planner.cs](src/Gitwizz/Planner.cs)): beam search minimising
    `Σ marginalCost(PRᵢ | Stateᵢ)`, where
 
    ```text
@@ -262,7 +281,7 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
    Each order's outcome is `clean`, `regenerate` or `conflict`, with any shared member listed. The reason is a semantic
    risk when there is one ("legacy uses GetUser(1 args), changed by api"). A policy-blocked PR is explained against the
    planned PR it overlaps most (`policy blocked`).
-8. **Verification** ([Verify.cs](src/PrOptimizer/Verify.cs)): `git worktree add --detach` on a synthetic plan state,
+8. **Verification** ([Verify.cs](src/Gitwizz/Verify.cs)): `git worktree add --detach` on a synthetic plan state,
    run the command, then remove the worktree. `--verify-at` chooses the states (`final`, `critical`, `step`). Only the
    chosen plan's states are verified, never search candidates, so the test count stays linear. The first failure stops
    verification and names the step ("FAILED after #108").
@@ -286,7 +305,7 @@ Search cost is kept low in four ways:
 | 20 PRs | 8.6 s | 0.47 s |
 | 60 PRs | 10.2 s | 0.8 s |
 
-Set `PR_OPT_TIMING=1` to print a timing for each phase on stderr.
+Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 
 ## Known limitations
 

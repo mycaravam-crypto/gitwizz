@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\PrOptimizer\PrOptimizer.csproj" />
+    <ProjectReference Include="..\..\src\Gitwizz\Gitwizz.csproj" />
   </ItemGroup>
 
 </Project>

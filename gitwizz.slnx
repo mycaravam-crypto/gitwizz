@@ -1,8 +1,8 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/PrOptimizer/PrOptimizer.csproj" />
+    <Project Path="src/Gitwizz/Gitwizz.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/PrOptimizer.Tests/PrOptimizer.Tests.csproj" />
+    <Project Path="tests/Gitwizz.Tests/Gitwizz.Tests.csproj" />
   </Folder>
 </Solution>

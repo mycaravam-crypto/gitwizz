@@ -1,4 +1,4 @@
-using PrOptimizer;
+using Gitwizz;
 using Spectre.Console;
 
 var err = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) });
@@ -18,14 +18,14 @@ try
     var opt = Cli.Parse(rest);
     if (command == "example")
     {
-        var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "pr-optimizer-example");
+        var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
         Example.Create(dir);
         err.MarkupLine($"[grey]example repository:[/] [bold]{Markup.Escape(dir)}[/]\n");
         opt["repo"] = dir;
         opt["all-open"] = "true";
         opt.TryAdd("target", "main");
         var code = Cli.Plan(opt, err);
-        err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  pr-optimizer plan --all-open --strategy squash\n  pr-optimizer plan -p feature/billing-tax,fix/billing-rounding -f json\n  pr-optimizer plan --all-open -o plan.html");
+        err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
     if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, example, help)");
@@ -109,7 +109,7 @@ public static partial class Cli
             throw new ArgumentException($"unknown format '{format}' (pretty, text, json, html)");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var timing = Environment.GetEnvironmentVariable("PR_OPT_TIMING") == "1";
+        var timing = Environment.GetEnvironmentVariable("GITWIZZ_TIMING") == "1";
         Plan Pipeline(Action<string> status)
         {
             if (timing) status += m => Console.Error.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {m}");
@@ -202,19 +202,19 @@ public static partial class Cli
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
         : msg.Contains("no open pull requests") ? "use --prs to pick branches/PRs explicitly, or --target for another branch"
         : msg.StartsWith("invalid .gitwizz.yml") ? "fix the file or remove it to use the defaults; see the README section 'Configuration'"
-        : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'pr-optimizer help'"
+        : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'gitwizz help'"
         : null;
 
     public static void Help(IAnsiConsole c)
     {
         c.MarkupLine("""
-            [bold steelblue1]pr-optimizer[/] finds the merge order for pull requests with the fewest conflicts,
+            [bold steelblue1]gitwizz[/] finds the merge order for pull requests with the fewest conflicts,
             by simulating real git merges. Your working tree and branches are never touched.
 
             [bold]Usage[/]
-              pr-optimizer [grey]plan[/] [[options]]      plan a merge order (default command)
-              pr-optimizer example [[-r <dir>]]  build a demo repository and plan it
-              pr-optimizer help | version
+              gitwizz [grey]plan[/] [[options]]      plan a merge order (default command)
+              gitwizz example [[-r <dir>]]  build a demo repository and plan it
+              gitwizz help | version
 
             [bold]Choose pull requests[/]
               -a, --all-open            all open PRs (GitHub) or all unmerged local branches
@@ -236,13 +236,13 @@ public static partial class Cli
 
             [bold]Examples[/]
               [grey]# all open GitHub PRs, squash merges[/]
-              pr-optimizer --all-open -s squash
+              gitwizz --all-open -s squash
               [grey]# specific local branches, verified with the test suite[/]
-              pr-optimizer -p feature/a,feature/b --verify "dotnet test"
+              gitwizz -p feature/a,feature/b --verify "dotnet test"
               [grey]# shareable HTML report[/]
-              pr-optimizer --all-open -o plan.html
+              gitwizz --all-open -o plan.html
               [grey]# try it on a demo repository[/]
-              pr-optimizer example
+              gitwizz example
             """);
     }
 }

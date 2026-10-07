@@ -1,6 +1,6 @@
-using PrOptimizer;
+using Gitwizz;
 
-namespace PrOptimizer.Tests;
+namespace Gitwizz.Tests;
 
 public class StructureTests
 {

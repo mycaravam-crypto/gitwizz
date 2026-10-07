@@ -1,4 +1,4 @@
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>Builds a small demo repository that shows every kind of outcome the planner reports.</summary>
 public static class Example
@@ -49,7 +49,7 @@ public static class Example
     public static void Create(string dir)
     {
         // Only ever replace a directory this command created (marker inside .git), never user data.
-        var marker = Path.Combine(dir, ".git", "pr-optimizer-example");
+        var marker = Path.Combine(dir, ".git", "gitwizz-example");
         if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any())
         {
             if (!File.Exists(marker)) throw new InvalidOperationException($"'{dir}' exists and is not an example repository; choose another --repo");
