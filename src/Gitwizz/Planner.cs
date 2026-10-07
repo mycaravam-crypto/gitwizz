@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>
 /// Finds a sequence minimising Σ marginalCost(PR_i | State_i) via beam search over real merge simulations.

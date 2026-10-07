@@ -1,7 +1,7 @@
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>Rich terminal report. Every color is paired with an icon or text, so nothing relies on color alone.</summary>
 public static class Pretty
@@ -48,7 +48,7 @@ public static class Pretty
         Explanations(plan, c);
         Verification(plan, c);
         if (Report.NextCommand(plan) is { } next)
-            c.Write(new Panel(new Markup($"[bold]{Esc(next)}[/]\n[{Hex(Muted)}]then re-run pr-optimizer: the plan is re-evaluated after every real merge[/]"))
+            c.Write(new Panel(new Markup($"[bold]{Esc(next)}[/]\n[{Hex(Muted)}]then re-run gitwizz: the plan is re-evaluated after every real merge[/]"))
                 .Header($" next step: merge {Esc(plan.Steps[0].Pr.Id)} ").RoundedBorder().BorderColor(Ok).Expand());
         c.Write(new Rule($"[{Hex(Muted)}]total cost[/] [bold]{plan.TotalCost:0.##}[/]").RuleStyle(Style.Parse("grey")).RightJustified());
     }

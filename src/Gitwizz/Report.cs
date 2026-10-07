@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 public static class Report
 {

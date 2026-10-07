@@ -646,7 +646,7 @@ repository-specific optimizer
 # 17. Recommended Architecture
 
 ```text
-pr-optimizer/
+gitwizz/
 ├── cmd/
 │   └── root.go
 │
@@ -737,7 +737,7 @@ Damit entspricht die Simulation möglichst direkt dem Git-Verhalten.
 Beispiel:
 
 ```bash
-pr-optimizer plan \
+gitwizz plan \
   --target main \
   --prs 101,102,105,108,112 \
   --strategy squash \
@@ -747,7 +747,7 @@ pr-optimizer plan \
 Automatisch:
 
 ```bash
-pr-optimizer plan \
+gitwizz plan \
   --target main \
   --all-open \
   --provider github
@@ -756,7 +756,7 @@ pr-optimizer plan \
 Verification:
 
 ```bash
-pr-optimizer plan \
+gitwizz plan \
   --target main \
   --all-open \
   --verify "dotnet test"
@@ -765,7 +765,7 @@ pr-optimizer plan \
 Maschinenlesbar:
 
 ```bash
-pr-optimizer plan \
+gitwizz plan \
   --target main \
   --all-open \
   --format json

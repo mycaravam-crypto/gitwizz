@@ -1,4 +1,4 @@
-namespace PrOptimizer;
+namespace Gitwizz;
 
 public static class Verify
 {
@@ -28,7 +28,7 @@ public static class Verify
     /// <summary>Runs a command in a temporary detached worktree on the given commit, then removes it.</summary>
     public static (bool Ok, string Output) Run(Git git, string commit, string command)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "pr-optimizer-" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(Path.GetTempPath(), "gitwizz-" + Guid.NewGuid().ToString("N")[..8]);
         git.Run("worktree", "add", "--detach", "--quiet", dir, commit);
         try
         {

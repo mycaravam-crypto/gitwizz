@@ -1,7 +1,7 @@
-using PrOptimizer;
+using Gitwizz;
 using Spectre.Console;
 
-namespace PrOptimizer.Tests;
+namespace Gitwizz.Tests;
 
 public class PrettyTests
 {
