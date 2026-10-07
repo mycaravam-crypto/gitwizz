@@ -62,7 +62,10 @@ public record RepoConfig
         public Dictionary<string, string> Profiles { get; init; } = []; // risk level -> profile
     }
 
-    /// <summary>Reads .gitwizz.yml from the repository root, or Default without one; throws on invalid YAML or values.</summary>
+    /// <summary>
+    /// Reads .gitwizz.yml from the working tree's root, or Default without one. Throws InvalidOperationException on
+    /// invalid YAML or values (see Parse), and when the directory isn't a git repository.
+    /// </summary>
     public static RepoConfig Load(Git git)
     {
         var path = Path.Combine(git.Run("rev-parse", "--show-toplevel"), FileName);

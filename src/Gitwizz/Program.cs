@@ -93,7 +93,8 @@ public static partial class Cli
 
     /// <summary>
     /// Runs the plan command: validates options, loads PRs from the provider, analyzes, plans, optionally verifies, and
-    /// renders or writes the report. Returns 1 if verification failed, else 0.
+    /// renders or writes the report. Returns 1 if verification failed, else 0. Throws ArgumentException on invalid
+    /// options and InvalidOperationException when the repository, provider or configuration can't be read.
     /// </summary>
     public static int Plan(Dictionary<string, string> opt, IAnsiConsole err)
     {
