@@ -25,6 +25,13 @@ public class PullRequest
     public string HeadRef { get; init; } = "";
     public string BaseRef { get; init; } = "";
     public List<string> Labels { get; init; } = [];
+    public string Author { get; init; } = "";
+    public string Url { get; init; } = "";
+
+    // Provider-neutral context (GitHub, Azure DevOps); empty for local branches.
+    public List<Reviewer> Reviewers { get; init; } = [];
+    public List<Check> Checks { get; init; } = [];
+    public List<WorkItem> WorkItems { get; set; } = []; // linked requirements: filled for a single PR (evaluate, context)
 
     // Filled by the analyzer.
     public string BaseSha { get; set; } = "";
@@ -50,6 +57,18 @@ public class PullRequest
 
     public override string ToString() => Id;
 }
+
+/// <summary>A reviewer's latest vote: approved, approved-with-suggestions, changes-requested, waiting-for-author, commented or none.</summary>
+public record Reviewer(string Name, string Vote, bool? Required = null);
+
+/// <summary>A CI check or build on the PR: status success, failure or pending.</summary>
+public record Check(string Name, string Status, string? Url = null);
+
+/// <summary>
+/// A linked requirement: an Azure DevOps work item or a GitHub issue the PR closes. Id is provider-qualified
+/// ("AB#4711", "#57"); AcceptanceCriteria are the individual criteria, one per entry.
+/// </summary>
+public record WorkItem(string Id, string Type, string Title, string State, List<string> AcceptanceCriteria, string? Url = null);
 
 /// <summary>Clean: the merged tree is the next state. RegenerationRequired: only regenerable files conflict; the next state
 /// takes the PR's version of them and the step needs a regenerate. Conflict: no next state.</summary>
