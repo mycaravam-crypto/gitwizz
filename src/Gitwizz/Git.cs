@@ -3,7 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>A finished process. TimedOut: killed (with its children) after the timeout; ExitCode is then 124, as timeout(1) reports.</summary>
 public record GitResult(int ExitCode, string Stdout, string Stderr, bool TimedOut = false);
@@ -79,7 +79,7 @@ public class Git(string repoDir)
     /// </summary>
     public string ReplacePaths(string tree, string commit, IReadOnlyCollection<string> paths)
     {
-        var index = Path.Combine(Path.GetTempPath(), "pr-optimizer-index-" + Guid.NewGuid().ToString("N"));
+        var index = Path.Combine(Path.GetTempPath(), "gitwizz-index-" + Guid.NewGuid().ToString("N"));
         var env = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = index };
         string Must(GitResult r, string what) =>
             r.ExitCode == 0 ? r.Stdout.Trim() : throw new InvalidOperationException($"git {what} failed: {r.Stderr.Trim()}");
@@ -110,8 +110,8 @@ public class Git(string repoDir)
     {
         var body = new StringBuilder($"tree {tree}\n");
         foreach (var p in parents) body.Append($"parent {p}\n");
-        body.Append($"author pr-optimizer <pr-optimizer@localhost> {SyntheticDate} +0000\n");
-        body.Append($"committer pr-optimizer <pr-optimizer@localhost> {SyntheticDate} +0000\n\n");
+        body.Append($"author gitwizz <gitwizz@localhost> {SyntheticDate} +0000\n");
+        body.Append($"committer gitwizz <gitwizz@localhost> {SyntheticDate} +0000\n\n");
         body.Append(message).Append('\n');
         var content = Encoding.UTF8.GetBytes(body.ToString());
         byte[] obj = [.. Encoding.ASCII.GetBytes($"commit {content.Length}\0"), .. content];
@@ -230,7 +230,7 @@ public sealed class Worktree : IDisposable
     public Worktree(Git git, string commit)
     {
         _git = git;
-        Dir = Path.Combine(Path.GetTempPath(), "pr-optimizer-" + Guid.NewGuid().ToString("N")[..8]);
+        Dir = Path.Combine(Path.GetTempPath(), "gitwizz-" + Guid.NewGuid().ToString("N")[..8]);
         git.Run("worktree", "add", "--detach", "--quiet", Dir, commit);
     }
 

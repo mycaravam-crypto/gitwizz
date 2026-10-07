@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>
 /// Pass and Warn let the merge go ahead; Fail is a quality failure; Error means the gate couldn't run (tool missing,

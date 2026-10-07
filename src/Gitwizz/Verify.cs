@@ -1,4 +1,4 @@
-namespace PrOptimizer;
+namespace Gitwizz;
 
 public static class Verify
 {

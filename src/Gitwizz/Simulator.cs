@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>Merges PRs onto synthetic states without touching working tree or index. Thread-safe.</summary>
 public class Simulator(Git git, MergeStrategy strategy, RepoConfig? config = null)
@@ -66,7 +66,7 @@ public class Simulator(Git git, MergeStrategy strategy, RepoConfig? config = nul
                 return new(MergeOutcome.Conflict, conflicts.Select(f => $"{f} (commit {c[..7]})").ToList(), [], null);
             if (conflicts.Count > 0) tree = git.ReplacePaths(tree, c, conflicts); // as in FromMerge: never commit markers
             regenerate.AddRange(conflicts.Except(regenerate));
-            current = git.CommitTree(tree, $"pr-optimizer: {pr.Id} {c[..7]}", current);
+            current = git.CommitTree(tree, $"gitwizz: {pr.Id} {c[..7]}", current);
         }
         return new(regenerate.Count > 0 ? MergeOutcome.RegenerationRequired : MergeOutcome.Clean, [], regenerate, new(current));
     }
@@ -90,7 +90,7 @@ public class Simulator(Git git, MergeStrategy strategy, RepoConfig? config = nul
         if (!conflicts.All(Config.IsRegenerable))
             return new(MergeOutcome.Conflict, conflicts, [], null);
 
-        var msg = $"pr-optimizer: {pr.Id}";
+        var msg = $"gitwizz: {pr.Id}";
         string[] parents = strategy == MergeStrategy.Merge ? [state, pr.HeadSha] : [state];
         // Commit lazily: most simulated states are pruned by the beam and never need one.
         if (conflicts.Count == 0)

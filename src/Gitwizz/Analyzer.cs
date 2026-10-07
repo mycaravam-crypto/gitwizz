@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 public static class FileClasses
 {
@@ -98,8 +98,8 @@ public record RepoConfig
     {
         if (c.Gates.Any(g => g is null || string.IsNullOrWhiteSpace(g.Id))) return "every gate needs an id";
         if (c.Gates.GroupBy(g => g.Id).FirstOrDefault(g => g.Count() > 1) is { } dup) return $"gate '{dup.Key}' is defined twice";
-        if (c.Gates.FirstOrDefault(g => !PrOptimizer.Gates.Types.Contains(g.Kind)) is { } bad)
-            return $"gate '{bad.Id}' has unknown type '{bad.Kind}' ({string.Join(", ", PrOptimizer.Gates.Types)})";
+        if (c.Gates.FirstOrDefault(g => !Gitwizz.Gates.Types.Contains(g.Kind)) is { } bad)
+            return $"gate '{bad.Id}' has unknown type '{bad.Kind}' ({string.Join(", ", Gitwizz.Gates.Types)})";
         if (c.Gates.FirstOrDefault(g => g.Kind == "command" && string.IsNullOrWhiteSpace(g.Run)) is { } cmd) return $"gate '{cmd.Id}' needs a run: command";
         if (c.Gates.FirstOrDefault(g => g.Timeout <= 0) is { } t) return $"gate '{t.Id}': timeout must be a positive number of seconds";
         var ids = c.GateSpecs().Select(g => g.Id).ToHashSet();
@@ -117,7 +117,7 @@ public record RepoConfig
 
     /// <summary>Configured gates, plus the built-in merge and policy gates unless the file redefines them.</summary>
     public IEnumerable<GateSpec> GateSpecs() =>
-        Gates.Concat(PrOptimizer.Gates.BuiltIn.Where(b => Gates.All(g => g.Id != b.Id)));
+        Gates.Concat(Gitwizz.Gates.BuiltIn.Where(b => Gates.All(g => g.Id != b.Id)));
 
     /// <summary>Glob with * and ?; matched against the file name, or the whole path when the pattern has a '/'.</summary>
     public static bool Matches(string glob, string path) =>

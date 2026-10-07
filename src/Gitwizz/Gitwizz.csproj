@@ -5,8 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>pr-optimizer</AssemblyName>
-    <RootNamespace>PrOptimizer</RootNamespace>
+    <AssemblyName>gitwizz</AssemblyName>
+    <RootNamespace>Gitwizz</RootNamespace>
     <Version>0.5.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <TieredPGO>true</TieredPGO>

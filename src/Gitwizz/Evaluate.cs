@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Spectre.Console;
 
-namespace PrOptimizer;
+namespace Gitwizz;
 
 /// <summary>The merge-readiness verdict for one pull request, with every gate's result as evidence.</summary>
 public class Evaluation
@@ -248,6 +248,6 @@ public static class Evaluator
             t.AddRow($"{Markup.Escape(g.Id)}{(g.Blocking ? "" : " [grey](advisory)[/]")}", s, detail, $"[grey]{g.Duration.TotalSeconds:0.0}s[/]");
         }
         c.Write(t);
-        if (!e.Ready) c.MarkupLine($"[grey]why:[/] pr-optimizer explain {Markup.Escape(e.Pr.Id.TrimStart('#'))}");
+        if (!e.Ready) c.MarkupLine($"[grey]why:[/] gitwizz explain {Markup.Escape(e.Pr.Id.TrimStart('#'))}");
     }
 }

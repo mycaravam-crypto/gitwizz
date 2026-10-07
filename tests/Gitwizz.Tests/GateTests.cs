@@ -1,7 +1,7 @@
 using System.Text.Json;
-using PrOptimizer;
+using Gitwizz;
 
-namespace PrOptimizer.Tests;
+namespace Gitwizz.Tests;
 
 public class GateTests : IDisposable
 {

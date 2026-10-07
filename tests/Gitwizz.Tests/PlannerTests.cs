@@ -1,10 +1,10 @@
-using PrOptimizer;
+using Gitwizz;
 
-namespace PrOptimizer.Tests;
+namespace Gitwizz.Tests;
 
 public class PlannerTests : IDisposable
 {
-    readonly string _dir = Directory.CreateTempSubdirectory("pr-opt-test").FullName;
+    readonly string _dir = Directory.CreateTempSubdirectory("gitwizz_test").FullName;
     readonly Git _git;
 
     public PlannerTests()
@@ -201,7 +201,7 @@ public class PlannerTests : IDisposable
     [Fact]
     public void Detects_a_local_target_behind_its_remote()
     {
-        var clone = Directory.CreateTempSubdirectory("pr-opt-clone").FullName;
+        var clone = Directory.CreateTempSubdirectory("gitwizz_clone").FullName;
         try
         {
             Git.Exec(_dir, "git", ["clone", "-q", _dir, clone]);
@@ -395,7 +395,7 @@ public class PlannerTests : IDisposable
         var (ok, summary) = Verify.Plan(_git, plan, "! grep -q billing2 billing.cs", "step");
         Assert.False(ok);
         Assert.StartsWith("FAILED after billing", summary);
-        Assert.DoesNotContain("pr-optimizer-", _git.Run("worktree", "list"));
+        Assert.DoesNotContain("gitwizz-", _git.Run("worktree", "list"));
     }
 
     [Fact]

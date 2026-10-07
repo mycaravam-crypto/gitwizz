@@ -1,4 +1,4 @@
-namespace PrOptimizer;
+namespace Gitwizz;
 
 public enum MergeStrategy { Merge, Squash, Rebase, FfOnly }
 
