@@ -44,6 +44,8 @@ public record RepoConfig
     public Dictionary<string, List<string>> Profiles { get; init; } = []; // profile name -> gate ids, in run order
     public RiskPolicy Risk { get; init; } = new();
     public List<string> Secrets { get; init; } = [];             // environment variables whose values never appear in output
+    public List<TestSuite> Tests { get; init; } = [];            // test suites for risk-based selection and traceability
+    public TraceabilityPolicy Traceability { get; init; } = new();
 
     /// <summary>Where the rules came from, for the audit trail: "built-in", or the file and the commit it was read at.</summary>
     [YamlDotNet.Serialization.YamlIgnore] public string Source { get; init; } = "built-in";
@@ -110,6 +112,11 @@ public record RepoConfig
             return $"gate '{need.Id}' needs unknown gate '{need.n}'";
         if (c.Profiles.SelectMany(p => (p.Value ?? []).Select(g => (p.Key, g))).FirstOrDefault(x => !ids.Contains(x.g)) is { Key: not null } pg)
             return $"profile '{pg.Key}' names unknown gate '{pg.g}'";
+        if (c.Tests.Any(t => t is null || string.IsNullOrWhiteSpace(t.Id))) return "every test suite needs an id";
+        if (c.Tests.GroupBy(t => t.Id).FirstOrDefault(g => g.Count() > 1) is { } dupTest) return $"test suite '{dupTest.Key}' is defined twice";
+        if (c.Tests.FirstOrDefault(t => t.Kind != "manual" && string.IsNullOrWhiteSpace(t.Run)) is { } noRun) return $"test suite '{noRun.Id}' needs a run: command";
+        if (c.Tests.FirstOrDefault(t => t.Timeout <= 0) is { } tt) return $"test suite '{tt.Id}': timeout must be a positive number of seconds";
+        if (c.Traceability is null) return "traceability: needs keys (require)";
         if (c.Risk is null || c.Risk.MaxFiles < 1) return "risk.max_files must be at least 1";
         if (c.Risk.Profiles.FirstOrDefault(r => r.Key is not ("low" or "medium" or "high")) is { Key: not null } rk)
             return $"unknown risk level '{rk.Key}' (low, medium, high)";

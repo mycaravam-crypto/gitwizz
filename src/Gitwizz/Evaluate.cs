@@ -18,6 +18,7 @@ public class Evaluation
     public string Risk { get; init; } = "low";
     public List<string> RiskReasons { get; init; } = [];
     public List<GateResult> Gates { get; init; } = [];
+    public Trace? Trace { get; init; } // when a traceability gate ran
 
     /// <summary>No blocking gate failed, errored or was left unrun.</summary>
     public bool Ready => !Gates.Any(g => g.BlocksMerge);
@@ -104,7 +105,7 @@ public static class Evaluator
         return new Evaluation
         {
             Pr = ctx.Pr, Target = ctx.Target, TargetSha = ctx.TargetSha, Provider = ctx.Provider, Strategy = ctx.Strategy,
-            PolicySource = ctx.Config.Source, Profile = name, Risk = risk, RiskReasons = reasons, Gates = [.. ctx.Results.Values],
+            PolicySource = ctx.Config.Source, Profile = name, Risk = risk, RiskReasons = reasons, Gates = [.. ctx.Results.Values], Trace = ctx.Trace,
         };
     }
 
@@ -198,6 +199,7 @@ public static class Evaluator
             sb.AppendLine();
         }
         foreach (var g in e.Gates.Where(g => g.Status == GateStatus.Skipped && !g.BlocksMerge)) sb.AppendLine($"Skipped: {g.Id}: {g.Summary}");
+        if (e.Trace != null) sb.AppendLine().Append(Traceability.Text(e.Trace)).AppendLine();
         sb.AppendLine($"Decided by: {e.PolicySource}, profile {e.Profile}, risk {e.Risk} ({string.Join("; ", e.RiskReasons)})");
         return sb.ToString();
     }
@@ -225,6 +227,7 @@ public static class Evaluator
             tool = g.Tool is null ? null : new { name = g.Tool, version = g.ToolVersion },
             log = g.Log,
         }),
+        traceability = e.Trace is null ? null : Traceability.Model(e.Trace),
     }, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 
     /// <summary>Terminal rendering: verdict panel and a gate table; findings for gates that didn't pass.</summary>
