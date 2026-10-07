@@ -80,6 +80,9 @@ public sealed class GateContext : IDisposable
     /// <summary>Extra environment for workspace commands; starts with the GITWIZZ_* variables.</summary>
     public Dictionary<string, string> Env { get; } = [];
 
+    /// <summary>Requirement-to-test trace, set by the traceability gate.</summary>
+    public Trace? Trace { get; set; }
+
     /// <summary>Results of the gates run so far, by id.</summary>
     public Dictionary<string, GateResult> Results { get; } = [];
 
@@ -121,10 +124,10 @@ public sealed class Redactor
 public static partial class Gates
 {
     /// <summary>Known gate types.</summary>
-    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command"];
+    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability"];
 
     /// <summary>Types that run a command in the merged workspace.</summary>
-    public static readonly string[] Workspace = ["build", "test", "docwizz", "command"];
+    public static readonly string[] Workspace = ["build", "test", "docwizz", "command", "traceability"];
 
     /// <summary>Available without configuration: structural mergeability and repository policy (reviews, checks).</summary>
     public static readonly GateSpec[] BuiltIn = [new() { Id = "merge" }, new() { Id = "policy" }];
@@ -134,6 +137,7 @@ public static partial class Gates
     {
         "merge" => new MergeGate(),
         "policy" => new PolicyGate(),
+        "traceability" => new TraceabilityGate(),
         _ => new CommandGate(),
     };
 

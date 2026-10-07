@@ -19,7 +19,7 @@ if (command is "version" || rest.Contains("--version"))
 try
 {
     // evaluate / explain take the pull request as their first argument.
-    string? subject = command is "evaluate" or "explain" or "context" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    string? subject = command is "evaluate" or "explain" or "context" or "trace" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
     var opt = Cli.Parse(subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
@@ -33,11 +33,13 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
+    if (command == "trace")
+        return Cli.Trace(subject ?? throw new ArgumentException("need a pull request: gitwizz trace <pr>"), opt, err);
     if (command == "context")
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, context, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, evaluate, explain, trace, context, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -63,8 +65,9 @@ public static partial class Cli
         ["evaluate"] = [.. Common, "profile", "evidence"],
         ["explain"] = [.. Common, "profile", "evidence"],
         ["context"] = ["target", "provider", "output", "repo"],
+        ["trace"] = [.. Common, "run", "evidence"],
     };
-    static readonly string[] Flags = ["all-open"];
+    static readonly string[] Flags = ["all-open", "run"];
 
     /// <summary>
     /// Parses arguments into option → value (flags become "true"), resolving aliases; options the command doesn't take
@@ -258,6 +261,41 @@ public static partial class Cli
         return 0;
     }
 
+    /// <summary>
+    /// Requirement-to-test traceability for one pull request: which test suites the change needs and why, and each
+    /// acceptance criterion's tests. --run also runs the suites on the merged state. Returns 0, or 3 if a suite failed.
+    /// </summary>
+    public static int Trace(string subject, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var id = subject.TrimStart('#');
+        var provider = ProviderFor(git, opt, [id]);
+        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        var (format, output) = FormatOption(opt, "text", "text", "json");
+        var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+        var pr = prs.Single();
+        Analyzer.Analyze(git, targetSha, pr);
+        var config = RepoConfig.Load(git, targetSha);
+        if (config.Tests.Count == 0) err.MarkupLine($"[grey]no tests: in {RepoConfig.FileName} at {Markup.Escape(target)}: only acceptance criteria are listed[/]");
+        using var ctx = new GateContext
+        {
+            Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config, Redactor = new Redactor(config.Secrets),
+            Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
+            EvidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null,
+        };
+        var merge = new MergeGate().Run(ctx, new GateSpec { Id = "merge" });
+        var trace = Traceability.Build(git, pr, config, ctx.MergedState ?? pr.HeadSha);
+        if (opt.ContainsKey("run"))
+        {
+            if (ctx.MergedState == null) throw new InvalidOperationException($"can't run tests: {merge.Summary}");
+            foreach (var (k, v) in new Dictionary<string, string> { ["GITWIZZ_PR"] = pr.Id, ["GITWIZZ_TARGET"] = target, ["GITWIZZ_TARGET_SHA"] = targetSha, ["GITWIZZ_HEAD_SHA"] = pr.HeadSha })
+                ctx.Env[k] = v;
+            Traceability.RunSuites(trace, config, ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir);
+        }
+        Write(format == "json" ? Traceability.Json(trace) + "\n" : Traceability.Text(trace), format, output, err);
+        return trace.Runs.Any(r => r.Status != GateStatus.Pass) ? 3 : 0;
+    }
+
     /// <summary>One pull request with its linked work items; without an explicit target, against the branch it targets.</summary>
     static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadOne(Git git, string provider, ref string target, string id, bool targetGiven)
     {
@@ -290,8 +328,9 @@ public static partial class Cli
     }
 
     /// <summary>
-    /// Branch policy, target commit and pull requests from the provider. ids null: every open PR (GitHub) or every
-    /// unmerged branch (local).
+    /// Branch policy, target commit and pull requests from the provider. ids null: every open PR (GitHub, Azure DevOps)
+    /// or every unmerged branch (local). details: also read each PR's linked work items (meant for a single PR). Throws
+    /// ArgumentException for an unknown provider or a non-numeric PR id, InvalidOperationException when nothing is found.
     /// </summary>
     static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadPrs(Git git, string provider, string target, List<string>? ids,
         bool details = false)
@@ -358,6 +397,7 @@ public static partial class Cli
               gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
+              gitwizz trace <pr> [[--run]]       which tests the change needs and why; acceptance criteria -> tests -> results
               gitwizz example [[-r <dir>]]  build a demo repository and plan it
               gitwizz help | version
 

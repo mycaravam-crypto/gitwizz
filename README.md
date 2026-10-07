@@ -219,7 +219,8 @@ Built-in gates, active without configuration:
 - **policy**: draft, review decision, failing or pending required checks, branch protection, declared dependencies on
   open PRs, and a PR that targets another branch. Skipped for local branches (they carry no such data).
 
-Gate types to configure: `build` and `test` (command detected from the project: `dotnet`, `npm`, `go`, `cargo`, Maven,
+Gate types to configure: `traceability` (the tests the change needs, traced to its acceptance criteria; see
+[below](#requirement-to-test-traceability-and-test-selection)), `build` and `test` (command detected from the project: `dotnet`, `npm`, `go`, `cargo`, Maven,
 Gradle, Python, `make`, or set `run:`), `docwizz` (`docwizz check . --since $GITWIZZ_TARGET_SHA`, the documentation
 gaps the change introduces), and `command` (any command). Commands run with `sh -c` in a temporary worktree of the
 merged state and get `GITWIZZ_PR`, `GITWIZZ_TARGET`, `GITWIZZ_TARGET_SHA`, `GITWIZZ_HEAD_SHA` and `GITWIZZ_RISK`.
@@ -264,6 +265,62 @@ Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes 
 
 `--evidence <dir>` keeps each command gate's full log (`<gate>.log`) and the result (`evaluation.json`) for the
 audit trail; the JSON references the logs.
+
+### Requirement-to-test traceability and test selection
+
+```bash
+gitwizz trace 42                 # which tests the change needs and why; each acceptance criterion and its tests
+gitwizz trace 42 --run -f json   # also run them on the merged state (schema gitwizz.trace/v1)
+```
+
+A PR's linked work items (Azure DevOps work items, or the GitHub issues it closes) are split into individual
+**acceptance criteria**, with ids like `AB#4711.2` or `#57.1`. Test suites are declared in `.gitwizz.yml`:
+
+```yaml
+tests:
+  - id: billing
+    run: dotnet test --filter Category=Billing
+    files: ["tests/Billing*"]       # its test files: searched for changed names and requirement ids
+  - id: ui
+    kind: ui                        # unit, integration, contract, e2e, ui (informational) or manual (never run)
+    run: npm run test:ui
+    covers: ["src/Web/*"]           # a change to these selects it
+  - id: contract
+    run: ./scripts/contract-tests.sh
+    criteria: ["AB#4711.2"]         # verifies this criterion ("AB#4711" = all of its criteria)
+  - id: smoke
+    run: ./scripts/smoke.sh
+    always: true
+  - id: e2e
+    run: ./scripts/e2e.sh
+    high_risk: true                 # also for every high-risk change (see risk:)
+traceability:
+  require: false                    # true: an uncovered or failed criterion blocks the merge
+gates:
+  - id: traceability                # runs the selected suites in the merged workspace
+```
+
+A suite is **selected** when it always runs, a changed file matches `covers`, its own test files changed, its test files
+use a changed C# member or type (e.g. `tests/BillingTests.cs:12 uses CalculateTax (changed)`), it verifies one of the
+PR's criteria, or the change is high-risk and the suite is `high_risk`. Every selected suite lists those reasons;
+the rest are reported as not affected. So a PR runs what its impact and risk call for, and full regression stays with
+release gates.
+
+A suite **verifies** a criterion when `criteria:` lists it or its test files mention the id (`// AB#4711.1`, a
+`[Trait("Requirement", "AB#4711.1")]`). Each criterion ends up as:
+
+| Status | Meaning |
+|---|---|
+| `covered` | a linked suite ran here and passed |
+| `failed` | a linked suite ran and failed |
+| `unknown` | linked, but not run in this evaluation (e.g. `trace` without `--run`) |
+| `uncovered` | no test is linked to it |
+| `manual` | only manual suites verify it, or the criterion is marked `[manual]` |
+
+A link alone, including a generated test proposal, is never evidence: only a suite that ran and passed covers a
+criterion. The `traceability` gate fails when a selected suite fails; uncovered criteria only warn unless
+`traceability.require` is set. `evaluate` includes the whole trace in its JSON (`traceability`), and `explain` prints
+the criteria matrix.
 
 ## Azure DevOps Server
 
@@ -318,9 +375,10 @@ costs:
 
 Patterns use `*` and `?`. They match the file name, or the whole path when they contain a `/`.
 A regenerator's command appears in the plan ("regenerate after merge: package-lock.json (npm install --package-lock-only)").
-Unknown keys, empty patterns and negative costs are errors, as are unknown gate types, duplicate gate ids and
+Unknown keys, empty patterns and negative costs are errors, as are unknown gate types, duplicate gate or test ids and
 references to unknown gates or profiles. The `gates`, `profiles`, `risk` and `secrets` keys are described in
-[Policy as code](#policy-as-code).
+[Policy as code](#policy-as-code), `tests` and `traceability` in
+[Requirement-to-test traceability](#requirement-to-test-traceability-and-test-selection).
 
 ## How it works
 
@@ -449,4 +507,5 @@ Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 ## Roadmap
 
 All planned v1, v2 and v0.4 issues are done. The PR quality & merge orchestrator epic (#53) adds quality gates and
-`evaluate`/`explain` (#55), and the Azure DevOps Server provider with `context` (#54). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
+`evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), and requirement-to-test
+traceability with risk-based test selection (#57). Ideas from [PLAN.md](PLAN.md) that are still open: structural analysis beyond C#, and recording real merge outcomes (CI result, resolution) next to the git-history replay.
