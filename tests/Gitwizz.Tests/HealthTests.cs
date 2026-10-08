@@ -336,7 +336,9 @@ public class HealthTests : IDisposable
     {
         var o = Cli.Parse(["-f", "json", "--profile", "strict", "--provider", "ado"], "doctor");
         Assert.Equal(("json", "strict", "ado"), (o["format"], o["profile"], o["provider"]));
-        Assert.True(Cli.Parse(["--working-tree"], "doctor").ContainsKey("working-tree"));\n        Assert.Throws<ArgumentException>(() => Cli.Parse(["--working-tree"], "guide"));\n        Assert.Throws<ArgumentException>(() => Cli.Parse(["--all-open"], "doctor"));
+        Assert.True(Cli.Parse(["--working-tree"], "doctor").ContainsKey("working-tree"));
+        Assert.Throws<ArgumentException>(() => Cli.Parse(["--working-tree"], "guide"));
+        Assert.Throws<ArgumentException>(() => Cli.Parse(["--all-open"], "doctor"));
         Assert.Throws<ArgumentException>(() => Cli.Diagnose(_dir, new() { ["provider"] = "gitlab" }, new DependencyHealthService()));
     }
 
@@ -346,7 +348,7 @@ public class HealthTests : IDisposable
         Config("context:\n  docwizz:\n    command: docwizz\n");
         Write(RepoConfig.FileName, "context:\n  docwizz:\n    command: local-docwizz\n");
         var tools = Everything();
-        tools["local-docwizz --version"] = Ok("1.0.0\\n");
+        tools["local-docwizz --version"] = Ok("1.0.0\n");
         var fake = new FakeTools(tools);
         var health = new DependencyHealthService(fake.Exec, new FakeEndpoint());
 
@@ -368,7 +370,7 @@ public class HealthTests : IDisposable
     {
         Write(RepoConfig.FileName, "context:\n  docwizz:\n    command: local-docwizz\n");
         var tools = Everything();
-        tools["local-docwizz --version"] = Ok("1.0.0\\n");
+        tools["local-docwizz --version"] = Ok("1.0.0\n");
         var fake = new FakeTools(tools);
         var health = new DependencyHealthService(fake.Exec, new FakeEndpoint());
 
