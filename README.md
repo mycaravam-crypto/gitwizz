@@ -199,7 +199,8 @@ the summary and the recommended command, and runs nothing.
 ```bash
 gitwizz doctor                 # dependency health and what it means for the verdict
 gitwizz doctor -f json         # schema gitwizz.health/v1, for scripts and CI
-gitwizz doctor --profile full  # only the gates of one profile\ngitwizz doctor --working-tree # validate local .gitwizz.yml before committing
+gitwizz doctor --profile full  # only the gates of one profile
+gitwizz doctor --working-tree # validate local .gitwizz.yml before committing
 ```
 
 `doctor` checks what gitwizz relies on before anything expensive runs, and says what a missing piece means:
@@ -228,7 +229,9 @@ fix. The gates it affects, and the best verdict an evaluation can still reach, f
 
 An unavailable dependency is never a quality failure: it can make a verdict UNDETERMINED, never BLOCKED. Without a PR
 the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
-never stored: each run checks again. By default `doctor` uses the policy committed on the target branch, even if a local `.gitwizz.yml` exists.\nUse `--working-tree` to validate new or uncommitted policy edits (including `context.docwizz.command`) without changing PR evaluation policy.\nOptions: `--target`, `--provider`, `--profile`, `--working-tree`, `-f`, `-o`, `--repo`.
+never stored: each run checks again. By default `doctor` uses the policy committed on the target branch, even if a local `.gitwizz.yml` exists.
+Use `--working-tree` to validate new or uncommitted policy edits (including `context.docwizz.command`) without changing PR evaluation policy.
+Options: `--target`, `--provider`, `--profile`, `--working-tree`, `-f`, `-o`, `--repo`.
 
 `guide` runs the same checks: the first three rows (git, the repository, the provider) before it loads a PR, stopping
 with the fix when one of them is unusable, and the rest for the gates selected for that PR after its context; see
