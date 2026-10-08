@@ -456,7 +456,7 @@ public static class SystemContexts
             .Where(s => !(TypeKinds.Contains(s.Kind) && changed.Any(o => o.Id.StartsWith(s.Id + ".", StringComparison.Ordinal))))];
         var symbols = changed.Select(s =>
         {
-            var (file, line) = Location(s.Location);
+            var file = Location(s.Location).File;
             var old = was.GetValueOrDefault(s.Id);
             return new ContextSymbol(s.Id, Name(old ?? s.Id), s.Kind, old != null ? "changed" : s.Change, s.Location, Module(file), Layer(model.Layers, file), old);
         }).OrderBy(s => s.Location, StringComparer.Ordinal).ThenBy(s => s.Id, StringComparer.Ordinal).ToList();
@@ -803,13 +803,13 @@ public static class SystemContexts
         section["affectedModules"] = new JsonArray([.. modules.Select(m => (JsonNode)m)]);
         // Facts in relevance order, then sorted into the issue's categories.
         var kept = Fill(sc.Facts.Select(FactJson)).Select(n => n!.AsObject()).ToList();
-        string[] Category(string kind) => kind switch
+        static string Category(string kind) => kind switch
         {
-            "caller" => ["callers"], "callee" => ["callees"], "endpoint" => ["apiEndpoints"], "data" => ["dataEntities"], "external" => ["externalSystems"],
-            "flow" or "event" => ["flows"], _ => ["architecture"],
+            "caller" => "callers", "callee" => "callees", "endpoint" => "apiEndpoints", "data" => "dataEntities", "external" => "externalSystems",
+            "flow" or "event" => "flows", _ => "architecture",
         };
         foreach (var name in new[] { "callers", "callees", "apiEndpoints", "dataEntities", "externalSystems", "architecture", "flows" })
-            section[name] = new JsonArray([.. kept.Where(f => Category(f["kind"]!.GetValue<string>())[0] == name).Select(f => (JsonNode)f.DeepClone())]);
+            section[name] = new JsonArray([.. kept.Where(f => Category(f["kind"]!.GetValue<string>()) == name).Select(f => (JsonNode)f.DeepClone())]);
         section["relevantDocs"] = Fill(sc.Docs.Select(DocJson));
         section["linkedTests"] = Fill(sc.Tests.Select(t => TestJson(t, executed?.Invoke(t))));
         if (sc.Unlinked.Count > 0) section["changedWithoutLinkedTests"] = new JsonArray([.. sc.Unlinked.Select(u => (JsonNode)u)]);

@@ -23,8 +23,9 @@ plain local branches. `plan` still works on its own, with no gates configured.
   to release gates.
 - **Providers behind adapters.** GitHub (`gh`), Azure DevOps Server (`ado`) and local branches fill one
   provider-neutral model.
-- **Reuse, don't reimplement.** Documentation gaps come from docwizz, tests from your test runner, security findings
-  from your scanners (as `command` gates). gitwizz runs them and reads their results.
+- **Reuse, don't reimplement.** Documentation gaps and the system context of a change (callers, data, endpoints,
+  external systems, documentation freshness) come from docwizz, tests from your test runner, security findings from
+  your scanners (as `command` gates). gitwizz runs them and reads their results.
 - **Traceable and auditable.** Policy is read from the target branch's commit, so a PR can't relax the gates it is
   judged by. Every result names its policy source; `--evidence` keeps full logs and the result; AI reviews record
   the hash of their input. Your working tree, index and branches are never touched: merges are simulated with
@@ -255,9 +256,10 @@ Advisory gates (`blocking: false`; `ai-review` by default) are reported but neve
 |---|---|
 | Collect context and linked requirements | the provider loads the PR, reviews, checks and linked work items with their acceptance criteria ([`context`](#pr-context-as-json)) |
 | Calculate change impact | changed files and C# members, API changes, and the PR's **risk** (`low`/`medium`/`high`, with reasons) |
+| Read the system context | what docwizz knows around the change, its documentation's freshness, and the context quality ([system context](#system-context-from-docwizz)) |
 | Select applicable gates | the profile from `--profile` or the risk; gates whose `paths` don't match are skipped |
 | Run deterministic checks and tests | merge simulation, policy, build, test, docwizz, commands, the test environment, and the test suites the change selects ([`trace`](#test-selection-and-traceability-trace)) |
-| Run AI-assisted review | an `ai-review` gate, if configured, on the [bounded evidence package](#ai-review) |
+| Run AI-assisted review | an `ai-review` gate, if configured, on the [bounded evidence package](#ai-review), system context included |
 | Aggregate evidence | one result per gate; `--evidence` keeps logs, packages and `evaluation.json` |
 | Evaluate the readiness policy | blocking vs advisory gates → `ready`, `blocked` or `undetermined` |
 | Explain blockers | `explain`: every blocking decision with its evidence, and the criteria matrix |
