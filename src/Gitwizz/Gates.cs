@@ -243,7 +243,7 @@ public static partial class Gates
     }
 
     // Tools whose --version is safe to ask; anything else (a script) is never run just to read a version.
-    static readonly string[] Versioned = ["dotnet", "npm", "node", "go", "cargo", "mvn", "gradle", "python", "python3", "make", "docwizz", "git", "docker"];
+    public static readonly string[] Versioned = ["dotnet", "npm", "node", "go", "cargo", "mvn", "gradle", "python", "python3", "make", "docwizz", "git", "docker"];
 
     /// <summary>First word of a command line and, for well-known tools, its version.</summary>
     public static (string Tool, string? Version) ToolOf(string command, string dir)

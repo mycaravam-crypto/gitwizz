@@ -41,6 +41,7 @@ try
         return Cli.EvidencePackage(subject ?? throw new ArgumentException("need a pull request: gitwizz evidence <pr>"), opt, err);
     if (command == "guide") return subject != null ? Cli.Guide(subject, opt, err) : Cli.RepositoryGuide(opt, err);
     if (command == "status") return Cli.Status(opt, err);
+    if (command == "doctor") return Cli.Doctor(opt, err);
     if (command == "refresh") return Cli.Refresh(opt, err);
     if (command == "cache")
         return Cli.Cache(rest.Length > 0 && rest[0] is "status" or "clear" ? rest[0]
@@ -51,7 +52,7 @@ try
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, status, refresh, cache, evaluate, explain, trace, context, evidence, benchmark, env, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, doctor, status, refresh, cache, evaluate, explain, trace, context, evidence, benchmark, env, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -78,6 +79,7 @@ public static partial class Cli
         ["explain"] = [.. Common, "profile", "evidence"],
         ["guide"] = ["target", "provider", "profile", "evidence", "yes", "repo", "no-cache"],
         ["status"] = ["target", "provider", "format", "repo"],
+        ["doctor"] = ["target", "provider", "profile", "format", "output", "repo"],
         ["refresh"] = ["target", "provider", "all-open", "repo"],
         ["cache"] = ["repo"],
         ["context"] = ["target", "provider", "output", "repo", "no-cache", "system"],
@@ -295,6 +297,56 @@ public static partial class Cli
         c.WriteLine();
         Repository.Render(status, c);
         return 0;
+    }
+
+    /// <summary>
+    /// Runs doctor: checks git, the provider, .gitwizz.yml and what the configured gates rely on, without running a
+    /// configured command or contacting a refused AI endpoint; prints dependency health and which gates it affects.
+    /// Returns the report's exit code: 0 ok, 5 degraded, 6 verdict at risk, 7 cannot start.
+    /// </summary>
+    public static int Doctor(Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var dir = Path.GetFullPath(opt.GetValueOrDefault("repo", "."));
+        var (format, output) = FormatOption(opt, "pretty", "pretty", "text", "json");
+        var report = ProgressBars.Show(err, progress => { progress.Start("Checking the environment"); return Diagnose(dir, opt, new DependencyHealthService()); });
+        if (format == "json") Write(Health.Json(report) + "\n", "json", output, err);
+        else if (format == "pretty" && output == null) AnsiConsole.Console.Markup(Health.Text(report, markup: true));
+        else Write(Health.Text(report), format, output, err);
+        return report.ExitCode;
+    }
+
+    /// <summary>
+    /// Both preflight phases for the repository in dir: git and the provider (--provider, else from origin), then the
+    /// policy at the target (origin's, else the local branch, else the working tree's .gitwizz.yml) and the
+    /// dependencies of the gates its profiles (--profile, else one per risk level) may run.
+    /// </summary>
+    public static HealthReport Diagnose(string dir, Dictionary<string, string> opt, DependencyHealthService service)
+    {
+        var deps = service.CheckGit(dir);
+        var provider = opt.GetValueOrDefault("provider") is { } p ? (p is "ado" or "azure" ? "azure-devops" : p) : "local";
+        if (provider is not ("local" or "github" or "azure-devops")) throw new ArgumentException($"unknown provider '{provider}' (local, github, azure-devops)");
+        Func<string?> noPromotion = () => null;
+        if (deps.Any(d => d.Down)) return DependencyHealthService.Assess(deps, null, [], noPromotion, provider, new Redactor([]));
+
+        var git = new Git(dir);
+        if (!opt.ContainsKey("provider"))
+        {
+            var origin = git.Try("remote", "get-url", "origin").Stdout;
+            provider = AzureDevOps.IsRemote(origin) ? "azure-devops" : origin.Contains("github.com") ? "github" : "local";
+        }
+        deps.Add(service.CheckProvider(provider, dir));
+
+        var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
+        var sha = new[] { $"refs/remotes/origin/{target}", target }.Where(r => r != "")
+            .Select(r => git.Try("rev-parse", "--verify", "--quiet", r + "^{commit}")).FirstOrDefault(r => r.ExitCode == 0)?.Stdout.Trim();
+        RepoConfig? config;
+        try { config = sha != null ? RepoConfig.Load(git, sha) : RepoConfig.Load(git); }
+        catch (InvalidOperationException e) { deps.Add(DependencyHealthService.InvalidConfiguration(e.Message)); config = null; }
+        if (config == null) return DependencyHealthService.Assess(deps, null, [], noPromotion, provider, new Redactor([]));
+
+        var selections = DependencyHealthService.Selections(config, opt.GetValueOrDefault("profile"));
+        deps.AddRange(service.ForGates(config, selections.SelectMany(s => s.Gates).DistinctBy(g => g.Id).ToList(), git, sha));
+        return DependencyHealthService.Assess(deps, config, selections, () => Promotion.Check(git, sha ?? "HEAD", config), provider, new Redactor(config.Secrets));
     }
 
     /// <summary>Runs cache status (where the workspace is and what it holds) or cache clear (removes it).</summary>
@@ -595,6 +647,7 @@ public static partial class Cli
             [bold]Usage[/]
               gitwizz [grey]plan[/] [[options]]      plan a merge order (default command)
               gitwizz guide [[<pr>]] [[options]]   the repository's state and next action; with a PR: step by step to its verdict
+              gitwizz doctor [[options]]         is the environment ready? git, provider login, docwizz, AI endpoint, Docker, gate tools
               gitwizz status [[options]]         open PRs as the workspace sees them: current, stale or not evaluated
               gitwizz refresh [[--all-open]]     re-evaluate stale PRs (and with --all-open, unevaluated ones); reuses the rest
               gitwizz cache status | clear      where the workspace is and what it holds; remove it
@@ -631,6 +684,10 @@ public static partial class Cli
                   --profile, --evidence as for evaluate
               -y, --yes                 don't ask: run the selected tests and the gates, print the verdict [grey](default without a terminal)[/]
               [grey]exit code: as evaluate; 4 also when you exit before a verdict. Never merges or changes the PR.[/]
+
+            [bold]Doctor[/]
+                  --target, --provider, --profile as above; -f pretty | text | json
+              [grey]exit code: 0 ok, 5 degraded (advisory checks affected), 6 verdict at risk (a blocking gate can't run), 7 cannot start[/]
 
             [bold]Workspace[/]
                   --no-cache            neither reuse nor store results (plan, evaluate, explain, guide, trace, context, evidence)
