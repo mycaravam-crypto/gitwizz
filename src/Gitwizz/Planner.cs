@@ -57,8 +57,9 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
     /// <summary>
     /// Plans the merge order: blocks PRs that aren't ready (and their dependents), then beam-searches simulated orders
     /// and returns the best complete plan, with its states, parallelizable PRs and "why A before B?" explanations.
+    /// progress counts the pairwise simulations, then one unit per merge step searched.
     /// </summary>
-    public Plan Build(int beamWidth)
+    public Plan Build(int beamWidth, ProgressBars? progress = null)
     {
         var plan = new Plan { Target = targetName, Strategy = sim.Strategy };
 
@@ -89,12 +90,14 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
 
         // Pairwise outcomes (first -> second from the target) for every overlapping pair, batched once up front.
         var overlapping = pool.SelectMany(a => pool.Where(b => b != a && Weight(a, b) > 0).Select(b => (a, b))).ToList();
+        progress?.Resize(pool.Count + 2); // pairwise outcomes, then one beam round per step and the round that finishes
         sim.Prefetch(overlapping.Select(x => x.a).Distinct().Select(a => (targetSha, a)));
         var firsts = overlapping.Select(x => (x.a, r: sim.Simulate(targetSha, x.a))).Where(x => x.r.Mergeable).DistinctBy(x => x.a).ToDictionary(x => x.a, x => x.r);
         firsts.Values.AsParallel().ForAll(r => _ = r.Commit!.Value);
         sim.Prefetch(overlapping.Where(x => firsts.ContainsKey(x.a)).Select(x => (firsts[x.a].Commit!.Value, x.b)));
         foreach (var (a, b) in overlapping)
             _pairOutcome[(a.Id, b.Id)] = firsts.TryGetValue(a, out var r) ? sim.Simulate(r.Commit!.Value, b).Outcome : null;
+        progress?.Advance();
 
         // Finished plans live outside the beam, so the best complete plan can never be pruned by unfinished ones.
         Node? best = null;
@@ -120,6 +123,7 @@ public class Planner(Simulator sim, string targetName, string targetSha, List<Pu
             beam = next.Where(n => !n.Done).DistinctBy(n => n.Key)
                 .OrderBy(n => n.Objective).ThenBy(n => n.Key, StringComparer.Ordinal)
                 .Take(beamWidth).ToList();
+            progress?.Advance();
         }
 
         var final = best!; // the search always finishes at least one plan

@@ -335,7 +335,7 @@ public static partial class Analyzer
     /// The +1 keeps a single conflict from reading as a certainty.
     /// </summary>
     // ponytail: only true merge commits carry history; squash/rebase-merged repos yield nothing to learn from.
-    public static Dictionary<string, double> ConflictHistory(Git git, string target, int maxMerges)
+    public static Dictionary<string, double> ConflictHistory(Git git, string target, int maxMerges, ProgressBars? progress = null)
     {
         if (maxMerges <= 0) return [];
         var touches = new Dictionary<string, int>();
@@ -347,7 +347,8 @@ public static partial class Analyzer
 
         var conflicts = new Dictionary<string, int>();
         var size = Math.Max(8, (int)Math.Ceiling(merges.Count / (double)Environment.ProcessorCount));
-        foreach (var batch in merges.Chunk(size).AsParallel().Select(c => git.MergeTreeBatch(c)).ToList())
+        progress?.Resize(merges.Count);
+        foreach (var batch in merges.Chunk(size).AsParallel().Select(c => { var r = git.MergeTreeBatch(c); progress?.Advance(c.Length); return r; }).ToList())
             foreach (var f in batch?.SelectMany(r => r.Conflicts) ?? []) // a failed batch just contributes nothing
                 conflicts[f] = conflicts.GetValueOrDefault(f) + 1;
         return conflicts.ToDictionary(c => c.Key, c => Math.Min(1, c.Value / (touches.GetValueOrDefault(c.Key) + 1.0)));
