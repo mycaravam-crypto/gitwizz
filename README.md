@@ -63,6 +63,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | Command | Answers |
 |---|---|
 | `guide [<pr>] [--yes]` | What do I do next? The repository overview, or one PR walked from context to verdict |
+| `doctor` | Is the environment ready? git, provider login, docwizz, the AI endpoint, Docker and gate tools, and which gates they affect (`-f text\|json`) |
 | `status` | Which open PRs are ready, blocked, undetermined, stale or never evaluated? (`-f text\|json`) |
 | `refresh [--all-open]` | Re-evaluates what is stale (with `--all-open` also what was never evaluated), reusing the rest |
 | `cache status\|clear` | Where the workspace is and what it holds; removes it |
@@ -173,6 +174,42 @@ ready, blocked, undetermined, stale (with the reason) or never evaluated, then r
 verdict comes first, then unevaluated PRs, stale repository facts, blockers, and finally the merge plan for what is
 ready. Choosing a PR continues in the PR guide above, and that PR's new verdict is stored. Without a terminal it prints
 the summary and the recommended command, and runs nothing.
+
+## Environment check: `doctor`
+
+```bash
+gitwizz doctor                 # dependency health and what it means for the verdict
+gitwizz doctor -f json         # schema gitwizz.health/v1, for scripts and CI
+gitwizz doctor --profile full  # only the gates of one profile
+```
+
+`doctor` checks what gitwizz relies on before anything expensive runs, and says what a missing piece means:
+
+| Dependency | Check | Never |
+|---|---|---|
+| git, repository | `git --version` (2.38 or later), `rev-parse` | |
+| Azure DevOps | `ado --version`, `ado auth status` (asks the server: reachability and token) | prints the token or the user |
+| GitHub | `gh --version`, `gh auth status` | |
+| `.gitwizz.yml` | read at the target as `evaluate` would | |
+| docwizz | `docwizz --version`; `docwizz.yaml` is valid YAML | runs an analysis |
+| AI endpoint | the self-hosting policy, then `GET {endpoint}/models` and that `review.model` is served | contacts a refused host; sends repository content |
+| Docker | `docker info`, `docker compose version` (for an `environment` gate) | |
+| gate and suite tools | `--version` of well-known tools (dotnet, npm, make, ...) | runs a configured command or script: those are `UNKNOWN` |
+
+Each dependency is `AVAILABLE`, `UNAVAILABLE`, `MISCONFIGURED` or `UNKNOWN`, with the gates that use it and the exact
+fix. The gates it affects, and the best verdict an evaluation can still reach, follow from the same rules as
+`evaluate`: with every affected gate erroring and the rest passing. Overall:
+
+| Overall | Meaning | Exit |
+|---|---|---|
+| `OK` | everything is available | `0` |
+| `DEGRADED` | only advisory gates or the system context are affected; a PR can still become READY | `5` |
+| `VERDICT_AT_RISK` | a blocking gate cannot run: the verdict can be no better than UNDETERMINED | `6` |
+| `CANNOT_START` | git, the repository, the provider or `.gitwizz.yml` is unusable | `7` |
+
+An unavailable dependency is never a quality failure: it can make a verdict UNDETERMINED, never BLOCKED. Without a PR
+the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
+never stored: each run checks again. Options: `--target`, `--provider`, `--profile`, `-f`, `-o`, `--repo`.
 
 ## Repository workspace: `status`, `refresh`, `cache`
 
@@ -338,6 +375,8 @@ Use the exit code as the merge check and keep the evidence as a build artifact:
 gitwizz evaluate "$PR" -f json -o evaluation.json --evidence gitwizz-evidence
 # 0 ready · 3 blocked (the change needs work) · 4 undetermined (fix the pipeline, not the PR)
 ```
+
+Run `gitwizz doctor -f json` as an earlier step to fail fast on the runner's tooling (exit 6 or 7) before evaluating.
 
 ## Test selection and traceability: `trace`
 
@@ -862,6 +901,9 @@ gates or profiles are errors.
 | `2` | usage error |
 | `3` | `evaluate`/`explain`/`guide`: blocked by a failed gate · `trace`: a suite failed · `benchmark`: thresholds missed or regressed |
 | `4` | `evaluate`/`explain`/`guide`: undetermined, a blocking gate could not run · `guide`: exited before a verdict |
+| `5` | `doctor`: degraded, only advisory checks are affected |
+| `6` | `doctor`: verdict at risk, a blocking gate cannot run |
+| `7` | `doctor`: cannot start (git, repository, provider or `.gitwizz.yml`) |
 
 ## Known limitations
 
@@ -895,7 +937,8 @@ with risk-based test selection (#57), advisory AI review on a bounded evidence p
 that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
-docwizz system context for guided and AI-assisted review (#73).
+docwizz system context for guided and AI-assisted review (#73), and the dependency preflight `doctor` (#75, part 1 of 3;
+its integration into `guide` follows).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR
@@ -912,7 +955,8 @@ dotnet build
 dotnet test
 ```
 
-The same commands work on Linux, macOS and Windows. [docwizz](https://github.com/mycaravam-crypto/docwizz) checks
+The same commands work on Linux, macOS and Windows; [.github/workflows/test.yml](.github/workflows/test.yml) runs
+them on every pull request and on main. [docwizz](https://github.com/mycaravam-crypto/docwizz) checks
 this repository's `///` docs ([docwizz.yaml](docwizz.yaml)). On every pull request,
 [.github/workflows/docwizz.yml](.github/workflows/docwizz.yml) comments with the documentation gaps the change
 *introduces* and fails on a new critical gap; existing gaps don't fail it.

@@ -24,7 +24,14 @@ public class Evaluation
     public bool Ready => !Gates.Any(g => g.BlocksMerge);
 
     /// <summary>ready; blocked (a blocking gate failed: the change needs work); undetermined (only errors: rerun or fix the tooling).</summary>
-    public string Verdict => Ready ? "ready" : Gates.Any(g => g.BlocksMerge && g.Status == GateStatus.Fail) ? "blocked" : "undetermined";
+    public string Verdict => VerdictOf(Gates);
+
+    /// <summary>The verdict for gate results: what Verdict says, for results that need not come from a run (preflight).</summary>
+    public static string VerdictOf(IEnumerable<GateResult> gates)
+    {
+        var blockers = gates.Where(g => g.BlocksMerge).ToList();
+        return blockers.Count == 0 ? "ready" : blockers.Any(g => g.Status == GateStatus.Fail) ? "blocked" : "undetermined";
+    }
 
     public IEnumerable<GateResult> Blockers => Gates.Where(g => g.BlocksMerge);
 
@@ -69,6 +76,19 @@ public static class Evaluator
         return (name, order);
     }
 
+    /// <summary>
+    /// Whether a gate's result can block the merge. Context the policy requires blocks, also through a configured
+    /// system-context gate that doesn't say otherwise. AI judgement blocks only once a benchmark has validated it
+    /// (promotion: null, else why not); until then it is advisory and demoted says why.
+    /// </summary>
+    public static bool IsBlocking(GateSpec spec, RepoConfig config, Func<string?> promotion, out string? demoted)
+    {
+        demoted = null;
+        var blocking = spec.IsBlocking || (spec.Kind == "system-context" && spec.Blocking == null && config.Context.Docwizz.Enforced);
+        if (blocking && spec.Kind == "ai-review" && promotion() is { } why) { demoted = why; return false; }
+        return blocking;
+    }
+
     /// <summary>Runs the selected gates. A gate whose needs didn't pass is skipped and, if blocking, blocks the merge.</summary>
     public static Evaluation Run(GateContext ctx, string? profile = null, ProgressBars? progress = null)
     {
@@ -107,14 +127,9 @@ public static class Evaluator
                         ctx.Store.Keep("gate", inputs, ctx.Redactor.Apply(r));
                 }
             }
-            // Context the policy requires blocks, also through a configured system-context gate that doesn't say otherwise.
-            var blocking = spec.IsBlocking || (spec.Kind == "system-context" && spec.Blocking == null && ctx.Config.Context.Docwizz.Enforced);
-            if (blocking && spec.Kind == "ai-review" && Promotion.Check(ctx) is { } why)
-            {
-                // AI judgement blocks only once a benchmark has validated it: until then it is advisory.
-                blocking = false;
+            var blocking = IsBlocking(spec, ctx.Config, () => Promotion.Check(ctx), out var why);
+            if (why != null)
                 r = r with { Findings = [.. r.Findings, new Finding($"blocking: true is not in effect: {why}", "info", Rule: "ai-promotion")] };
-            }
             r = r with { Id = spec.Id, Type = spec.Kind, Blocking = blocking, Duration = sw.Elapsed };
             r = ctx.Redactor.Apply(r with { BlocksMerge = blocking && (r.Status is GateStatus.Fail or GateStatus.Error || r.NeedsUnmet) });
             ctx.Results[spec.Id] = r;
