@@ -72,11 +72,7 @@ public static class Evaluator
     {
         var (risk, reasons) = Gates.Risk(ctx.Pr, ctx.Config);
         var (name, specs) = Select(ctx.Config, profile, risk);
-        ctx.Env["GITWIZZ_PR"] = ctx.Pr.Id;
-        ctx.Env["GITWIZZ_TARGET"] = ctx.Target;
-        ctx.Env["GITWIZZ_TARGET_SHA"] = ctx.TargetSha;
-        ctx.Env["GITWIZZ_HEAD_SHA"] = ctx.Pr.HeadSha;
-        ctx.Env["GITWIZZ_RISK"] = risk;
+        SetEnvironment(ctx, risk);
 
         progress?.Start($"Running {specs.Count} quality gates", specs.Count);
         foreach (var (spec, i) in specs.Select((s, i) => (s, i)))
@@ -116,6 +112,16 @@ public static class Evaluator
             Pr = ctx.Pr, Target = ctx.Target, TargetSha = ctx.TargetSha, Provider = ctx.Provider, Strategy = ctx.Strategy,
             PolicySource = ctx.Config.Source, Profile = name, Risk = risk, RiskReasons = reasons, Gates = [.. ctx.Results.Values], Trace = ctx.Trace,
         };
+    }
+
+    /// <summary>The GITWIZZ_* variables every workspace command and test suite gets.</summary>
+    public static void SetEnvironment(GateContext ctx, string risk)
+    {
+        ctx.Env["GITWIZZ_PR"] = ctx.Pr.Id;
+        ctx.Env["GITWIZZ_TARGET"] = ctx.Target;
+        ctx.Env["GITWIZZ_TARGET_SHA"] = ctx.TargetSha;
+        ctx.Env["GITWIZZ_HEAD_SHA"] = ctx.Pr.HeadSha;
+        ctx.Env["GITWIZZ_RISK"] = risk;
     }
 
     /// <summary>Lower-case status name, as in JSON.</summary>
