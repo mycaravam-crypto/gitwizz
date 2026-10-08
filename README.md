@@ -47,6 +47,7 @@ and a PR blocked by a real conflict. It ends with commands to try on the demo yo
 In your own repository ([install](#install) first):
 
 ```bash
+gitwizz guide 57                 # step by step: context, test impact, tests, verdict, what to do next
 gitwizz evaluate 57              # is PR 57 ready? (exit 0 ready, 3 blocked, 4 undetermined)
 gitwizz explain 57               # every blocking decision, with evidence
 gitwizz trace 57 --run           # the tests the change needs, checked against its acceptance criteria
@@ -57,6 +58,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 
 | Command | Answers |
 |---|---|
+| `guide <pr> [--yes]` | What do I do next? Walks the PR from context to verdict and suggests the next action |
 | `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`) |
 | `explain <pr>` | Why (not)? Blocking decisions, evidence, the criteria matrix (`-f text\|json`) |
 | `trace <pr> [--run]` | Which tests does the change need, and which acceptance criteria do they cover? |
@@ -120,6 +122,38 @@ dotnet publish src/Gitwizz -c Release -r linux-x64 --self-contained -p:PublishSi
 ```
 
 </details>
+
+## Guided workflow: `guide`
+
+```bash
+gitwizz guide 57                         # interactive on a terminal
+gitwizz guide 57 --yes                   # no questions: run the selected tests and the gates, print the verdict
+gitwizz guide 57 --evidence .gitwizz-evidence --profile full
+```
+
+`guide` takes a developer from "I have a PR" to an evidence-based verdict without knowing which command comes next.
+It shows five steps:
+
+1. **PR context**: the PR, source → target, provider, risk, linked work items and how many acceptance criteria they have.
+2. **Test impact**: whether it merges, the selected test suites, and acceptance criteria without a verifying test, all
+   before anything expensive runs.
+3. **Tests**: run the selected suites on the merged state, show the traceability details first, or skip.
+4. **Merge readiness**: the same gate evaluation as `evaluate`. Suites the guide already ran on the same merged state
+   are not run again, and the verdict is READY, BLOCKED or UNDETERMINED.
+5. **What next?**: for BLOCKED, the blocking reasons and a concrete next action ("Add or link a test for AB#8234.3",
+   "Fix the failing test suite contract", "Bring main into feature/x and resolve the conflicts in …"). For
+   UNDETERMINED, which gate could not run, kept apart from quality failures. For READY, the merge plan for the target
+   with this PR's position and the next merge command.
+
+The menus also offer the full explanation, a summary of the AI evidence package, and saving `evaluation.json` and
+`evidence.json` as an evidence bundle.
+
+It only orchestrates the other commands' logic (one implementation of loading, analysis, traceability, gates, evidence
+and planning). It never merges, never changes the PR and never writes tests. It asks only when stdin and stdout are
+terminals: with `--yes`, or when piped, it runs the recommended steps and never waits for input. It keeps no state.
+After fixing code or tests, rerun `gitwizz guide 57` and it recomputes everything. The exit code matches `evaluate`'s,
+and is 4 when you exit before a verdict. Options: `--target`, `--provider`, `--profile`, `--evidence`, `--yes`,
+`--repo`.
 
 ## Merge readiness: `evaluate` and `explain`
 
@@ -663,8 +697,8 @@ gates or profiles are errors.
 | `0` | ok: ready, plan made, thresholds met |
 | `1` | error, or failed `--verify` |
 | `2` | usage error |
-| `3` | `evaluate`/`explain`: blocked by a failed gate · `trace`: a suite failed · `benchmark`: thresholds missed or regressed |
-| `4` | `evaluate`/`explain`: undetermined, a blocking gate could not run |
+| `3` | `evaluate`/`explain`/`guide`: blocked by a failed gate · `trace`: a suite failed · `benchmark`: thresholds missed or regressed |
+| `4` | `evaluate`/`explain`/`guide`: undetermined, a blocking gate could not run · `guide`: exited before a verdict |
 
 ## Known limitations
 
@@ -687,7 +721,8 @@ gates or profiles are errors.
 Done: the v1, v2 and v0.4 planner work, and the PR quality & merge orchestrator epic (#53): quality gates with
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), requirement-to-test traceability
 with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), the AI quality benchmark
-that decides when AI review may block (#59), and ephemeral per-PR test environments (#58).
+that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
+PR workflow `guide` (#69), and per-phase progress bars on every long-running command.
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR

@@ -247,8 +247,9 @@ public sealed class TraceabilityGate : IQualityGate
         if (ctx.Config.Tests.Count == 0)
             return GateResult.Of(GateStatus.Skipped, $"no tests: defined in {RepoConfig.FileName}");
         var commit = ctx.MergedState ?? ctx.Pr.HeadSha;
-        var trace = Traceability.Build(ctx.Git, ctx.Pr, ctx.Config, commit);
-        Traceability.RunSuites(trace, ctx.Config, ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir);
+        // Suites already run on this very state (gitwizz guide runs them first) are not run again.
+        var trace = ctx.Trace is { Runs.Count: > 0 } ran && ran.Commit == commit ? ran : Traceability.Build(ctx.Git, ctx.Pr, ctx.Config, commit);
+        if (trace.Runs.Count == 0) Traceability.RunSuites(trace, ctx.Config, ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir);
         ctx.Trace = trace;
 
         var findings = trace.Runs.Where(r => r.Status != GateStatus.Pass).SelectMany(r => r.Findings.Select(f => f with { Rule = f.Rule ?? r.Suite })).ToList();
