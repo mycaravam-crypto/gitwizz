@@ -71,8 +71,11 @@ public class GuideTests : IDisposable
         public string Ask(string question, string fallback) => fallback;
     }
 
+    /// <summary>No external tool is installed and the AI endpoint is down; git runs for real.</summary>
+    static DependencyHealthService NoTools() => new(new HealthTests.FakeTools([]).Exec, new HealthTests.FakeEndpoint(down: true));
+
     (int Code, string Output) Guide(string branch, IGuidePrompts? prompts = null, WorkItem[]? items = null, string? evidence = null,
-        Func<ProgressBars, Plan>? planner = null)
+        Func<ProgressBars, Plan>? planner = null, DependencyHealthService? health = null)
     {
         var (sha, prs) = Providers.Local(_git, "main", [branch]);
         var pr = prs.Single();
@@ -89,7 +92,7 @@ public class GuideTests : IDisposable
         SystemContexts.Override = _ => new FakeDocwizz { VersionText = null }; // no docwizz here, whatever is installed
         try
         {
-            var code = new Guide(wf, new GuideOptions($"gitwizz guide {branch}", EvidenceDir: evidence), console, console, prompts, planner).Run();
+            var code = new Guide(wf, new GuideOptions($"gitwizz guide {branch}", EvidenceDir: evidence), console, console, prompts, planner, health ?? NoTools()).Run();
             return (code, writer.ToString());
         }
         finally { SystemContexts.Override = null; }
@@ -101,7 +104,13 @@ public class GuideTests : IDisposable
     public void State_machine_walks_context_trace_test_evaluate_to_a_verdict()
     {
         var facts = new GuideFacts(Merges: true, Selected: 2);
-        Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.Context, facts));
+        Assert.Equal(GuideState.Environment, Gitwizz.Guide.Next(GuideState.Context, facts));
+        Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.Environment, facts));                          // nothing affected: nothing asked
+        Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.Environment, facts, GuideAction.ContinueDegraded));
+        Assert.Equal(GuideState.Environment, Gitwizz.Guide.Next(GuideState.Environment, facts, GuideAction.RetryEnvironment));
+        Assert.Equal(GuideState.Environment, Gitwizz.Guide.Next(GuideState.Environment, facts, GuideAction.ShowConfiguration));
+        Assert.Equal(GuideState.Done, Gitwizz.Guide.Next(GuideState.Environment, facts, GuideAction.Exit));
+        Assert.Equal(GuideAction.ContinueDegraded, Gitwizz.Guide.Default(GuideState.Environment));
         Assert.Equal(GuideState.Trace, Gitwizz.Guide.Next(GuideState.SystemContext, facts));                                // good context: nothing asked
         Assert.Equal(GuideState.Trace, Gitwizz.Guide.Next(GuideState.SystemContext, facts, GuideAction.ContinueWithContext));
         Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.SystemContext, facts, GuideAction.ShowContextGraph));
@@ -252,5 +261,110 @@ public class GuideTests : IDisposable
         using var ctx = new GateContext { Git = _git, Pr = pr, Target = "main", TargetSha = sha, Config = RepoConfig.Load(_git, sha) };
         var evaluated = Evaluator.Run(ctx);
         Assert.Equal(evaluated.ExitCode, Guide("feature").Code);
+    }
+
+    // --- Preflight phase B: what the selected gates rely on ------------------------------------------------------------
+
+    const string AiGate = """
+          - id: ai-review
+        review: { endpoint: "http://llm.internal:8000/v1", model: qwen }
+        """;
+
+    /// <summary>Runs the guide with gates of the given kinds erroring as their missing tool would make them.</summary>
+    (int Code, string Output) GuideErroring(string branch, IGuidePrompts? prompts, DependencyHealthService health, params string[] kinds)
+    {
+        Gates.Override = kind => kinds.Contains(kind) ? new HealthTests.Erroring($"{kind} could not run") : null;
+        try { return Guide(branch, prompts, health: health); }
+        finally { Gates.Override = null; }
+    }
+
+    [Fact]
+    public void Unreachable_advisory_ai_offers_degraded_continuation_and_the_pr_can_still_be_ready()
+    {
+        MainPolicy(require: false, extra: AiGate);
+        var script = new Script(GuideAction.ContinueDegraded, GuideAction.ContinueWithContext, GuideAction.RunTests, GuideAction.Exit);
+        var (code, output) = GuideErroring("feature", script, NoTools(), "ai-review");
+
+        Assert.Equal([GuideAction.ContinueDegraded, GuideAction.RetryEnvironment, GuideAction.ShowConfiguration, GuideAction.Exit], script.Asked[0]);
+        Assert.Contains("Gate dependencies", output);
+        Assert.Contains("✗ AI endpoint  llm.internal unreachable", output);
+        Assert.Contains("! ai-review can't run (advisory: AI endpoint is not available)", output);
+        Assert.Contains("DEGRADED  You can continue safely", output);
+        Assert.True(output.IndexOf("Gate dependencies") < output.IndexOf("Step 2/6"));
+        Assert.Contains("VERDICT: READY", output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Missing_blocking_dependency_without_a_terminal_warns_and_continues_to_undetermined()
+    {
+        MainPolicy(require: false, extra: "  - id: docs\n    type: docwizz\n");
+        var (code, output) = GuideErroring("feature", null, NoTools(), "docwizz");
+
+        Assert.Contains("✗ docwizz  'docwizz' not found", output);
+        Assert.Contains("! docs can't run (blocking: docwizz is not available)", output);
+        Assert.Contains("VERDICT_AT_RISK", output);
+        Assert.Contains("no better than UNDETERMINED", output);
+        Assert.Contains("continuing: the affected blocking gates will report UNDETERMINED", output);
+        Assert.Contains("VERDICT: UNDETERMINED", output);
+        Assert.DoesNotContain("BLOCKED", output); // infrastructure is never a quality failure
+        Assert.Equal(4, code);
+    }
+
+    [Fact]
+    public void Show_configuration_and_retry_check_again_only_when_asked()
+    {
+        MainPolicy(extra: AiGate);
+        var tools = new HealthTests.FakeTools([]);
+        var endpoint = new HealthTests.FakeEndpoint(down: true);
+        var up = new HealthTests.FakeEndpoint();
+        var current = endpoint;
+        var health = new DependencyHealthService(tools.Exec, new Switch(() => current));
+        Func<IReadOnlyList<GuideAction>, Func<GuideAction, string>, GuideAction> retryAfterFix = (options, label) =>
+        {
+            current = up; // the developer starts the inference server
+            return GuideAction.RetryEnvironment;
+        };
+        var script = new Script(GuideAction.ShowConfiguration, retryAfterFix, GuideAction.Exit);
+        var (code, output) = GuideErroring("feature", script, health, "ai-review");
+
+        Assert.Contains("review.endpoint      host llm.internal", output);
+        Assert.Contains("review.model         qwen", output);
+        Assert.Contains("fix: check that the inference server is running", output);
+        Assert.Contains("gitwizz doctor --target main", output);
+        Assert.Contains("✓ AI endpoint  llm.internal serves qwen", output);
+        Assert.Equal(1, endpoint.Requests); // Show configuration does not check again
+        Assert.Equal(1, up.Requests);
+        Assert.Equal(2, script.Asked.Count(a => a.Contains(GuideAction.RetryEnvironment))); // asked twice, then all clear: on to step 2
+        Assert.Contains("Step 2/6", output);
+        Assert.Equal(4, code); // exited at the system context, before a verdict
+    }
+
+    [Fact]
+    public void Exit_at_the_environment_stops_before_the_system_context()
+    {
+        MainPolicy(extra: AiGate);
+        var (code, output) = GuideErroring("feature", new Script(GuideAction.Exit), NoTools(), "ai-review");
+        Assert.Equal(4, code);
+        Assert.DoesNotContain("Step 2/6", output);
+    }
+
+    [Fact]
+    public void Nothing_is_asked_when_no_gate_is_affected()
+    {
+        // docwizz is missing, but only for the system context: step 2 handles that, the environment asks nothing.
+        var script = new Script(GuideAction.ContinueWithContext, GuideAction.RunTests, GuideAction.Exit);
+        var (_, output) = Guide("feature", script);
+        Assert.DoesNotContain(script.Asked, a => a.Contains(GuideAction.RetryEnvironment));
+        Assert.Contains("Gate dependencies", output);
+    }
+
+    /// <summary>Forwards to whichever endpoint is current.</summary>
+    sealed class Switch(Func<HttpMessageHandler> current) : HttpMessageHandler
+    {
+        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken ct) =>
+            new HttpMessageInvoker(current()).Send(request, ct);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => Task.FromResult(Send(request, ct));
     }
 }

@@ -3,12 +3,16 @@ using Spectre.Console;
 
 namespace Gitwizz;
 
-/// <summary>Where the guide is: the steps in order, then one of the three verdicts, then done.</summary>
-public enum GuideState { Context, SystemContext, Trace, Test, Evaluate, Ready, Blocked, Undetermined, Done }
+/// <summary>
+/// Where the guide is: the steps in order, then one of the three verdicts, then done. Environment: what the selected
+/// gates rely on (preflight phase B), between the PR context and the system context.
+/// </summary>
+public enum GuideState { Context, Environment, SystemContext, Trace, Test, Evaluate, Ready, Blocked, Undetermined, Done }
 
 /// <summary>What the developer can do at a step.</summary>
 public enum GuideAction
 {
+    ContinueDegraded, RetryEnvironment, ShowConfiguration,
     ContinueWithContext, ShowContextGraph, ShowMissingContext, RefreshContext, ShowContextHelp,
     RunTests, ShowTrace, SkipTests, ShowPlan, ShowExplanation, InspectEvidence, SaveEvidence, Exit,
 }
@@ -45,10 +49,13 @@ public record GuideOptions(string Rerun, string? Profile = null, string? Evidenc
 /// the other commands share (context, trace, evaluate, explain, evidence, plan) and never merges or changes anything.
 /// It keeps no state between runs: rerunning recomputes everything from the PR's current state.
 /// </summary>
+/// <param name="health">Checks what the gates rely on; null: the real tools and endpoint.</param>
 public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiConsole output, IAnsiConsole err, IGuidePrompts? prompts,
-    Func<ProgressBars, Plan>? planner = null)
+    Func<ProgressBars, Plan>? planner = null, DependencyHealthService? health = null)
 {
     const int Steps = 6;
+
+    HealthReport? _health;
 
     SystemContext? _context;
     Trace? _trace;
@@ -59,7 +66,14 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     /// <summary>The next state after state, given the facts and the developer's choice (null: none was asked for).</summary>
     public static GuideState Next(GuideState state, GuideFacts facts, GuideAction? choice = null) => state switch
     {
-        GuideState.Context => GuideState.SystemContext,
+        GuideState.Context => GuideState.Environment,
+        // Retrying or reading the configuration comes back here; continuing (or nothing to ask) moves on.
+        GuideState.Environment => choice switch
+        {
+            GuideAction.Exit => GuideState.Done,
+            GuideAction.RetryEnvironment or GuideAction.ShowConfiguration => GuideState.Environment,
+            _ => GuideState.SystemContext,
+        },
         // Looking at the context (graph, gaps, refresh) comes back here; anything else moves on.
         GuideState.SystemContext => choice switch
         {
@@ -78,6 +92,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     /// <summary>The choices at a state, the recommended one first.</summary>
     public static IReadOnlyList<GuideAction> Actions(GuideState state, GuideFacts? facts = null) => state switch
     {
+        GuideState.Environment => [GuideAction.ContinueDegraded, GuideAction.RetryEnvironment, GuideAction.ShowConfiguration, GuideAction.Exit],
         GuideState.SystemContext when facts is { DocwizzAvailable: false } => [GuideAction.ContinueWithContext, GuideAction.ShowContextHelp, GuideAction.Exit],
         GuideState.SystemContext when facts?.Context == "MISSING" =>
             [GuideAction.ContinueWithContext, GuideAction.RefreshContext, GuideAction.ShowContextHelp, GuideAction.Exit],
@@ -89,9 +104,13 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         _ => [],
     };
 
-    /// <summary>What runs without a terminal (or with --yes): the tests, then stop at the verdict.</summary>
+    /// <summary>
+    /// What runs without a terminal (or with --yes): continue past missing gate dependencies (the environment section
+    /// has said what they mean for the verdict), the tests, then stop at the verdict.
+    /// </summary>
     public static GuideAction Default(GuideState state) => state switch
     {
+        GuideState.Environment => GuideAction.ContinueDegraded,
         GuideState.Test => GuideAction.RunTests,
         GuideState.SystemContext => GuideAction.ContinueWithContext, // missing context is advisory unless the policy says otherwise
         _ => GuideAction.Exit,
@@ -99,6 +118,11 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
 
     string Label(GuideAction a) => a switch
     {
+        GuideAction.ContinueDegraded => _health?.Overall == OverallHealth.VerdictAtRisk
+            ? "Continue anyway (the verdict can be no better than UNDETERMINED)"
+            : $"Continue without {string.Join(", ", _health?.Affected.Select(g => g.Id) ?? [])}",
+        GuideAction.RetryEnvironment => "Retry the checks",
+        GuideAction.ShowConfiguration => "Show configuration",
         GuideAction.ContinueWithContext => _context switch
         {
             { Quality: "MISSING" } => "Continue without docwizz context",
@@ -133,6 +157,12 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
             switch (state)
             {
                 case GuideState.Context: ShowContext(); break;
+                case GuideState.Environment:
+                    if (_health == null) { _health = CheckEnvironment(); ShowEnvironment(); }
+                    if (_health.Affected.Count == 0) break; // nothing for the gates to decide; a missing docwizz context is step 2's
+                    choice = Choose(state, "Some gates can't run. Next:");
+                    ActOnEnvironment(choice.Value);
+                    break;
                 case GuideState.SystemContext:
                     if (_context == null) { _context = WithProgress(p => { p.Start("Reading the system context (docwizz)"); return wf.SystemContext(); }); ShowSystemContext(); }
                     if (_context.Quality == "GOOD") break;
@@ -204,6 +234,44 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         if (wf.CriteriaCount > 0) Ok($"{wf.CriteriaCount} acceptance {(wf.CriteriaCount == 1 ? "criterion" : "criteria")}");
         else if (pr.WorkItems.Count > 0) Warn("no acceptance criteria found in the linked work items");
         Ok(Plural(pr.Files.Count, "changed file"));
+    }
+
+    /// <summary>
+    /// Preflight phase B: the dependencies of the gates this PR's evaluation selects (its profile and risk) and of the
+    /// system context, assessed with the evaluator's rule. Checked once per run, again only on Retry.
+    /// </summary>
+    HealthReport CheckEnvironment() => WithProgress(p =>
+    {
+        p.Start("Checking what the gates rely on");
+        var selection = Evaluator.Select(wf.Config, options.Profile, wf.Risk.Level);
+        var deps = (health ?? new DependencyHealthService()).ForGates(wf.Config, selection.Gates, wf.Git, wf.TargetSha);
+        return DependencyHealthService.Assess(deps, wf.Config, [selection], () => Promotion.Check(wf.Git, wf.TargetSha, wf.Config), wf.Provider,
+            wf.Context.Redactor);
+    });
+
+    void ShowEnvironment()
+    {
+        output.WriteLine();
+        output.Markup(Health.GuideSection(_health!));
+    }
+
+    void ActOnEnvironment(GuideAction action)
+    {
+        switch (action)
+        {
+            case GuideAction.RetryEnvironment:
+                _health = CheckEnvironment();
+                ShowEnvironment();
+                break;
+            case GuideAction.ShowConfiguration:
+                output.WriteLine();
+                output.WriteLine(Health.Configuration(_health!, wf.Config, wf.Target).TrimEnd());
+                break;
+            case GuideAction.ContinueDegraded:
+                Info(_health!.Overall == OverallHealth.VerdictAtRisk ? "continuing: the affected blocking gates will report UNDETERMINED"
+                    : "continuing: the affected gates are advisory, the verdict is unaffected");
+                break;
+        }
     }
 
     static string Count(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
