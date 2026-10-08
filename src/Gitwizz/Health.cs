@@ -420,10 +420,7 @@ public sealed class DependencyHealthService(
 /// <summary>Renders a HealthReport: the terminal view, plain text and stable JSON (schema gitwizz.health/v1).</summary>
 public static class Health
 {
-    static string Mark(DependencyState s) => s switch
-    {
-        DependencyState.Available => "✓", DependencyState.Unknown => "?", DependencyState.Misconfigured => "✗", _ => "✗",
-    };
+    static string Mark(DependencyState s) => s switch { DependencyState.Available => "✓", DependencyState.Unknown => "?", _ => "✗" };
 
     static string Color(DependencyState s) => s switch
     {

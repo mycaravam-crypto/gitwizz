@@ -376,6 +376,8 @@ gitwizz evaluate "$PR" -f json -o evaluation.json --evidence gitwizz-evidence
 # 0 ready · 3 blocked (the change needs work) · 4 undetermined (fix the pipeline, not the PR)
 ```
 
+Run `gitwizz doctor -f json` as an earlier step to fail fast on the runner's tooling (exit 6 or 7) before evaluating.
+
 ## Test selection and traceability: `trace`
 
 ```bash
@@ -935,7 +937,8 @@ with risk-based test selection (#57), advisory AI review on a bounded evidence p
 that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
-docwizz system context for guided and AI-assisted review (#73).
+docwizz system context for guided and AI-assisted review (#73), and the dependency preflight `doctor` (#75, part 1 of 3;
+its integration into `guide` follows).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR
@@ -952,7 +955,8 @@ dotnet build
 dotnet test
 ```
 
-The same commands work on Linux, macOS and Windows. [docwizz](https://github.com/mycaravam-crypto/docwizz) checks
+The same commands work on Linux, macOS and Windows; [.github/workflows/test.yml](.github/workflows/test.yml) runs
+them on every pull request and on main. [docwizz](https://github.com/mycaravam-crypto/docwizz) checks
 this repository's `///` docs ([docwizz.yaml](docwizz.yaml)). On every pull request,
 [.github/workflows/docwizz.yml](.github/workflows/docwizz.yml) comments with the documentation gaps the change
 *introduces* and fails on a new critical gap; existing gaps don't fail it.
