@@ -13,4 +13,14 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with: { dotnet-version: 10.0.x }
       - run: dotnet build gitwizz.slnx --nologo
-      - run: dotnet test gitwizz.slnx --no-build --nologo
+      - run: dotnet test gitwizz.slnx --no-build --nologo --logger "trx;LogFileName=results.trx" --results-directory test-results
+      # Failed tests as annotations, readable on the PR without opening the log.
+      - if: failure()
+        shell: python
+        run: |
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          for f in glob.glob("test-results/**/*.trx", recursive=True):
+              for r in ET.parse(f).getroot().iterfind(".//t:UnitTestResult[@outcome='Failed']", ns):
+                  msg = " ".join((r.findtext(".//t:Message", "", ns) + " | " + r.findtext(".//t:StackTrace", "", ns)).split())[:900]
+                  print(f"::error title={r.get('testName')}::{msg}")

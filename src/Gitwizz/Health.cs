@@ -83,6 +83,7 @@ public sealed class DependencyHealthService(
     // --- Phase A ------------------------------------------------------------------------------------------------------
 
     /// <summary>git itself (installed, recent enough for merge-tree --write-tree) and the repository.</summary>
+    /// <param name="dir">The directory that should be (inside) the repository.</param>
     public List<DependencyHealth> CheckGit(string dir)
     {
         var v = Probe(dir, "git", "--version");
@@ -173,9 +174,12 @@ public sealed class DependencyHealthService(
 
     /// <summary>
     /// The dependencies of the given gates and of the configured context: tools of workspace gates and test suites
-    /// (version only, for well-known tools), docwizz, Docker for the environment gate, the AI endpoint. dir: where
-    /// tools are asked for their version; commit: where docwizz.yaml is read (null: the working tree).
+    /// (version only, for well-known tools), docwizz, Docker for the environment gate, the AI endpoint.
     /// </summary>
+    /// <param name="config">The policy: test suites, the docwizz context and the AI review settings.</param>
+    /// <param name="gates">Every gate an evaluation may run.</param>
+    /// <param name="git">The repository; tools are asked for their version in its directory.</param>
+    /// <param name="commit">Where docwizz.yaml is read; null: the working tree.</param>
     public List<DependencyHealth> ForGates(RepoConfig config, IReadOnlyCollection<GateSpec> gates, Git git, string? commit)
     {
         var deps = new List<DependencyHealth>();
@@ -242,6 +246,10 @@ public sealed class DependencyHealthService(
     }
 
     /// <summary>docwizz --version (no analysis is run) and, when present, that docwizz.yaml is valid YAML.</summary>
+    /// <param name="policy">context.docwizz: the command line that runs docwizz.</param>
+    /// <param name="dir">Where docwizz is asked for its version.</param>
+    /// <param name="git">The repository docwizz.yaml is read from.</param>
+    /// <param name="commit">The commit docwizz.yaml is read at; null: the working tree.</param>
     DependencyHealth Docwizz(DocwizzPolicy policy, string dir, Git git, string? commit)
     {
         var words = policy.Command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -288,6 +296,7 @@ public sealed class DependencyHealthService(
     /// The AI endpoint: the self-hosting policy first (a refused host is never contacted), then GET {endpoint}/models,
     /// which sends nothing but the key, and that the configured model is served. Only the host is ever shown.
     /// </summary>
+    /// <param name="review">review: in .gitwizz.yml: endpoint, model, allowed hosts and the key's variable.</param>
     public DependencyHealth AiEndpoint(ReviewPolicy review)
     {
         const string name = "AI endpoint";
@@ -344,6 +353,12 @@ public sealed class DependencyHealthService(
     /// dependency it relies on is down, or when a gate it needs is affected; the best reachable verdict is the evaluator's
     /// verdict with the affected gates erroring and every other gate passing, worst over the selections.
     /// </summary>
+    /// <param name="deps">The checked dependencies; messages and fixes are redacted here.</param>
+    /// <param name="config">The policy, or null when it can't be read (evaluation can't start).</param>
+    /// <param name="selections">The gate selections an evaluation may run, each in run order.</param>
+    /// <param name="promotion">Null if an ai-review gate may block, else why not (as for Evaluator.IsBlocking).</param>
+    /// <param name="provider">The provider checked, for the report.</param>
+    /// <param name="redactor">Masks secrets in everything the report shows.</param>
     public static HealthReport Assess(List<DependencyHealth> deps, RepoConfig? config, IReadOnlyList<(string Profile, List<GateSpec> Gates)> selections,
         Func<string?> promotion, string provider, Redactor redactor)
     {
