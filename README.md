@@ -231,6 +231,7 @@ An unavailable dependency is never a quality failure: it can make a verdict UNDE
 the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
 never stored: each run checks again. By default `doctor` uses the policy committed on the target branch, even if a local `.gitwizz.yml` exists.
 Use `--working-tree` to validate new or uncommitted policy edits (including `context.docwizz.command`) without changing PR evaluation policy.
+When `.gitwizz.yml` has uncommitted changes, text output highlights which policy `doctor` is checking and suggests `doctor --working-tree` if needed.
 Options: `--target`, `--provider`, `--profile`, `--working-tree`, `-f`, `-o`, `--repo`.
 
 `guide` runs the same checks: the first three rows (git, the repository, the provider) before it loads a PR, stopping
