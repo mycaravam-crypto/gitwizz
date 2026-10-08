@@ -31,7 +31,8 @@ plain local branches. `plan` still works on its own, with no gates configured.
   the hash of their input. Your working tree, index and branches are never touched: merges are simulated with
   `git merge-tree`, commands run in temporary worktrees.
 - **Stable output.** Human-readable text and versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
-  `gitwizz.context/v1`, `gitwizz.system-context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`), plus documented
+  `gitwizz.context/v1`, `gitwizz.system-context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`,
+  `gitwizz.health/v1`), plus documented
   [exit codes](#exit-codes).
 
 Design rationale: [PLAN.md](PLAN.md) (German).
@@ -219,6 +220,9 @@ fix. The gates it affects, and the best verdict an evaluation can still reach, f
 An unavailable dependency is never a quality failure: it can make a verdict UNDETERMINED, never BLOCKED. Without a PR
 the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
 never stored: each run checks again. Options: `--target`, `--provider`, `--profile`, `-f`, `-o`, `--repo`.
+
+`guide` runs the first three rows itself (git, the repository, the provider) before it loads a PR, and stops with the
+fix when one of them is unusable; see [Guided workflow](#guided-workflow-guide).
 
 ## Repository workspace: `status`, `refresh`, `cache`
 

@@ -335,7 +335,7 @@ public static partial class Cli
             return AzureDevOps.IsRemote(origin) ? "azure-devops" : origin.Contains("github.com") ? "github" : "local";
         });
         Func<string?> noPromotion = () => null;
-        if (deps.Any(d => d.Name is "git" or "repository" && d.Down)) return DependencyHealthService.Assess(deps, null, [], noPromotion, provider, new Redactor([]));
+        if (deps.Any(d => d.Down && d.Capabilities.Contains(DependencyHealthService.RepositoryAccess))) return DependencyHealthService.Assess(deps, null, [], noPromotion, provider, new Redactor([]));
 
         var git = new Git(dir);
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
