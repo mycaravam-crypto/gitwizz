@@ -343,6 +343,20 @@ public class HealthTests : IDisposable
     }
 
     [Fact]
+    public void Doctor_explains_uncommitted_policy_and_next_action()
+    {
+        Assert.Null(Cli.LocalPolicyNotice(_dir, false));
+        Write(RepoConfig.FileName, "context:\\n  docwizz:\\n    command: local-docwizz\\n");
+        Assert.Contains("Uncommitted .gitwizz.yml", Cli.LocalPolicyNotice(_dir, false));
+        Assert.Contains("gitwizz doctor --working-tree", Cli.LocalPolicyNotice(_dir, false));
+        Assert.Contains("checking the local file", Cli.LocalPolicyNotice(_dir, true));
+        Commit("add policy");
+        Assert.Null(Cli.LocalPolicyNotice(_dir, false));
+        Write(RepoConfig.FileName, "context:\\n  docwizz:\\n    command: updated-docwizz\\n");
+        Assert.Contains("Uncommitted .gitwizz.yml", Cli.LocalPolicyNotice(_dir, false));
+    }
+
+    [Fact]
     public void Doctor_uses_target_policy_by_default_and_uncommitted_policy_when_requested()
     {
         Config("context:\n  docwizz:\n    command: docwizz\n");
