@@ -94,8 +94,18 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
         var commit = ctx.MergedState ?? ctx.Pr.HeadSha;
         var package = Evidence.Build(ctx.Git, ctx.Pr, ctx.Config, ctx.Target, ctx.TargetSha, commit, ctx.Trace);
         if (ctx.EvidenceDir != null) File.WriteAllText(Path.Combine(ctx.EvidenceDir, $"{spec.Id}-package.json"), Evidence.Json(package));
+        var hash = package["hash"]!.GetValue<string>();
+        // The same package reviewed by the same model, prompt and settings: reuse the answer.
+        var inputs = new SortedDictionary<string, string>
+        {
+            ["gitwizz"] = Gitwizz.Fingerprint.Build, ["kind"] = "ai-review", ["package"] = hash, ["review"] = Fingerprint(review), ["endpoint"] = review.Endpoint!,
+            ["settings"] = $"{review.MinConfidence}|{review.MaxTokens}",
+        };
+        if (ctx.Store.Reuse<GateResult>("ai-review", inputs) is { } hit) return hit.Value with { CachedAt = hit.ComputedAt };
         var (findings, meta) = Review(package, review, Evidence.ChangedLines(ctx.Git, ctx.Pr));
-        return ToResult(findings, meta, review, package["hash"]!.GetValue<string>());
+        var result = ToResult(findings, meta, review, hash);
+        ctx.Store.Keep("ai-review", inputs, ctx.Redactor.Apply(result));
+        return result;
     }
 
     /// <summary>Gate result from validated findings: errors fail, warnings warn; rejected findings are listed as evidence only.</summary>

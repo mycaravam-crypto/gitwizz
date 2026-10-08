@@ -55,14 +55,16 @@ public class GuideTests : IDisposable
         Commit("policy");
     }
 
-    sealed class Script(params GuideAction[] choices) : IGuidePrompts
+    /// <summary>Answers each question with the next scripted choice: a GuideAction, or a function picking from the options.</summary>
+    internal sealed class Script(params object[] choices) : IGuidePrompts
     {
-        readonly Queue<GuideAction> _choices = new(choices);
+        readonly Queue<object> _choices = new(choices);
         public List<IReadOnlyList<GuideAction>> Asked { get; } = [];
-        public GuideAction Choose(string question, IReadOnlyList<GuideAction> options, Func<GuideAction, string> label)
+        public T Choose<T>(string question, IReadOnlyList<T> options, Func<T, string> label) where T : notnull
         {
-            Asked.Add(options);
-            var c = _choices.Dequeue();
+            if (options is IReadOnlyList<GuideAction> actions) Asked.Add(actions);
+            var next = _choices.Dequeue();
+            var c = next is Func<IReadOnlyList<T>, Func<T, string>, T> pick ? pick(options, label) : (T)next;
             Assert.Contains(c, options);
             return c;
         }

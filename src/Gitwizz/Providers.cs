@@ -75,7 +75,10 @@ public static class Providers
         var open = all.Select(x => x.Pr.Id).ToHashSet();
         var selected = prs.Select(p => p.Id).ToHashSet();
         foreach (var p in prs)
-            p.OpenOutsideDependencies = Analyzer.ExplicitDependencies(p).Where(d => open.Contains(d) && !selected.Contains(d)).Distinct().ToList();
+        {
+            p.OpenDependencies = Analyzer.ExplicitDependencies(p).Where(open.Contains).Distinct().Order(StringComparer.Ordinal).ToList();
+            p.OpenOutsideDependencies = p.OpenDependencies.Where(d => !selected.Contains(d)).ToList();
+        }
         return prs;
     }
 

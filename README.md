@@ -47,7 +47,9 @@ and a PR blocked by a real conflict. It ends with commands to try on the demo yo
 In your own repository ([install](#install) first):
 
 ```bash
+gitwizz guide                    # the repository: which PRs are ready, blocked or stale, and what to do next
 gitwizz guide 57                 # step by step: context, test impact, tests, verdict, what to do next
+gitwizz status                   # the same overview, non-interactive (-f json for scripts)
 gitwizz evaluate 57              # is PR 57 ready? (exit 0 ready, 3 blocked, 4 undetermined)
 gitwizz explain 57               # every blocking decision, with evidence
 gitwizz trace 57 --run           # the tests the change needs, checked against its acceptance criteria
@@ -58,7 +60,10 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 
 | Command | Answers |
 |---|---|
-| `guide <pr> [--yes]` | What do I do next? Walks the PR from context to verdict and suggests the next action |
+| `guide [<pr>] [--yes]` | What do I do next? The repository overview, or one PR walked from context to verdict |
+| `status` | Which open PRs are ready, blocked, undetermined, stale or never evaluated? (`-f text\|json`) |
+| `refresh [--all-open]` | Re-evaluates what is stale (with `--all-open` also what was never evaluated), reusing the rest |
+| `cache status\|clear` | Where the workspace is and what it holds; removes it |
 | `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`) |
 | `explain <pr>` | Why (not)? Blocking decisions, evidence, the criteria matrix (`-f text\|json`) |
 | `trace <pr> [--run]` | Which tests does the change need, and which acceptance criteria do they cover? |
@@ -153,7 +158,63 @@ and planning). It never merges, never changes the PR and never writes tests. It 
 terminals: with `--yes`, or when piped, it runs the recommended steps and never waits for input. It keeps no state.
 After fixing code or tests, rerun `gitwizz guide 57` and it recomputes everything. The exit code matches `evaluate`'s,
 and is 4 when you exit before a verdict. Options: `--target`, `--provider`, `--profile`, `--evidence`, `--yes`,
-`--repo`.
+`--repo`, `--no-cache`.
+
+Without a PR, `gitwizz guide` starts from the repository. It shows the target, the workspace and every open PR as
+ready, blocked, undetermined, stale (with the reason) or never evaluated, then recommends the next action. A stale
+verdict comes first, then unevaluated PRs, stale repository facts, blockers, and finally the merge plan for what is
+ready. Choosing a PR continues in the PR guide above, and that PR's new verdict is stored. Without a terminal it prints
+the summary and the recommended command, and runs nothing.
+
+## Repository workspace: `status`, `refresh`, `cache`
+
+```bash
+gitwizz status                # open PRs as the workspace sees them, and the next suggested action
+gitwizz refresh               # re-evaluate PRs whose verdict is stale; bring repository facts up to date
+gitwizz refresh --all-open    # also evaluate open PRs never evaluated
+gitwizz cache status          # where the workspace is and what it holds
+gitwizz cache clear           # remove it (only a directory gitwizz created)
+```
+
+gitwizz keeps what it computed in a workspace under the repository's git directory (`.git/gitwizz/`, shared by
+worktrees), never in tracked files. `GITWIZZ_WORKSPACE=<dir>` moves it, e.g. to a CI cache. It holds:
+
+| Artifact | Reused while these are unchanged |
+|---|---|
+| PR analysis (changed files, hunks, members, API changes) | target commit, PR head, gitwizz build |
+| Conflict history (`plan`) | target commit, depth, gitwizz build |
+| Policy and test topology | `.gitwizz.yml` at the target, gitwizz build |
+| Build, test and command gate results | merged-state commit, gate definition, command, environment, the command's tools |
+| Test suite runs (`traceability`) | merged-state commit, suite definition, environment, the suite's tools |
+| AI review results | evidence-package hash, model, prompt version and hash, endpoint, review settings |
+| Latest verdict per PR (`status`, `guide`) | commits, `.gitwizz.yml`, provider state (reviews, checks, description, work items), strategy, profile, the tools of the commands it ran |
+
+Every entry stores its inputs, the time it was computed and a fingerprint of those inputs. It is reused only when the
+fingerprint of the current inputs matches, never because it is recent. When it doesn't match, `status` and `guide` say
+it is stale and why ("new commits on the PR", "the target branch moved", "`.gitwizz.yml` changed", "a tool
+changed"…), and nothing stale is shown as current. A tool counts as the program each command segment starts: shell
+builtins are fixed; a relative path is part of the commit; well-known tools (dotnet, npm, go, …) by their `--version`;
+anything else by its location, size and modification time.
+
+Some results are never stored:
+- a gate that errored (a missing tool or a timeout says nothing about the change);
+- results that depend on a provisioned test environment (variables beyond `GITWIZZ_*`);
+- merge and policy gates, which are cheap and read live provider state.
+
+With `--evidence`, gates run again so every log is written. A stored value also carries a digest, so a corrupt,
+truncated or edited entry reads as missing and is recomputed: it can never turn into a READY. Delete the workspace at
+any time; the next run recomputes it. `--no-cache` neither reads nor writes it, and CI works the same with an empty
+one.
+
+Incremental in practice:
+- A new commit on one PR invalidates that PR's analysis and verdict only.
+- A moved target invalidates baseline-dependent data, keeping gate results whose merged state is unchanged.
+- An edited test command reruns that suite only.
+- Another AI model or prompt reruns the AI review only.
+- Rerunning `guide` with nothing changed reuses every gate result.
+
+gitwizz has no repository-wide code, architecture or documentation index to keep: it analyzes each PR's changes
+(stored per PR above), and docwizz covers documentation.
 
 ## Merge readiness: `evaluate` and `explain`
 
@@ -702,6 +763,11 @@ gates or profiles are errors.
 
 ## Known limitations
 
+- The workspace's tool fingerprint covers the program each command segment starts, not what that program starts in
+  turn: a script in the repository is covered by the commit, but a tool it calls is not. After changing such tools
+  underneath, run with `--no-cache` or `gitwizz cache clear`. Another gitwizz build invalidates everything stored.
+- `status`, `refresh` and the repository guide read every open PR's linked work items, one or two provider calls per
+  PR. The workspace is never pruned; `gitwizz cache clear` empties it.
 - Hunk overlap assumes the PRs share a merge-base; with very different bases it's an approximation.
 - A declared dependency on an *open* PR outside the selected set blocks the PR; one on a merged or closed PR counts as
   met. A PR whose base is neither the target nor a planned PR's branch is blocked ("targets 'release', not 'main'"),
@@ -722,7 +788,8 @@ Done: the v1, v2 and v0.4 planner work, and the PR quality & merge orchestrator 
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), requirement-to-test traceability
 with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), the AI quality benchmark
 that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
-PR workflow `guide` (#69), and per-phase progress bars on every long-running command.
+PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
+workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR

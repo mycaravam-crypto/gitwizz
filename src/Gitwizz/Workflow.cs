@@ -18,20 +18,36 @@ public sealed class PullRequestWorkflow : IDisposable
     public RepoConfig Config { get; }
     public GateContext Context { get; }
 
+    public WorkspaceStore Store { get; }
+
+    /// <summary>The stored analysis' state when the PR was analyzed (current: it was reused). Set by whoever analyzed it.</summary>
+    public ArtifactState Analysis { get; init; } = ArtifactState.Off;
+
+    /// <summary>The PR's latest evaluation in the workspace, as it stood before this run, and whether it still applies.</summary>
+    public (ArtifactState State, WorkspaceStore.EvaluationData? Last) Previous { get; }
+
     GateResult? _merge;
 
-    /// <summary>pr must be analyzed. strategy null: what the branch enforces (merge queue method, linear history), else merge.</summary>
+    /// <summary>
+    /// pr must be analyzed. strategy null: what the branch enforces (merge queue method, linear history), else merge.
+    /// store: where gate results are reused from and the evaluation is recorded.
+    /// </summary>
     public PullRequestWorkflow(Git git, string provider, string target, string targetSha, PullRequest pr, BranchPolicy policy, RepoConfig config,
-        MergeStrategy? strategy = null, string? evidenceDir = null)
+        MergeStrategy? strategy = null, string? evidenceDir = null, WorkspaceStore? store = null)
     {
-        (Git, Provider, Target, TargetSha, Pr, Policy, Config) = (git, provider, target, targetSha, pr, policy, config);
+        (Git, Provider, Target, TargetSha, Pr, Policy, Config, Store) = (git, provider, target, targetSha, pr, policy, config, store ?? WorkspaceStore.Off);
         Context = new GateContext
         {
             Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config,
-            Strategy = strategy ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
-            Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)), EvidenceDir = evidenceDir,
+            Strategy = strategy ?? DefaultStrategy(policy),
+            Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)), EvidenceDir = evidenceDir, Store = Store,
         };
+        Previous = Store.EvaluationState(git, provider, pr, targetSha, Context.Strategy);
     }
+
+    /// <summary>What the branch enforces: its merge queue's method, squash for linear history, else merge.</summary>
+    public static MergeStrategy DefaultStrategy(BranchPolicy policy) =>
+        policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge);
 
     /// <summary>Risk level and reasons, as the gates see them.</summary>
     public (string Level, List<string> Reasons) Risk => Gates.Risk(Pr, Config);
@@ -58,12 +74,17 @@ public sealed class PullRequestWorkflow : IDisposable
         var trace = Context.Trace ?? BuildTrace();
         if (Context.MergedState == null) throw new InvalidOperationException($"can't run tests: {Merge().Summary}");
         Evaluator.SetEnvironment(Context, Risk.Level);
-        Traceability.RunSuites(trace, Config, Context.Workspace, Context.Env, Context.Redactor, Context.EvidenceDir, progress);
+        Traceability.RunSuites(trace, Config, () => Context.Workspace, Context.Env, Context.Redactor, Context.EvidenceDir, progress, Context.Store);
         return trace;
     }
 
-    /// <summary>The quality-gate evaluation, exactly as gitwizz evaluate runs it.</summary>
-    public Evaluation Evaluate(string? profile = null, ProgressBars? progress = null) => Evaluator.Run(Context, profile, progress);
+    /// <summary>The quality-gate evaluation, exactly as gitwizz evaluate runs it; recorded as the PR's latest in the workspace.</summary>
+    public Evaluation Evaluate(string? profile = null, ProgressBars? progress = null)
+    {
+        var e = Evaluator.Run(Context, profile, progress);
+        Store.KeepEvaluation(Git, Provider, e, profile);
+        return e;
+    }
 
     /// <summary>The bounded evidence package an AI review would get, built on the merged state; secrets are masked.</summary>
     public JsonObject EvidencePackage()
