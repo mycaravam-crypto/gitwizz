@@ -227,18 +227,22 @@ public static partial class Cli
     /// <summary>
     /// Runs guide: walks one pull request from its context through test impact, tests and the quality gates to a verdict
     /// and the next action. Asks only when stdin and stdout are terminals and --yes is not given; otherwise it runs the
-    /// recommended steps (the selected tests, then the evaluation) and stops at the verdict. Returns evaluate's exit code.
+    /// recommended steps (the selected tests, then the evaluation) and stops at the verdict. Checks git, the repository
+    /// and the provider before loading the PR. Returns evaluate's exit code, or 7 when that check fails.
     /// </summary>
     public static int Guide(string subject, Dictionary<string, string> opt, IAnsiConsole err)
     {
+        var interactive = !opt.ContainsKey("yes") && !Console.IsInputRedirected && !Console.IsOutputRedirected;
+        var prompts = interactive ? new SpectrePrompts(AnsiConsole.Console) : null;
+        if (GuidePreflight(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")), g => ProviderFor(g, opt, [subject.TrimStart('#')]),
+                new DependencyHealthService(), AnsiConsole.Console, err, prompts) is { } stop)
+            return stop;
         var git = OpenRepo(opt);
         var evidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null;
-        var interactive = !opt.ContainsKey("yes") && !Console.IsInputRedirected && !Console.IsOutputRedirected;
         var rerun = "gitwizz guide " + subject + string.Concat(new[] { "target", "provider", "profile", "repo" }
             .Where(opt.ContainsKey).Select(k => $" --{k} {(opt[k].Contains(' ') ? $"\"{opt[k]}\"" : opt[k])}"));
         using var wf = ProgressBars.Show(err, progress => OpenWorkflow(git, opt, subject, evidenceDir, progress));
-        var guide = new Guide(wf, new GuideOptions(rerun, opt.GetValueOrDefault("profile"), evidenceDir), AnsiConsole.Console, err,
-            interactive ? new SpectrePrompts(AnsiConsole.Console) : null,
+        var guide = new Guide(wf, new GuideOptions(rerun, opt.GetValueOrDefault("profile"), evidenceDir), AnsiConsole.Console, err, prompts,
             progress => BuildPlan(git, wf.Store, wf.Provider, wf.Target, null, null, 8, Repository.HistoryDepth, progress));
         return guide.Run();
     }
@@ -322,20 +326,18 @@ public static partial class Cli
     /// </summary>
     public static HealthReport Diagnose(string dir, Dictionary<string, string> opt, DependencyHealthService service)
     {
-        var deps = service.CheckGit(dir);
-        var provider = opt.GetValueOrDefault("provider") is { } p ? (p is "ado" or "azure" ? "azure-devops" : p) : "local";
-        if (provider is not ("local" or "github" or "azure-devops")) throw new ArgumentException($"unknown provider '{provider}' (local, github, azure-devops)");
+        var given = opt.GetValueOrDefault("provider") is { } p ? (p is "ado" or "azure" ? "azure-devops" : p) : null;
+        if (given is not (null or "local" or "github" or "azure-devops")) throw new ArgumentException($"unknown provider '{given}' (local, github, azure-devops)");
+        var (deps, provider) = PhaseA(dir, service, git =>
+        {
+            if (given != null) return given;
+            var origin = git.Try("remote", "get-url", "origin").Stdout;
+            return AzureDevOps.IsRemote(origin) ? "azure-devops" : origin.Contains("github.com") ? "github" : "local";
+        });
         Func<string?> noPromotion = () => null;
-        if (deps.Any(d => d.Down)) return DependencyHealthService.Assess(deps, null, [], noPromotion, provider, new Redactor([]));
+        if (deps.Any(d => d.Name is "git" or "repository" && d.Down)) return DependencyHealthService.Assess(deps, null, [], noPromotion, provider, new Redactor([]));
 
         var git = new Git(dir);
-        if (!opt.ContainsKey("provider"))
-        {
-            var origin = git.Try("remote", "get-url", "origin").Stdout;
-            provider = AzureDevOps.IsRemote(origin) ? "azure-devops" : origin.Contains("github.com") ? "github" : "local";
-        }
-        deps.Add(service.CheckProvider(provider, dir));
-
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
         var sha = new[] { $"refs/remotes/origin/{target}", target }.Where(r => r != "")
             .Select(r => git.Try("rev-parse", "--verify", "--quiet", r + "^{commit}")).FirstOrDefault(r => r.ExitCode == 0)?.Stdout.Trim();
@@ -347,6 +349,50 @@ public static partial class Cli
         var selections = DependencyHealthService.Selections(config, opt.GetValueOrDefault("profile"));
         deps.AddRange(service.ForGates(config, selections.SelectMany(s => s.Gates).DistinctBy(g => g.Id).ToList(), git, sha));
         return DependencyHealthService.Assess(deps, config, selections, () => Promotion.Check(git, sha ?? "HEAD", config), provider, new Redactor(config.Secrets));
+    }
+
+    /// <summary>
+    /// Preflight phase A, which needs nothing loaded: git and the repository in dir, then (only if both are usable) the
+    /// provider that provider picks for the repository. Returns the unredacted checks and the provider ("local" when
+    /// git or the repository is down and none was picked).
+    /// </summary>
+    static (List<DependencyHealth> Deps, string Provider) PhaseA(string dir, DependencyHealthService service, Func<Git, string> provider)
+    {
+        var deps = service.CheckGit(dir);
+        if (deps.Any(d => d.Down)) return (deps, "local");
+        var name = provider(new Git(dir));
+        if (name is not ("local" or "github" or "azure-devops")) throw new ArgumentException($"unknown provider '{name}' (local, github, azure-devops)");
+        deps.Add(service.CheckProvider(name, dir));
+        return (deps, name);
+    }
+
+    /// <summary>
+    /// The guide's preflight phase A, before any PR or repository is loaded: prints the environment (git, the
+    /// repository, the provider the guide will use). When one of them is down it prints the fix and, with prompts,
+    /// offers Retry (checks again) or Exit; without prompts (--yes, no terminal) it stops at once. Returns null to go
+    /// on, else 7 (cannot start). Never retries on its own.
+    /// </summary>
+    /// <param name="dir">The repository directory (--repo).</param>
+    /// <param name="provider">Picks the provider for the repository, as the guide then loads with it.</param>
+    /// <param name="service">Runs the checks.</param>
+    /// <param name="output">Where the environment section goes, ahead of the guide.</param>
+    /// <param name="err">Where progress goes.</param>
+    /// <param name="prompts">Asks Retry or Exit; null: don't ask.</param>
+    public static int? GuidePreflight(string dir, Func<Git, string> provider, DependencyHealthService service, IAnsiConsole output, IAnsiConsole err,
+        IGuidePrompts? prompts)
+    {
+        while (true)
+        {
+            var (deps, _) = ProgressBars.Show(err, progress => { progress.Start("Checking git and the provider"); return PhaseA(dir, service, provider); });
+            deps = DependencyHealthService.Redact(deps, new Redactor([]));
+            output.Markup(Health.Preflight(deps));
+            if (!deps.Any(d => d.Essential && d.Down)) return null;
+            if (prompts == null) return 7;
+            output.WriteLine();
+            if (prompts.Choose("Next:", [PreflightAction.Retry, PreflightAction.Exit], a => a == PreflightAction.Retry ? "Retry" : "Exit") == PreflightAction.Exit)
+                return 7;
+            output.WriteLine();
+        }
     }
 
     /// <summary>Runs cache status (where the workspace is and what it holds) or cache clear (removes it).</summary>
@@ -374,14 +420,18 @@ public static partial class Cli
 
     /// <summary>
     /// Runs guide without a PR: the repository summary, then the next action; a chosen PR continues in the PR guide.
-    /// Without a terminal (or with --yes) it prints the summary and the recommended command.
+    /// Without a terminal (or with --yes) it prints the summary and the recommended command. Checks git, the repository
+    /// and the provider before loading anything; returns 7 when that check fails.
     /// </summary>
     public static int RepositoryGuide(Dictionary<string, string> opt, IAnsiConsole err)
     {
-        var git = OpenRepo(opt);
-        var store = StoreFor(git, opt);
         var interactive = !opt.ContainsKey("yes") && !Console.IsInputRedirected && !Console.IsOutputRedirected;
         var prompts = interactive ? new SpectrePrompts(AnsiConsole.Console) : null;
+        if (GuidePreflight(Path.GetFullPath(opt.GetValueOrDefault("repo", ".")), g => ProviderFor(g, opt, []), new DependencyHealthService(),
+                AnsiConsole.Console, err, prompts) is { } stop)
+            return stop;
+        var git = OpenRepo(opt);
+        var store = StoreFor(git, opt);
         var (provider, target, policy, targetSha, prs) = ProgressBars.Show(err, progress => LoadRepository(git, opt, progress));
         var config = RepoConfig.Load(git, targetSha);
         var evidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null;
@@ -683,7 +733,8 @@ public static partial class Cli
             [bold]Guide[/]
                   --profile, --evidence as for evaluate
               -y, --yes                 don't ask: run the selected tests and the gates, print the verdict [grey](default without a terminal)[/]
-              [grey]exit code: as evaluate; 4 also when you exit before a verdict. Never merges or changes the PR.[/]
+              [grey]checks git, the repository and the provider first; exit code: as evaluate; 4 also when you exit before a verdict;[/]
+              [grey]7 when git, the repository or the provider is unusable. Never merges or changes the PR.[/]
 
             [bold]Doctor[/]
                   --target, --provider, --profile as above; -f pretty | text | json
