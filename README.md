@@ -721,7 +721,8 @@ gates or profiles are errors.
 Done: the v1, v2 and v0.4 planner work, and the PR quality & merge orchestrator epic (#53): quality gates with
 `evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), requirement-to-test traceability
 with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), the AI quality benchmark
-that decides when AI review may block (#59), and ephemeral per-PR test environments (#58).
+that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
+PR workflow `guide` (#69), and per-phase progress bars on every long-running command.
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR

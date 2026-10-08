@@ -44,6 +44,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
 
     Trace? _trace;
     Evaluation? _evaluation;
+    Dictionary<string, GateSpec>? _gates;
     bool _testsShown;
 
     /// <summary>The next state after state, given the facts and the developer's choice (null: none was asked for).</summary>
@@ -144,7 +145,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         Ok($"PR loaded (head {Short(pr.HeadSha)})");
         if (pr.WorkItems.Count > 0) Ok($"{Plural(pr.WorkItems.Count, "linked work item")}: {string.Join(", ", pr.WorkItems.Select(w => w.Id))}");
         else Warn(wf.Provider == "local" ? "no linked work items (local branches have none)" : "no linked work items");
-        if (wf.CriteriaCount > 0) Ok(Plural(wf.CriteriaCount, "acceptance criterion").Replace("criterions", "criteria"));
+        if (wf.CriteriaCount > 0) Ok($"{wf.CriteriaCount} acceptance {(wf.CriteriaCount == 1 ? "criterion" : "criteria")}");
         else if (pr.WorkItems.Count > 0) Warn("no acceptance criteria found in the linked work items");
         Ok(Plural(pr.Files.Count, "changed file"));
     }
@@ -165,19 +166,21 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         foreach (var c in t.Criteria.Where(c => c.Status == "manual")) Info($"{c.Id} is verified manually");
     }
 
+    /// <summary>The gates the evaluation will run, by id (throws early on an unknown profile).</summary>
+    Dictionary<string, GateSpec> Gates => _gates ??= Evaluator.Select(wf.Config, options.Profile, wf.Risk.Level).Gates.ToDictionary(g => g.Id);
+
     /// <summary>The evaluation provisions a test environment for the traceability gate: its suites can only run there.</summary>
     bool TestsDeferred
     {
         get
         {
-            var specs = Evaluator.Select(wf.Config, options.Profile, wf.Risk.Level).Gates.ToDictionary(g => g.Id);
-            bool NeedsEnvironment(GateSpec g) => g.Requires.Any(r => specs.TryGetValue(r, out var n) && (n.Kind == "environment" || NeedsEnvironment(n)));
-            return specs.Values.Any(g => g.Kind == "traceability" && NeedsEnvironment(g));
+            bool NeedsEnvironment(GateSpec g) => g.Requires.Any(r => Gates.TryGetValue(r, out var n) && (n.Kind == "environment" || NeedsEnvironment(n)));
+            return Gates.Values.Any(g => g.Kind == "traceability" && NeedsEnvironment(g));
         }
     }
 
     /// <summary>The traceability gate is in the selected profile, so the verdict includes the suites' results.</summary>
-    bool TestsCount => Evaluator.Select(wf.Config, options.Profile, wf.Risk.Level).Gates.Any(g => g.Kind == "traceability");
+    bool TestsDecide => Gates.Values.Any(g => g.Kind == "traceability");
 
     void Test(GuideAction choice)
     {
@@ -187,7 +190,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         _testsShown = true;
         if (choice == GuideAction.SkipTests)
         {
-            Info(TestsCount ? "not run here: the evaluation runs them for its traceability gate" : "not run");
+            Info(TestsDecide ? "not run here: the evaluation runs them for its traceability gate" : "not run");
             return;
         }
         WithProgress(p => wf.RunTests(p));
@@ -203,8 +206,8 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         }
         foreach (var c in _trace.Criteria.Where(c => c.Status == "failed")) Bad($"{c.Id} failed ({string.Join(", ", c.Tests)})");
         foreach (var c in _trace.Criteria.Where(c => c.Status is "uncovered" or "unknown")) Warn($"{c.Id} remains {c.Status}");
-        if (!TestsCount && _trace.Runs.Count > 0)
-            Info($"no traceability gate in the policy: these results don't decide the verdict");
+        if (!TestsDecide && _trace.Runs.Count > 0)
+            Info("no traceability gate in the policy: these results don't decide the verdict");
     }
 
     void Evaluate()
