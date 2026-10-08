@@ -163,14 +163,23 @@ It shows six steps:
 The menus also offer the full explanation, a summary of the AI evidence package, and saving `evaluation.json` and
 `evidence.json` as an evidence bundle.
 
-Before it loads anything, the guide checks its environment, with the first checks
-[`doctor`](#environment-check-doctor) makes: git, the repository and the provider it will use (`ado auth status` or
-`gh auth status`, read-only). It prints them as an *Environment* section. When one of them is unusable, it shows the
-fix (for example `ado auth login <server-url>`) and stops with exit code 7 before any PR is loaded. On a terminal it
-offers *Retry* (after you fixed it in another shell) or *Exit*; with `--yes` or without a terminal it stops at once.
-It never retries on its own. The same applies to `gitwizz guide` without a PR. The dependencies of the configured
-gates (docwizz, the AI endpoint, Docker, gate tools) are checked by `doctor`; their check inside the guide follows
-(#75, part 3).
+Before it loads anything, the guide checks its environment with the first checks [`doctor`](#environment-check-doctor)
+makes: git, the repository and the provider it will use (`ado auth status` or `gh auth status`, read-only). It prints
+them as an *Environment* section. When one of them is unusable, it shows the fix (for example `ado auth login
+<server-url>`) and stops with exit code 7 before any PR is loaded. On a terminal it offers *Retry* (after you fixed it
+in another shell) or *Exit*; with `--yes` or without a terminal it stops at once. The same applies to `gitwizz guide`
+without a PR.
+
+After the PR context, once the policy is read from the target, the guide checks what the gates selected for this PR
+rely on: docwizz, the AI endpoint (its model list only, never repository content, never a host the self-hosting policy
+refuses), Docker for an `environment` gate, and the version of well-known gate tools (scripts are never run). Under
+*Gate dependencies* it lists them, the gates that can't run and what that means: an advisory gate (AI review) leaves
+the verdict alone (`DEGRADED`), a blocking one means the verdict can be no better than UNDETERMINED
+(`VERDICT_AT_RISK`), with the same rule as `evaluate`. When a gate is affected, it asks: *Continue without …* (or
+*Continue anyway*), *Retry the checks*, *Show configuration* (the `.gitwizz.yml` keys involved, hosts only, and the
+fixes) or *Exit*. With `--yes` or without a terminal it says what it found and continues. A missing docwizz that only
+the system context needs is left to step 2. Nothing is checked twice in one run except on *Retry*, and no result is
+stored: every run checks again. An unavailable tool never makes a PR BLOCKED.
 
 It only orchestrates the other commands' logic (one implementation of loading, analysis, traceability, gates, evidence
 and planning). It never merges, never changes the PR and never writes tests. It asks only when stdin and stdout are
@@ -221,8 +230,9 @@ An unavailable dependency is never a quality failure: it can make a verdict UNDE
 the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
 never stored: each run checks again. Options: `--target`, `--provider`, `--profile`, `-f`, `-o`, `--repo`.
 
-`guide` runs the first three rows itself (git, the repository, the provider) before it loads a PR, and stops with the
-fix when one of them is unusable; see [Guided workflow](#guided-workflow-guide).
+`guide` runs the same checks: the first three rows (git, the repository, the provider) before it loads a PR, stopping
+with the fix when one of them is unusable, and the rest for the gates selected for that PR after its context; see
+[Guided workflow](#guided-workflow-guide).
 
 ## Repository workspace: `status`, `refresh`, `cache`
 
@@ -950,8 +960,8 @@ with risk-based test selection (#57), advisory AI review on a bounded evidence p
 that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
-docwizz system context for guided and AI-assisted review (#73), and the dependency preflight `doctor` (#75, part 1 of 3)
-with its git and provider check at the start of `guide` (part 2; the gate dependencies in `guide` follow).
+docwizz system context for guided and AI-assisted review (#73), and the dependency preflight `doctor` and its checks in
+`guide` (#75).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR

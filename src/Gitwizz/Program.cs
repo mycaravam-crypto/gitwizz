@@ -733,7 +733,8 @@ public static partial class Cli
             [bold]Guide[/]
                   --profile, --evidence as for evaluate
               -y, --yes                 don't ask: run the selected tests and the gates, print the verdict [grey](default without a terminal)[/]
-              [grey]checks git, the repository and the provider first; exit code: as evaluate; 4 also when you exit before a verdict;[/]
+              [grey]checks git, the repository and the provider first, then what the PR's gates rely on (as doctor does)[/]
+              [grey]exit code: as evaluate; 4 also when you exit before a verdict;[/]
               [grey]7 when git, the repository or the provider is unusable. Never merges or changes the PR.[/]
 
             [bold]Doctor[/]

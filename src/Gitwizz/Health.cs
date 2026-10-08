@@ -499,6 +499,61 @@ public static class Health
         return sb.AppendLine().ToString();
     }
 
+    /// <summary>
+    /// The guide's section for preflight phase B, with Spectre markup: what the selected gates rely on, the gates that
+    /// can't run, and what that means for the verdict.
+    /// </summary>
+    public static string GuideSection(HealthReport r)
+    {
+        var sb = new StringBuilder().AppendLine("[bold]Gate dependencies[/]");
+        if (r.Dependencies.Count == 0) sb.AppendLine("  [grey]–[/] the selected gates need no external tools");
+        Lines(sb, r.Dependencies, markup: true);
+        foreach (var a in r.Affected)
+            sb.AppendLine($"  [{(a.Blocking ? "indianred1" : "gold1")}]![/] {Markup.Escape(a.Id)} can't run "
+                + $"[grey]({(a.Blocking ? "blocking" : "advisory")}: {Markup.Escape(a.Reason)})[/]");
+        if (r.Overall != OverallHealth.Ok)
+        {
+            var color = r.Overall == OverallHealth.Degraded ? "orange1" : "indianred1";
+            sb.AppendLine($"  [bold {color}]{Name(r.Overall)}[/]  {Markup.Escape(Meaning(r))}");
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The configuration behind the dependencies that are down: which .gitwizz.yml keys point at them (hosts only, never a
+    /// key or URL credentials), their fixes, and the command for the full report.
+    /// </summary>
+    /// <param name="r">The phase B report.</param>
+    /// <param name="config">The policy the gates come from.</param>
+    /// <param name="target">The target branch, for the doctor command.</param>
+    public static string Configuration(HealthReport r, RepoConfig config, string target)
+    {
+        var sb = new StringBuilder($"  Configuration: {r.PolicySource ?? RepoConfig.FileName}").AppendLine(r.Profiles.Count > 0 ? $", profile {string.Join(", ", r.Profiles)}" : "");
+        foreach (var d in r.Dependencies.Where(d => d.Down))
+        {
+            sb.AppendLine($"    {d.Name}" + (d.RequiredBy.Count > 0 ? $" (used by {string.Join(", ", d.RequiredBy)})" : ""));
+            switch (d.Name)
+            {
+                case "AI endpoint":
+                    var host = Uri.TryCreate(config.Review.Endpoint, UriKind.Absolute, out var u) ? u.Host : "(not a URL)";
+                    sb.AppendLine($"      review.endpoint      host {(config.Review.Endpoint is null ? "(not set)" : host)}");
+                    sb.AppendLine($"      review.model         {config.Review.Model ?? "(not set)"}");
+                    if (config.Review.ApiKeyEnv is { } env)
+                        sb.AppendLine($"      review.api_key_env   {env} ({(string.IsNullOrEmpty(Environment.GetEnvironmentVariable(env)) ? "not set" : "set")})");
+                    break;
+                case "docwizz":
+                    sb.AppendLine($"      context.docwizz.command  {config.Context.Docwizz.Command}");
+                    break;
+                case "Docker":
+                    sb.AppendLine($"      environment.provisioner  {config.Environment.Provisioner}");
+                    break;
+            }
+            if (d.Remediation != null) sb.AppendLine($"      fix: {d.Remediation}");
+        }
+        sb.AppendLine($"  Full environment report: gitwizz doctor --target {target}");
+        return sb.ToString();
+    }
+
     /// <summary>Stable JSON (schema gitwizz.health/v1). Fields are only ever added, never renamed or removed.</summary>
     public static string Json(HealthReport r) => JsonSerializer.Serialize(new
     {

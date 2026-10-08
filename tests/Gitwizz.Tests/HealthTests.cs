@@ -31,7 +31,7 @@ public class HealthTests : IDisposable
         """;
 
     /// <summary>Answers tool commands from a table (missing: not installed); git runs for real. Records every call.</summary>
-    sealed class FakeTools(Dictionary<string, GitResult> answers)
+    internal sealed class FakeTools(Dictionary<string, GitResult> answers)
     {
         public List<string> Calls { get; } = [];
 
@@ -44,7 +44,7 @@ public class HealthTests : IDisposable
         }
     }
 
-    static GitResult Ok(string stdout = "") => new(0, stdout, "");
+    internal static GitResult Ok(string stdout = "") => new(0, stdout, "");
 
     static Dictionary<string, GitResult> Everything() => new()
     {
@@ -57,7 +57,7 @@ public class HealthTests : IDisposable
     };
 
     /// <summary>An OpenAI-compatible model list; Throw: unreachable. Counts requests and keeps the last one.</summary>
-    sealed class FakeEndpoint(string models = """{"data":[{"id":"qwen"},{"id":"llama"}]}""", HttpStatusCode status = HttpStatusCode.OK, bool down = false) : HttpMessageHandler
+    internal sealed class FakeEndpoint(string models = """{"data":[{"id":"qwen"},{"id":"llama"}]}""", HttpStatusCode status = HttpStatusCode.OK, bool down = false) : HttpMessageHandler
     {
         public int Requests { get; private set; }
         public HttpRequestMessage? Last { get; private set; }
@@ -492,8 +492,8 @@ public class HealthTests : IDisposable
         finally { Environment.SetEnvironmentVariable("GITWIZZ_ADO", null); }
     }
 
-    sealed class Erroring : IQualityGate
+    internal sealed class Erroring(string summary = "AI review endpoint llm.internal unreachable") : IQualityGate
     {
-        public GateResult Run(GateContext ctx, GateSpec spec) => GateResult.Of(GateStatus.Error, "AI review endpoint llm.internal unreachable");
+        public GateResult Run(GateContext ctx, GateSpec spec) => GateResult.Of(GateStatus.Error, summary);
     }
 }
