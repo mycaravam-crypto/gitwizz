@@ -139,10 +139,13 @@ public static partial class Traceability
     static Regex MentionPattern(string item) => new((item.StartsWith('#') ? @"(?<![\w#])" : @"\b") + Regex.Escape(item) + @"(\.\d+)?\b");
 
     /// <summary>Runs the selected suites in dir, in order, and records their results; then re-resolves the criteria.</summary>
-    public static void RunSuites(Trace trace, RepoConfig config, string dir, IDictionary<string, string> env, Redactor redactor, string? evidenceDir = null)
+    public static void RunSuites(Trace trace, RepoConfig config, string dir, IDictionary<string, string> env, Redactor redactor, string? evidenceDir = null,
+        ProgressBars? progress = null)
     {
-        foreach (var t in trace.Selected)
+        progress?.Start($"Running {trace.Selected.Count} test suites", trace.Selected.Count);
+        foreach (var (t, i) in trace.Selected.Select((t, i) => (t, i)))
         {
+            progress?.Describe($"Test suite {t.Suite.Id} ({i + 1}/{trace.Selected.Count})");
             var sw = Stopwatch.StartNew();
             var r = Git.Shell(dir, t.Suite.Run, env, TimeSpan.FromSeconds(t.Suite.Timeout));
             var output = redactor.Apply(string.Join('\n', new[] { r.Stdout.TrimEnd(), r.Stderr.TrimEnd() }.Where(o => o != "")));
@@ -154,6 +157,7 @@ public static partial class Traceability
                 : (GateStatus.Pass, "passed");
             if (status != GateStatus.Pass && findings.Count == 0) findings.Add(new($"{t.Suite.Id}: {summary}", Evidence: Gates.Tail(output, 10)));
             trace.Runs.Add(new(t.Suite.Id, status, r.ExitCode, sw.Elapsed, summary, findings));
+            progress?.Advance();
         }
         Resolve(trace, config);
     }

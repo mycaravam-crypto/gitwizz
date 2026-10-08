@@ -598,7 +598,9 @@ provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─�
 - **State-aware cost only where it matters:** pairwise outcomes are computed once; only pairs that conflict there are
   simulated again per search state (about +35% on a dense 60-PR set: 2.5 s → 3.4 s, with identical plans).
 
-Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
+On a terminal, every command shows a progress bar per phase on stderr (analysis, learning from history, the beam
+search, verification, quality gates, test suites, benchmark cases), cleared when the result is printed; nothing is
+drawn when stderr is redirected. Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
 
 ## Providers
 

@@ -68,7 +68,7 @@ public static class Evaluator
     }
 
     /// <summary>Runs the selected gates. A gate whose needs didn't pass is skipped and, if blocking, blocks the merge.</summary>
-    public static Evaluation Run(GateContext ctx, string? profile = null, Action<string>? status = null)
+    public static Evaluation Run(GateContext ctx, string? profile = null, ProgressBars? progress = null)
     {
         var (risk, reasons) = Gates.Risk(ctx.Pr, ctx.Config);
         var (name, specs) = Select(ctx.Config, profile, risk);
@@ -78,9 +78,10 @@ public static class Evaluator
         ctx.Env["GITWIZZ_HEAD_SHA"] = ctx.Pr.HeadSha;
         ctx.Env["GITWIZZ_RISK"] = risk;
 
-        foreach (var spec in specs)
+        progress?.Start($"Running {specs.Count} quality gates", specs.Count);
+        foreach (var (spec, i) in specs.Select((s, i) => (s, i)))
         {
-            status?.Invoke($"Gate {spec.Id}…");
+            progress?.Describe($"Gate {spec.Id} ({i + 1}/{specs.Count})");
             var sw = Stopwatch.StartNew();
             var unmet = spec.Requires.Select(n => ctx.Results[n])
                 .Where(r => r.Status is not (GateStatus.Pass or GateStatus.Warn) && !(r.Status == GateStatus.Skipped && !r.NeedsUnmet)).ToList();
@@ -108,6 +109,7 @@ public static class Evaluator
             r = r with { Id = spec.Id, Type = spec.Kind, Blocking = blocking, Duration = sw.Elapsed };
             r = ctx.Redactor.Apply(r with { BlocksMerge = blocking && (r.Status is GateStatus.Fail or GateStatus.Error || r.NeedsUnmet) });
             ctx.Results[spec.Id] = r;
+            progress?.Advance();
         }
         return new Evaluation
         {

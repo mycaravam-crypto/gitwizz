@@ -124,16 +124,18 @@ public static class Benchmark
 
     /// <summary>Runs every case through the same review the gate uses. A case that errors is recorded, not fatal.</summary>
     public static List<CaseResult> Run(List<(string Id, JsonObject Package, List<ExpectedFinding> Expected)> cases, ReviewPolicy review,
-        HttpMessageHandler? handler = null, Action<string>? status = null)
+        HttpMessageHandler? handler = null, ProgressBars? progress = null)
     {
         if (Endpoints.Problem(review.Endpoint, review.AllowedHosts) is { } problem) throw new InvalidOperationException(problem);
         var gate = new AiReviewGate(handler);
         var results = new List<CaseResult>();
+        progress?.Start($"Reviewing {cases.Count} benchmark cases", cases.Count);
         foreach (var (id, package, expected) in cases)
         {
-            status?.Invoke($"Case {id}…");
+            progress?.Describe($"Case {id} ({results.Count + 1}/{cases.Count})");
             try { results.Add(Score(id, expected, gate.Review(package, review, ChangedLines(package)).Findings)); }
             catch (InvalidOperationException e) { results.Add(new(id, 0, 0, expected.Count, 0, expected.Count == 0, e.Message, [])); }
+            progress?.Advance();
         }
         return results;
     }

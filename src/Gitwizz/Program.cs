@@ -129,22 +129,23 @@ public static partial class Cli
         var (format, output) = FormatOption(opt, "pretty", "pretty", "text", "json", "html");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var timing = Environment.GetEnvironmentVariable("GITWIZZ_TIMING") == "1";
-        Plan Pipeline(Action<string> status)
+        Action<string>? timing = Environment.GetEnvironmentVariable("GITWIZZ_TIMING") == "1"
+            ? m => Console.Error.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {m}") : null;
+        Plan Pipeline(ProgressBars progress)
         {
-            if (timing) status += m => Console.Error.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {m}");
-            status($"Loading pull requests ({provider})…");
+            progress.Start($"Loading pull requests ({provider})");
             var (policy, targetSha, prs) = LoadPrs(git, provider, target, allOpen && prArgs.Count == 0 ? null : prArgs);
-            status($"Analyzing {prs.Count} pull requests…");
-            Parallel.ForEach(prs, pr => Analyzer.Analyze(git, targetSha, pr));
+            progress.Start($"Analyzing {prs.Count} pull requests", prs.Count);
+            Parallel.ForEach(prs, pr => { Analyzer.Analyze(git, targetSha, pr); progress.Advance(); });
+            progress.Start("Resolving dependencies");
             Analyzer.ResolveDependencies(git, targetSha, prs);
-            if (historyDepth > 0) status($"Learning from the last {historyDepth} merges…");
-            var history = Analyzer.ConflictHistory(git, targetSha, historyDepth);
+            if (historyDepth > 0) progress.Start($"Learning from the last {historyDepth} merges", historyDepth);
+            var history = Analyzer.ConflictHistory(git, targetSha, historyDepth, progress);
 
-            status($"Simulating merge orders for {prs.Count} pull requests…");
+            progress.Start($"Simulating merge orders for {prs.Count} pull requests");
             // No --strategy: plan for what the branch enforces (merge queue method, linear history), else merge.
             var strategy = chosen ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge);
-            var plan = new Planner(new Simulator(git, strategy, RepoConfig.Load(git)), target, targetSha, prs, history).Build(beam);
+            var plan = new Planner(new Simulator(git, strategy, RepoConfig.Load(git)), target, targetSha, prs, history).Build(beam, progress);
             plan.Provider = provider;
             plan.MergeQueue = policy.MergeQueue;
             // Local branches carry no review/CI/protection data: say so instead of implying "mergeable".
@@ -164,25 +165,16 @@ public static partial class Cli
 
             if (opt.TryGetValue("verify", out var cmd) && cmd is not ("" or "none"))
             {
-                status($"Verifying ({verifyAt}): {cmd}");
-                plan.Verification = Verify.Plan(git, plan, cmd, verifyAt).Summary;
+                progress.Start($"Verifying ({verifyAt}): {cmd}");
+                plan.Verification = Verify.Plan(git, plan, cmd, verifyAt, progress).Summary;
             }
-            if (timing) status("done");
+            timing?.Invoke("done");
             return plan;
         }
 
-        Plan result;
-        if (format == "pretty" && output == null)
-        {
-            result = AnsiConsole.Status().Spinner(Spinner.Known.Dots).SpinnerStyle(Style.Parse("steelblue1"))
-                .Start("Starting…", ctx => Pipeline(m => ctx.Status(Markup.Escape(m))));
-            Pretty.Render(result, AnsiConsole.Console);
-        }
-        else
-        {
-            result = Pipeline(_ => { });
-            Write(format switch { "json" => Report.Json(result) + "\n", "html" => Pretty.Html(result), _ => Report.Text(result) }, format, output, err);
-        }
+        var result = ProgressBars.Show(err, Pipeline, timing);
+        if (format == "pretty" && output == null) Pretty.Render(result, AnsiConsole.Console);
+        else Write(format switch { "json" => Report.Json(result) + "\n", "html" => Pretty.Html(result), _ => Report.Text(result) }, format, output, err);
         return result.Verification?.StartsWith("FAILED") == true ? 1 : 0;
     }
 
@@ -199,12 +191,12 @@ public static partial class Cli
         var (format, output) = explain ? FormatOption(opt, "text", "text", "json") : FormatOption(opt, "pretty", "pretty", "text", "json");
         var evidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null;
 
-        Evaluation Pipeline(Action<string> status)
+        Evaluation Pipeline(ProgressBars progress)
         {
-            status($"Loading pull request {subject} ({provider})…");
+            progress.Start($"Loading pull request {subject} ({provider})");
             var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
             var pr = prs.Single();
-            status($"Analyzing {pr.Id}…");
+            progress.Start($"Analyzing {pr.Id}");
             Analyzer.Analyze(git, targetSha, pr);
             Analyzer.ResolveDependencies(git, targetSha, prs);
             var config = RepoConfig.Load(git, targetSha);
@@ -214,21 +206,12 @@ public static partial class Cli
                 Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
                 Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)), EvidenceDir = evidenceDir,
             };
-            return Evaluator.Run(ctx, opt.GetValueOrDefault("profile"), status);
+            return Evaluator.Run(ctx, opt.GetValueOrDefault("profile"), progress);
         }
 
-        Evaluation result;
-        if (format == "pretty" && output == null)
-        {
-            result = AnsiConsole.Status().Spinner(Spinner.Known.Dots).SpinnerStyle(Style.Parse("steelblue1"))
-                .Start("Starting…", ctx => Pipeline(m => ctx.Status(Markup.Escape(m))));
-            Evaluator.Pretty(result, AnsiConsole.Console);
-        }
-        else
-        {
-            result = Pipeline(_ => { });
-            Write(format == "json" ? Evaluator.Json(result) + "\n" : explain ? Evaluator.Explain(result) : Evaluator.Text(result), format, output, err);
-        }
+        var result = ProgressBars.Show(err, Pipeline);
+        if (format == "pretty" && output == null) Evaluator.Pretty(result, AnsiConsole.Console);
+        else Write(format == "json" ? Evaluator.Json(result) + "\n" : explain ? Evaluator.Explain(result) : Evaluator.Text(result), format, output, err);
         if (evidenceDir != null) File.WriteAllText(Path.Combine(evidenceDir, "evaluation.json"), Evaluator.Json(result) + "\n");
         return result.ExitCode;
     }
@@ -262,11 +245,17 @@ public static partial class Cli
         var id = subject.TrimStart('#');
         var provider = ProviderFor(git, opt, [id]);
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
-        var (_, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
-        var pr = prs.Single();
-        Analyzer.Analyze(git, targetSha, pr);
-        Analyzer.ResolveDependencies(git, targetSha, prs);
-        Write(Report.Context(git, pr, provider, target, targetSha) + "\n", "json", opt.GetValueOrDefault("output"), err);
+        var json = ProgressBars.Show(err, progress =>
+        {
+            progress.Start($"Loading pull request {subject} ({provider})");
+            var (_, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+            var pr = prs.Single();
+            progress.Start($"Analyzing {pr.Id}");
+            Analyzer.Analyze(git, targetSha, pr);
+            Analyzer.ResolveDependencies(git, targetSha, prs);
+            return Report.Context(git, pr, provider, target, targetSha);
+        });
+        Write(json + "\n", "json", opt.GetValueOrDefault("output"), err);
         return 0;
     }
 
@@ -281,26 +270,33 @@ public static partial class Cli
         var provider = ProviderFor(git, opt, [id]);
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
         var (format, output) = FormatOption(opt, "text", "text", "json");
-        var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
-        var pr = prs.Single();
-        Analyzer.Analyze(git, targetSha, pr);
-        var config = RepoConfig.Load(git, targetSha);
+        var (trace, config) = ProgressBars.Show(err, progress =>
+        {
+            progress.Start($"Loading pull request {subject} ({provider})");
+            var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+            var pr = prs.Single();
+            progress.Start($"Analyzing {pr.Id}");
+            Analyzer.Analyze(git, targetSha, pr);
+            var config = RepoConfig.Load(git, targetSha);
+            using var ctx = new GateContext
+            {
+                Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config, Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)),
+                Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
+                EvidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null,
+            };
+            progress.Start($"Simulating the merge into {target}");
+            var merge = new MergeGate().Run(ctx, new GateSpec { Id = "merge" });
+            var trace = Traceability.Build(git, pr, config, ctx.MergedState ?? pr.HeadSha);
+            if (opt.ContainsKey("run"))
+            {
+                if (ctx.MergedState == null) throw new InvalidOperationException($"can't run tests: {merge.Summary}");
+                foreach (var (k, v) in new Dictionary<string, string> { ["GITWIZZ_PR"] = pr.Id, ["GITWIZZ_TARGET"] = target, ["GITWIZZ_TARGET_SHA"] = targetSha, ["GITWIZZ_HEAD_SHA"] = pr.HeadSha })
+                    ctx.Env[k] = v;
+                Traceability.RunSuites(trace, config, ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir, progress);
+            }
+            return (trace, config);
+        });
         if (config.Tests.Count == 0) err.MarkupLine($"[grey]no tests: in {RepoConfig.FileName} at {Markup.Escape(target)}: only acceptance criteria are listed[/]");
-        using var ctx = new GateContext
-        {
-            Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config, Redactor = new Redactor(config.Secrets.Concat(config.Environment.Secrets)),
-            Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
-            EvidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null,
-        };
-        var merge = new MergeGate().Run(ctx, new GateSpec { Id = "merge" });
-        var trace = Traceability.Build(git, pr, config, ctx.MergedState ?? pr.HeadSha);
-        if (opt.ContainsKey("run"))
-        {
-            if (ctx.MergedState == null) throw new InvalidOperationException($"can't run tests: {merge.Summary}");
-            foreach (var (k, v) in new Dictionary<string, string> { ["GITWIZZ_PR"] = pr.Id, ["GITWIZZ_TARGET"] = target, ["GITWIZZ_TARGET_SHA"] = targetSha, ["GITWIZZ_HEAD_SHA"] = pr.HeadSha })
-                ctx.Env[k] = v;
-            Traceability.RunSuites(trace, config, ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir);
-        }
         Write(format == "json" ? Traceability.Json(trace) + "\n" : Traceability.Text(trace), format, output, err);
         return trace.Runs.Any(r => r.Status != GateStatus.Pass) ? 3 : 0;
     }
@@ -334,7 +330,7 @@ public static partial class Cli
         var cases = Gitwizz.Benchmark.LoadCases(Path.Combine(root, opt.GetValueOrDefault("cases") ?? config.Benchmark.Cases));
         var baselinePath = Path.Combine(root, opt.GetValueOrDefault("baseline") ?? config.Benchmark.Baseline);
         var baseline = File.Exists(baselinePath) ? System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(baselinePath)) : null;
-        var results = Gitwizz.Benchmark.Run(cases, config.Review, status: m => err.MarkupLine($"[grey]{Markup.Escape(m)}[/]"));
+        var results = ProgressBars.Show(err, progress => Gitwizz.Benchmark.Run(cases, config.Review, progress: progress));
         var result = Gitwizz.Benchmark.Result(results, config.Review, config.Benchmark.Thresholds, baseline);
         var json = Gitwizz.Benchmark.Json(result);
         var m = result["metrics"]!;
@@ -367,19 +363,26 @@ public static partial class Cli
         var id = subject.TrimStart('#');
         var provider = ProviderFor(git, opt, [id]);
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
-        var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
-        var pr = prs.Single();
-        Analyzer.Analyze(git, targetSha, pr);
-        var config = RepoConfig.Load(git, targetSha);
-        using var ctx = new GateContext
+        var (package, config) = ProgressBars.Show(err, progress =>
         {
-            Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config,
-            Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
-        };
-        new MergeGate().Run(ctx, new GateSpec { Id = "merge" });
-        var commit = ctx.MergedState ?? pr.HeadSha;
-        var trace = config.Tests.Count > 0 ? Traceability.Build(git, pr, config, commit) : null;
-        var package = Evidence.Build(git, pr, config, target, targetSha, commit, trace);
+            progress.Start($"Loading pull request {subject} ({provider})");
+            var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+            var pr = prs.Single();
+            progress.Start($"Analyzing {pr.Id}");
+            Analyzer.Analyze(git, targetSha, pr);
+            var config = RepoConfig.Load(git, targetSha);
+            using var ctx = new GateContext
+            {
+                Git = git, Pr = pr, Target = target, TargetSha = targetSha, Provider = provider, Config = config,
+                Strategy = StrategyOption(opt) ?? policy.QueueStrategy ?? (policy.LinearHistory ? MergeStrategy.Squash : MergeStrategy.Merge),
+            };
+            progress.Start($"Simulating the merge into {target}");
+            new MergeGate().Run(ctx, new GateSpec { Id = "merge" });
+            var commit = ctx.MergedState ?? pr.HeadSha;
+            progress.Start("Building the evidence package");
+            var trace = config.Tests.Count > 0 ? Traceability.Build(git, pr, config, commit) : null;
+            return (Evidence.Build(git, pr, config, target, targetSha, commit, trace), config);
+        });
         Write(new Redactor(config.Secrets.Concat(config.Environment.Secrets)).Apply(Evidence.Json(package)) + "\n", "json", opt.GetValueOrDefault("output"), err);
         return 0;
     }
