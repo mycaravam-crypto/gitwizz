@@ -1,0 +1,65 @@
+# Unified SemVer policy: Git tags are authoritative; merged PR labels select bump.
+name: release
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Check versioning policy
+        run: bash .github/scripts/semver-next.test.sh
+      - name: Calculate next version
+        id: version
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          git fetch --force origin '+refs/tags/*:refs/tags/*'
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)
+          # An earlier queued workflow must never re-release a commit already covered by a newer release.
+          if [[ -n "$latest" ]] && git merge-base --is-ancestor "$RELEASE_SHA" "$latest"; then
+            echo "Already covered by $latest"
+            exit 0
+          fi
+          version=$(bash .github/scripts/semver-next.sh "$latest" "$LABELS" "0.5.0")
+          [[ -n "$version" ]] || exit 0
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: steps.version.outputs.value != ''
+        with:
+          dotnet-version: 10.0.x
+      - name: Build and test release
+        if: steps.version.outputs.value != ''
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          dotnet build gitwizz.slnx -c Release --nologo -p:Version="$VERSION"
+          dotnet test gitwizz.slnx -c Release --no-build --nologo -p:Version="$VERSION"
+      - name: Tag and publish
+        if: steps.version.outputs.value != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          tag="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "Refusing to overwrite existing tag $tag" >&2
+            exit 1
+          fi
+          git tag "$tag" "$RELEASE_SHA"
+          git push origin "refs/tags/$tag"
+          gh release create "$tag" --verify-tag --generate-notes --title "$tag"
