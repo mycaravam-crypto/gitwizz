@@ -313,15 +313,33 @@ public static partial class Cli
         var dir = Path.GetFullPath(opt.GetValueOrDefault("repo", "."));
         var (format, output) = FormatOption(opt, "pretty", "pretty", "text", "json");
         var report = ProgressBars.Show(err, progress => { progress.Start("Checking the environment"); return Diagnose(dir, opt, new DependencyHealthService()); });
-        if (format == "json") Write(Health.Json(report) + "\n", "json", output, err);
+        if (format != "json" && LocalPolicyNotice(dir, opt.ContainsKey("working-tree")) is { } notice)
+            err.MarkupLine($"[gold1]![/] {Markup.Escape(notice)}");
+        if (format == "json") Write(Health.Json(report) + "
+", "json", output, err);
         else if (format == "pretty" && output == null) AnsiConsole.Console.Markup(Health.Text(report, markup: true));
         else Write(Health.Text(report), format, output, err);
         return report.ExitCode;
     }
 
     /// <summary>
+    /// Explain local policy changes without changing the target-branch policy used by default.
+    /// git status covers both modified tracked and newly created untracked policy files.
+    /// </summary>
+    public static string? LocalPolicyNotice(string dir, bool workingTree)
+    {
+        var git = new Git(dir);
+        var status = git.Try("status", "--porcelain", "--untracked-files=normal", "--", RepoConfig.FileName);
+        if (status.ExitCode != 0 || string.IsNullOrWhiteSpace(status.Stdout)) return null;
+        return workingTree
+            ? $"Uncommitted {RepoConfig.FileName} detected: checking the local file. This does not change the target-branch policy used by guide/evaluate."
+            : $"Uncommitted {RepoConfig.FileName} detected: doctor is checking the target-branch policy, not your local edits. Use 'gitwizz doctor --working-tree' to validate them, then commit the policy if it should apply to PR evaluations.";
+    }
+
+    /// <summary>
     /// Both preflight phases for the repository in dir: git and the provider (--provider, else from origin), then the
-    /// policy at the target (origin's, else the local branch, else the working tree's .gitwizz.yml), or from the\n    /// working tree when --working-tree is specified, and the
+    /// policy at the target (origin's, else the local branch, else the working tree's .gitwizz.yml), or from the
+    /// working tree when --working-tree is specified, and the
     /// dependencies of the gates its profiles (--profile, else one per risk level) may run.
     /// </summary>
     public static HealthReport Diagnose(string dir, Dictionary<string, string> opt, DependencyHealthService service)
