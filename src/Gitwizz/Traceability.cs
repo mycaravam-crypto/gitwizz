@@ -32,7 +32,7 @@ public record TraceabilityPolicy
 public record SelectedTest(TestSuite Suite, List<string> Reasons);
 
 /// <summary>One suite's execution.</summary>
-public record SuiteRun(string Suite, GateStatus Status, int ExitCode, TimeSpan Duration, string Summary, List<Finding> Findings);
+public record SuiteRun(string Suite, GateStatus Status, int ExitCode, TimeSpan Duration, string Summary, List<Finding> Findings, DateTimeOffset? CachedAt = null);
 
 /// <summary>
 /// One acceptance criterion traced to tests. Status: covered (a linked suite ran and passed), failed (one failed),
@@ -139,24 +139,35 @@ public static partial class Traceability
     static Regex MentionPattern(string item) => new((item.StartsWith('#') ? @"(?<![\w#])" : @"\b") + Regex.Escape(item) + @"(\.\d+)?\b");
 
     /// <summary>Runs the selected suites in dir, in order, and records their results; then re-resolves the criteria.</summary>
-    public static void RunSuites(Trace trace, RepoConfig config, string dir, IDictionary<string, string> env, Redactor redactor, string? evidenceDir = null,
-        ProgressBars? progress = null)
+    /// <summary>dir is only asked for when a suite has to run; a suite run on the same state, with the same definition,
+    /// tools and environment is reused from store instead (not with evidenceDir, which needs every log).</summary>
+    public static void RunSuites(Trace trace, RepoConfig config, Func<string> dir, IDictionary<string, string> env, Redactor redactor, string? evidenceDir = null,
+        ProgressBars? progress = null, WorkspaceStore? store = null)
     {
         progress?.Start($"Running {trace.Selected.Count} test suites", trace.Selected.Count);
         foreach (var (t, i) in trace.Selected.Select((t, i) => (t, i)))
         {
             progress?.Describe($"Test suite {t.Suite.Id} ({i + 1}/{trace.Selected.Count})");
+            var inputs = store?.CommandInputs("suite", trace.Commit, t.Suite.Run, t.Suite, env);
+            if (inputs != null && evidenceDir == null && store!.Reuse<SuiteRun>("suite", inputs) is { } hit)
+            {
+                trace.Runs.Add(hit.Value with { CachedAt = hit.ComputedAt });
+                progress?.Advance();
+                continue;
+            }
             var sw = Stopwatch.StartNew();
-            var r = Git.Shell(dir, t.Suite.Run, env, TimeSpan.FromSeconds(t.Suite.Timeout));
+            var r = Git.Shell(dir(), t.Suite.Run, env, TimeSpan.FromSeconds(t.Suite.Timeout));
             var output = redactor.Apply(string.Join('\n', new[] { r.Stdout.TrimEnd(), r.Stderr.TrimEnd() }.Where(o => o != "")));
             if (evidenceDir != null) File.WriteAllText(Path.Combine(evidenceDir, $"test-{t.Suite.Id}.log"), $"$ {redactor.Apply(t.Suite.Run)}\n{output}");
-            var findings = Gates.ParseOutput(output, dir).Where(f => f.Severity == "error").ToList();
+            var findings = Gates.ParseOutput(output, dir()).Where(f => f.Severity == "error").ToList();
             var (status, summary) = r.TimedOut ? (GateStatus.Error, $"timed out after {t.Suite.Timeout} s")
                 : r.ExitCode is 126 or 127 ? (GateStatus.Error, $"could not run (exit code {r.ExitCode})")
                 : r.ExitCode != 0 ? (GateStatus.Fail, $"failed (exit code {r.ExitCode})")
                 : (GateStatus.Pass, "passed");
             if (status != GateStatus.Pass && findings.Count == 0) findings.Add(new($"{t.Suite.Id}: {summary}", Evidence: Gates.Tail(output, 10)));
-            trace.Runs.Add(new(t.Suite.Id, status, r.ExitCode, sw.Elapsed, summary, findings));
+            var run = new SuiteRun(t.Suite.Id, status, r.ExitCode, sw.Elapsed, summary, findings);
+            trace.Runs.Add(run);
+            if (inputs != null && status != GateStatus.Error) store!.Keep("suite", inputs, run);
             progress?.Advance();
         }
         Resolve(trace, config);
@@ -192,7 +203,7 @@ public static partial class Traceability
         changedSymbols = t.ChangedSymbols,
         selected = t.Selected.Select(s => new { id = s.Suite.Id, kind = s.Suite.Kind, command = s.Suite.Run, reasons = s.Reasons }),
         notSelected = t.NotSelected,
-        runs = t.Runs.Select(r => new { suite = r.Suite, status = Evaluator.Name(r.Status), exitCode = r.ExitCode, durationMs = (long)r.Duration.TotalMilliseconds, summary = r.Summary,
+        runs = t.Runs.Select(r => new { suite = r.Suite, status = Evaluator.Name(r.Status), exitCode = r.ExitCode, durationMs = (long)r.Duration.TotalMilliseconds, summary = r.Summary, cachedAt = r.CachedAt,
             findings = r.Findings.Select(f => new { severity = f.Severity, message = f.Message, file = f.File, line = f.Line }) }),
         workItems = t.WorkItems.Select(w => new { id = w.Id, type = w.Type, title = w.Title, state = w.State, url = w.Url }),
         criteria = t.Criteria.Select(c => new { id = c.Id, workItem = c.WorkItem, text = c.Text, status = c.Status, tests = c.Tests, evidence = c.Evidence }),
@@ -249,7 +260,7 @@ public sealed class TraceabilityGate : IQualityGate
         var commit = ctx.MergedState ?? ctx.Pr.HeadSha;
         // Suites already run on this very state (gitwizz guide runs them first) are not run again.
         var trace = ctx.Trace is { Runs.Count: > 0 } ran && ran.Commit == commit ? ran : Traceability.Build(ctx.Git, ctx.Pr, ctx.Config, commit);
-        if (trace.Runs.Count == 0) Traceability.RunSuites(trace, ctx.Config, ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir);
+        if (trace.Runs.Count == 0) Traceability.RunSuites(trace, ctx.Config, () => ctx.Workspace, ctx.Env, ctx.Redactor, ctx.EvidenceDir, store: ctx.Store);
         ctx.Trace = trace;
 
         var findings = trace.Runs.Where(r => r.Status != GateStatus.Pass).SelectMany(r => r.Findings.Select(f => f with { Rule = f.Rule ?? r.Suite })).ToList();

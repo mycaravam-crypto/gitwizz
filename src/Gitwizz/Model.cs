@@ -42,6 +42,7 @@ public class PullRequest
     public HashSet<(string Name, int Args)> Uses { get; set; } = []; // names the PR's new C# code calls or references
     public HashSet<string> Dependencies { get; } = [];
     public List<string> OpenOutsideDependencies { get; set; } = []; // declared dependencies on open PRs not in this plan
+    public List<string> OpenDependencies { get; set; } = []; // declared dependencies on open PRs, whatever was selected
     public bool AlreadyMerged { get; set; } // head already in the target: nothing to merge
     public Dictionary<string, string> DependencyNotes { get; } = []; // why, for inferred (semantic) dependencies
 

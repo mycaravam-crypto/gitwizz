@@ -15,15 +15,15 @@ public record GuideFacts(bool Merges = false, int Selected = 0, bool TestsDeferr
 /// <summary>Asks the developer; the guide only uses it on a terminal.</summary>
 public interface IGuidePrompts
 {
-    GuideAction Choose(string question, IReadOnlyList<GuideAction> options, Func<GuideAction, string> label);
+    T Choose<T>(string question, IReadOnlyList<T> options, Func<T, string> label) where T : notnull;
     string Ask(string question, string fallback);
 }
 
 /// <summary>Arrow-key menus and text prompts on the terminal.</summary>
 public sealed class SpectrePrompts(IAnsiConsole console) : IGuidePrompts
 {
-    public GuideAction Choose(string question, IReadOnlyList<GuideAction> options, Func<GuideAction, string> label) =>
-        console.Prompt(new SelectionPrompt<GuideAction>().Title(question).AddChoices(options).UseConverter(a => Markup.Escape(label(a))));
+    public T Choose<T>(string question, IReadOnlyList<T> options, Func<T, string> label) where T : notnull =>
+        console.Prompt(new SelectionPrompt<T>().Title(question).AddChoices(options).UseConverter(a => Markup.Escape(label(a))));
 
     public string Ask(string question, string fallback) =>
         console.Prompt(new TextPrompt<string>(Markup.Escape(question)).DefaultValue(fallback));
@@ -143,6 +143,18 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
 
         Step(1, "PR context");
         Ok($"PR loaded (head {Short(pr.HeadSha)})");
+        switch (wf.Analysis.Status)
+        {
+            case "current": Ok($"analysis reused from the workspace ({wf.Analysis.ComputedAt:u})"); break;
+            case "stale": Warn($"analysis recomputed: {wf.Analysis.Reason}"); break;
+            case "missing": Info("analysis computed and saved to the workspace"); break;
+        }
+        switch (wf.Previous)
+        {
+            case ({ Current: true }, { } last): Ok($"last verdict {last.Verdict.ToUpperInvariant()} still applies: re-checking, unchanged gate results are reused"); break;
+            case ({ Status: "stale" } st, { } last): Warn($"last verdict {last.Verdict.ToUpperInvariant()} is stale ({st.Reason}): evaluating again"); break;
+            case ({ Status: "missing" }, _): Info("not evaluated before"); break;
+        }
         if (pr.WorkItems.Count > 0) Ok($"{Plural(pr.WorkItems.Count, "linked work item")}: {string.Join(", ", pr.WorkItems.Select(w => w.Id))}");
         else Warn(wf.Provider == "local" ? "no linked work items (local branches have none)" : "no linked work items");
         if (wf.CriteriaCount > 0) Ok($"{wf.CriteriaCount} acceptance {(wf.CriteriaCount == 1 ? "criterion" : "criteria")}");
@@ -344,24 +356,28 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     {
         output.WriteLine();
         if (planner == null) { Info($"run: {PlanCommand}"); return; }
-        Plan plan;
-        try { plan = WithProgress(planner); }
+        try { RenderPlan(WithProgress(planner), wf.Pr.Id, output); }
         catch (Exception ex) when ((ex is AggregateException a ? a.InnerException : ex) is InvalidOperationException or ArgumentException)
         {
             Bad($"can't plan: {(ex is AggregateException a2 ? a2.InnerException! : ex).Message}");
-            return;
         }
-        var id = wf.Pr.Id;
-        var index = plan.Steps.FindIndex(s => s.Pr.Id == id);
-        output.MarkupLine($"  [bold]Merge order for {Markup.Escape(wf.Target)}[/] [grey]({Plural(plan.Steps.Count, "mergeable PR")}, {plan.Blocked.Count} blocked)[/]");
-        foreach (var (s, i) in plan.Steps.Select((s, i) => (s, i)).Take(Math.Max(index + 1, 3)))
+    }
+
+    /// <summary>The merge order in brief, with id's position (null: no PR in focus) and the next merge command, which the user runs.</summary>
+    public static void RenderPlan(Plan plan, string? id, IAnsiConsole output)
+    {
+        var index = id == null ? -1 : plan.Steps.FindIndex(s => s.Pr.Id == id);
+        output.MarkupLine($"  [bold]Merge order for {Markup.Escape(plan.Target)}[/] [grey]({Plural(plan.Steps.Count, "mergeable PR")}, {plan.Blocked.Count} blocked)[/]");
+        foreach (var (s, i) in plan.Steps.Select((s, i) => (s, i)).Take(Math.Max(index + 1, id == null ? 5 : 3)))
             output.MarkupLine($"    {i + 1}. {(s.Pr.Id == id ? $"[bold]{Markup.Escape(s.Pr.Id)}[/]  [grey]<- this PR[/]" : Markup.Escape(s.Pr.Id))}");
-        if (index < 0 && plan.Blocked.FirstOrDefault(b => b.Pr.Id == id) is { } blocked) Warn($"{id} is not in the order: {blocked.Reason}");
+        if (id != null && index < 0 && plan.Blocked.FirstOrDefault(b => b.Pr.Id == id) is { } blocked)
+            output.MarkupLine($"  [gold1]![/] {Markup.Escape($"{id} is not in the order: {blocked.Reason}")}");
         if (Report.NextCommand(plan) is { } next)
         {
             output.MarkupLine(index == 0 ? "  [bold]This PR merges next:[/]" : $"  [bold]Merge next:[/] {Markup.Escape(plan.Steps[0].Pr.Id)}");
             output.MarkupLine($"      {Markup.Escape(next)}");
         }
-        Info($"gitwizz never merges: run it yourself. Full plan: {PlanCommand}");
+        var command = $"gitwizz plan --all-open --target {plan.Target}" + (plan.Provider == "local" ? " --provider local" : "");
+        output.MarkupLine($"  [grey]– gitwizz never merges: run it yourself. Full plan: {Markup.Escape(command)}[/]");
     }
 }

@@ -69,6 +69,7 @@ public static class AzureDevOps
         {
             var stub = stubs.Single(s => s.Pr.Id == pr.Id).Pr;
             pr.OpenOutsideDependencies = stub.OpenOutsideDependencies;
+            pr.OpenDependencies = stub.OpenDependencies;
             if (details)
                 pr.WorkItems = LinkedWorkItems(ado, pr.Id[1..]);
         }

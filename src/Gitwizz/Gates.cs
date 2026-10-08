@@ -33,6 +33,7 @@ public record GateResult
     public string? ToolVersion { get; init; }
     public string? Log { get; init; } // tail of the output, redacted
     public bool NeedsUnmet { get; init; } // skipped because a needed gate didn't pass
+    public DateTimeOffset? CachedAt { get; init; } // reused from the workspace: computed then, from the same inputs
 
     /// <summary>A result with just a status and a summary.</summary>
     public static GateResult Of(GateStatus status, string summary, params Finding[] findings) =>
@@ -74,6 +75,9 @@ public sealed class GateContext : IDisposable
     public MergeStrategy Strategy { get; init; } = MergeStrategy.Merge;
     public Redactor Redactor { get; init; } = new([]);
     public string? EvidenceDir { get; init; }
+
+    /// <summary>Where results proven to come from the same inputs are reused from and kept (WorkspaceStore.Off: never).</summary>
+    public WorkspaceStore Store { get; init; } = WorkspaceStore.Off;
 
     /// <summary>Synthetic commit of the PR merged into the target, set by the merge gate.</summary>
     public string? MergedState { get; set; }
@@ -173,9 +177,13 @@ public static partial class Gates
     }
 
     /// <summary>Default build or test command for the project at dir, from its build files; null if none is recognised.</summary>
-    public static string? Detect(string dir, string kind)
+    public static string? Detect(string dir, string kind) =>
+        Detect(Directory.EnumerateFiles(dir).Select(Path.GetFileName).OfType<string>().ToList(), kind);
+
+    /// <summary>Default build or test command from the names of the files at the project root.</summary>
+    public static string? Detect(IReadOnlyCollection<string> names, string kind)
     {
-        bool Has(string pattern) => Directory.EnumerateFiles(dir, pattern).Any();
+        bool Has(string pattern) => pattern.StartsWith('*') ? names.Any(n => n.EndsWith(pattern[1..], StringComparison.Ordinal)) : names.Contains(pattern);
         var test = kind == "test";
         if (Has("*.sln") || Has("*.slnx") || Has("*.csproj") || Has("*.fsproj")) return test ? "dotnet test" : "dotnet build";
         if (Has("package.json")) return test ? "npm test" : "npm run build --if-present";
@@ -309,11 +317,25 @@ public sealed class PolicyGate : IQualityGate
 public sealed class CommandGate : IQualityGate
 {
     /// <summary>The command line a spec runs: its run:, else the type's default (detected for build and test).</summary>
-    public static string? CommandFor(GateSpec spec, string workspace) =>
+    public static string? CommandFor(GateSpec spec, string workspace) => CommandFor(spec, () => Gates.Detect(workspace, spec.Kind));
+
+    /// <summary>The command line a spec runs, detecting build and test commands with detect.</summary>
+    public static string? CommandFor(GateSpec spec, Func<string?> detect) =>
         spec.Run is { Length: > 0 } run ? run
         : spec.Kind == "docwizz" ? "docwizz check . --since \"$GITWIZZ_TARGET_SHA\""
-        : spec.Kind is "build" or "test" ? Gates.Detect(workspace, spec.Kind)
+        : spec.Kind is "build" or "test" ? detect()
         : null;
+
+    /// <summary>
+    /// Inputs that decide a command gate's result: merged state, gate definition, command, its tools and environment.
+    /// Null when the result can't be proven reusable. Needs no checkout: build/test commands are detected from the tree.
+    /// </summary>
+    public static SortedDictionary<string, string>? CacheInputs(GateContext ctx, GateSpec spec)
+    {
+        if (!ctx.Store.Enabled || ctx.MergedState is not { } state || spec.Kind is not ("build" or "test" or "command" or "docwizz")) return null;
+        var command = CommandFor(spec, () => Gates.Detect(ctx.Git.Run("ls-tree", "--name-only", state).Split('\n'), spec.Kind));
+        return command == null ? null : ctx.Store.CommandInputs("gate", state, command, spec, ctx.Env);
+    }
 
     /// <summary>Runs the command with the gate's timeout and turns its exit code and output into a result.</summary>
     public GateResult Run(GateContext ctx, GateSpec spec)

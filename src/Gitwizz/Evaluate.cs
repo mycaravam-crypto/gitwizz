@@ -89,10 +89,20 @@ public static class Evaluator
                 r = GateResult.Of(GateStatus.Skipped, "no changed file matches " + string.Join(", ", spec.Paths));
             else
             {
-                try { r = Gates.Create(spec.Kind).Run(ctx, spec); }
-                catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                // Same merged state, definition, command, environment and tools: the stored result is this gate's result.
+                var inputs = CommandGate.CacheInputs(ctx, spec);
+                if (inputs != null && ctx.EvidenceDir == null && ctx.Store.Reuse<GateResult>("gate", inputs) is { } hit)
+                    r = hit.Value with { CachedAt = hit.ComputedAt };
+                else
                 {
-                    r = GateResult.Of(GateStatus.Error, $"gate could not run: {e.Message}");
+                    try { r = Gates.Create(spec.Kind).Run(ctx, spec); }
+                    catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                    {
+                        r = GateResult.Of(GateStatus.Error, $"gate could not run: {e.Message}");
+                    }
+                    // Only outcomes about the change are kept: an error (missing tool, timeout) says nothing reusable.
+                    if (inputs != null && r.Status is GateStatus.Pass or GateStatus.Warn or GateStatus.Fail)
+                        ctx.Store.Keep("gate", inputs, ctx.Redactor.Apply(r));
                 }
             }
             var blocking = spec.IsBlocking;
@@ -150,7 +160,7 @@ public static class Evaluator
         sb.AppendLine();
         foreach (var g in e.Gates)
         {
-            sb.AppendLine($"{g.Status.ToString().ToUpperInvariant(),-8} {g.Id,-12} {g.Summary}{(g.Blocking ? "" : "  [advisory]")}");
+            sb.AppendLine($"{g.Status.ToString().ToUpperInvariant(),-8} {g.Id,-12} {g.Summary}{(g.Blocking ? "" : "  [advisory]")}{(g.CachedAt != null ? "  [cached]" : "")}");
             if (g.Status is GateStatus.Pass or GateStatus.Skipped) continue;
             foreach (var f in g.Findings.Take(10)) sb.AppendLine($"         {Location(f)}{f.Message}");
             if (g.Findings.Count > 10) sb.AppendLine($"         … {g.Findings.Count - 10} more");
@@ -168,6 +178,7 @@ public static class Evaluator
         void Detail(GateResult g, string indent)
         {
             if (g.Command != null) sb.AppendLine($"{indent}command: {g.Command}" + (g.ToolVersion != null ? $"  ({g.ToolVersion})" : ""));
+            if (g.CachedAt is { } at) sb.AppendLine($"{indent}reused: computed {at:u} from the same merged state, definition and tools");
             foreach (var f in g.Findings.Take(20))
             {
                 sb.AppendLine($"{indent}- {f.Severity} {Location(f)}{f.Message}" + (f.Rule != null ? $" [{f.Rule}]" : ""));
@@ -238,6 +249,7 @@ public static class Evaluator
             findings = g.Findings.Select(f => new { severity = f.Severity, message = f.Message, file = f.File, line = f.Line, rule = f.Rule, evidence = f.Evidence }),
             evidence = g.Evidence,
             durationMs = (long)g.Duration.TotalMilliseconds,
+            cachedAt = g.CachedAt,
             command = g.Command,
             tool = g.Tool is null ? null : new { name = g.Tool, version = g.ToolVersion },
             log = g.Log,
@@ -263,7 +275,7 @@ public static class Evaluator
             };
             var detail = Markup.Escape(g.Summary) + string.Concat(g.Status is GateStatus.Pass or GateStatus.Skipped ? [] :
                 g.Findings.Take(5).Select(f => $"\n[grey]{Markup.Escape(Location(f) + f.Message)}[/]"));
-            t.AddRow($"{Markup.Escape(g.Id)}{(g.Blocking ? "" : " [grey](advisory)[/]")}", s, detail, $"[grey]{g.Duration.TotalSeconds:0.0}s[/]");
+            t.AddRow($"{Markup.Escape(g.Id)}{(g.Blocking ? "" : " [grey](advisory)[/]")}", s, detail, g.CachedAt != null ? "[grey]cached[/]" : $"[grey]{g.Duration.TotalSeconds:0.0}s[/]");
         }
         c.Write(t);
         if (!e.Ready) c.MarkupLine($"[grey]why:[/] gitwizz explain {Markup.Escape(e.Pr.Id.TrimStart('#'))}");
