@@ -361,6 +361,137 @@ public class HealthTests : IDisposable
         finally { Gates.Override = null; }
     }
 
+    // --- Guide preflight, phase A ----------------------------------------------------------------------------------
+
+    static (Spectre.Console.IAnsiConsole Console, StringWriter Text) Capture()
+    {
+        var writer = new StringWriter();
+        var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings
+        {
+            Out = new Spectre.Console.AnsiConsoleOutput(writer), Ansi = Spectre.Console.AnsiSupport.No, ColorSystem = Spectre.Console.ColorSystemSupport.NoColors,
+            Interactive = Spectre.Console.InteractionSupport.No, Enrichment = new Spectre.Console.ProfileEnrichment { UseDefaultEnrichers = false },
+        });
+        console.Profile.Width = 200;
+        return (console, writer);
+    }
+
+    (int? Code, string Output) Preflight(FakeTools tools, string provider = "azure-devops", IGuidePrompts? prompts = null, string? dir = null)
+    {
+        var (console, text) = Capture();
+        var code = Cli.GuidePreflight(dir ?? _dir, _ => provider, new DependencyHealthService(tools.Exec, new FakeEndpoint()), console, console, prompts);
+        return (code, text.ToString());
+    }
+
+    [Fact]
+    public void Guide_preflight_shows_the_environment_and_goes_on()
+    {
+        var tools = new FakeTools(Everything());
+        var (code, output) = Preflight(tools);
+        Assert.Null(code);
+        Assert.Contains("Environment", output);
+        Assert.Contains("✓ git", output);
+        Assert.Contains("✓ repository", output);
+        Assert.Contains("✓ Azure DevOps (ado)  authenticated to tfs.corp.local", output);
+        Assert.DoesNotContain("CANNOT START", output);
+        // Phase A only: nothing the gates rely on is checked yet.
+        Assert.DoesNotContain(tools.Calls, c => c.StartsWith("docwizz") || c.StartsWith("docker") || c.StartsWith("dotnet"));
+    }
+
+    [Fact]
+    public void Guide_preflight_without_a_terminal_stops_with_the_fix_and_never_retries()
+    {
+        var loggedOut = Everything();
+        loggedOut["ado auth status"] = new GitResult(3, "", "Not logged in.\n");
+        var tools = new FakeTools(loggedOut);
+        var (code, output) = Preflight(tools);
+        Assert.Equal(7, code);
+        Assert.Contains("✗ Azure DevOps (ado)  not logged in to Azure DevOps", output);
+        Assert.Contains("fix: ado auth login <server-url>", output);
+        Assert.Contains("CANNOT START", output);
+        Assert.Single(tools.Calls, c => c == "ado auth status");
+
+        var missing = Everything();
+        missing.Remove("ado --version");
+        (code, output) = Preflight(new FakeTools(missing));
+        Assert.Equal(7, code);
+        Assert.Contains("GITWIZZ_ADO", output);
+    }
+
+    [Fact]
+    public void Guide_preflight_on_a_terminal_offers_retry_and_exit()
+    {
+        var answers = Everything();
+        answers["ado auth status"] = new GitResult(3, "", "Not logged in.\n");
+        var tools = new FakeTools(answers);
+        // The developer logs in, then retries: the second check passes and the guide goes on.
+        Func<IReadOnlyList<PreflightAction>, Func<PreflightAction, string>, PreflightAction> loginThenRetry = (options, label) =>
+        {
+            Assert.Equal(["Retry", "Exit"], options.Select(label));
+            answers["ado auth status"] = Ok("Logged in to https://tfs.corp.local/tfs as Jane\n");
+            return PreflightAction.Retry;
+        };
+        var (code, output) = Preflight(tools, prompts: new GuideTests.Script(loginThenRetry));
+        Assert.Null(code);
+        Assert.Equal(2, tools.Calls.Count(c => c == "ado auth status"));
+        Assert.Contains("not logged in", output);
+        Assert.Contains("authenticated to tfs.corp.local", output);
+
+        answers["ado auth status"] = new GitResult(3, "", "Not logged in.\n");
+        var again = new FakeTools(answers);
+        (code, _) = Preflight(again, prompts: new GuideTests.Script(PreflightAction.Exit));
+        Assert.Equal(7, code);
+        Assert.Single(again.Calls, c => c == "ado auth status");
+    }
+
+    [Fact]
+    public void Guide_preflight_outside_a_repository_stops_before_choosing_a_provider()
+    {
+        var empty = Directory.CreateTempSubdirectory("gitwizz-health-norepo").FullName;
+        try
+        {
+            var (console, text) = Capture();
+            var asked = false;
+            var code = Cli.GuidePreflight(empty, _ => { asked = true; return "azure-devops"; },
+                new DependencyHealthService(new FakeTools(Everything()).Exec), console, console, null);
+            Assert.Equal(7, code);
+            Assert.False(asked);
+            Assert.Contains("not a git repository", text.ToString());
+            Assert.Contains("--repo", text.ToString());
+        }
+        finally { Directory.Delete(empty, true); }
+    }
+
+    [Fact]
+    public void Guide_preflight_masks_secrets_a_provider_tool_echoes()
+    {
+        const string pat = "s3cr3t-pat-in-preflight-99";
+        Environment.SetEnvironmentVariable("SYSTEM_ACCESSTOKEN", pat);
+        try
+        {
+            var tools = Everything();
+            tools["ado auth status"] = new GitResult(1, "", $"request failed for token {pat}\n");
+            var (code, output) = Preflight(new FakeTools(tools));
+            Assert.Equal(7, code);
+            Assert.DoesNotContain(pat, output);
+            Assert.Contains("***", output);
+        }
+        finally { Environment.SetEnvironmentVariable("SYSTEM_ACCESSTOKEN", null); }
+    }
+
+    [Fact]
+    public void Guide_stops_before_loading_anything_when_the_provider_is_unusable()
+    {
+        // With a missing ado, loading the PR would throw; the preflight stops first with exit code 7.
+        Environment.SetEnvironmentVariable("GITWIZZ_ADO", Path.Combine(_dir, "no-such-ado"));
+        try
+        {
+            var (err, _) = Capture();
+            Assert.Equal(7, Cli.Guide("42", new() { ["repo"] = _dir, ["provider"] = "azure-devops", ["yes"] = "true" }, err));
+            Assert.Equal(7, Cli.RepositoryGuide(new() { ["repo"] = _dir, ["provider"] = "azure-devops", ["yes"] = "true" }, err));
+        }
+        finally { Environment.SetEnvironmentVariable("GITWIZZ_ADO", null); }
+    }
+
     sealed class Erroring : IQualityGate
     {
         public GateResult Run(GateContext ctx, GateSpec spec) => GateResult.Of(GateStatus.Error, "AI review endpoint llm.internal unreachable");

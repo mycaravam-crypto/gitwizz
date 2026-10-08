@@ -20,6 +20,9 @@ public enum DependencyState { Available, Unavailable, Misconfigured, Unknown }
 /// </summary>
 public enum OverallHealth { Ok, Degraded, VerdictAtRisk, CannotStart }
 
+/// <summary>What the guide offers when its preflight finds git, the repository or the provider down.</summary>
+public enum PreflightAction { Retry, Exit }
+
 /// <summary>One external dependency: its state, the capabilities and gates relying on it, and how to fix it.</summary>
 public record DependencyHealth
 {
@@ -362,10 +365,7 @@ public sealed class DependencyHealthService(
     public static HealthReport Assess(List<DependencyHealth> deps, RepoConfig? config, IReadOnlyList<(string Profile, List<GateSpec> Gates)> selections,
         Func<string?> promotion, string provider, Redactor redactor)
     {
-        deps = deps.Select(d => d with
-        {
-            Message = redactor.Apply(d.Message), Remediation = d.Remediation is null ? null : redactor.Apply(d.Remediation),
-        }).ToList();
+        deps = Redact(deps, redactor);
         if (config == null || deps.Any(d => d.Essential && d.Down))
             return new() { Dependencies = deps, BestVerdict = null, Provider = provider, PolicySource = config?.Source };
 
@@ -402,6 +402,12 @@ public sealed class DependencyHealthService(
             BestVerdict = verdicts.Contains("undetermined") ? "undetermined" : "ready",
         };
     }
+
+    /// <summary>The dependencies with secrets masked in their messages and fixes.</summary>
+    public static List<DependencyHealth> Redact(IEnumerable<DependencyHealth> deps, Redactor redactor) => deps.Select(d => d with
+    {
+        Message = redactor.Apply(d.Message), Remediation = d.Remediation is null ? null : redactor.Apply(d.Remediation),
+    }).ToList();
 
     /// <summary>The gate selections an evaluation may run: the given profile, else one per risk level (deduplicated).</summary>
     public static List<(string Profile, List<GateSpec> Gates)> Selections(RepoConfig config, string? profile) =>
@@ -450,12 +456,7 @@ public static class Health
         string E(string text) => markup ? Markup.Escape(text) : text;
         var sb = new StringBuilder();
         sb.AppendLine(M("GITWIZZ ENVIRONMENT", "bold")).AppendLine();
-        foreach (var d in r.Dependencies)
-        {
-            sb.AppendLine($"  {M(Mark(d.State), Color(d.State))} {M(d.Name, "bold")}  {E(d.Message)}");
-            if (d.RequiredBy.Count > 0) sb.AppendLine("      " + M($"used by: {string.Join(", ", d.RequiredBy)}", "grey"));
-            if (d.Down && d.Remediation != null) sb.AppendLine("      " + M("fix: ", "grey") + E(d.Remediation));
-        }
+        Lines(sb, r.Dependencies, markup);
         if (r.Affected.Count > 0)
         {
             sb.AppendLine().AppendLine(M("Affected gates", "bold"));
@@ -470,6 +471,32 @@ public static class Health
         sb.AppendLine(E(Meaning(r)));
         if (r.PolicySource != null) sb.AppendLine(M($"Policy: {r.PolicySource}" + (r.Profiles.Count > 0 ? $", profiles {string.Join(", ", r.Profiles)}" : "") + $"; provider {r.Provider}", "grey"));
         return sb.ToString();
+    }
+
+    /// <summary>One line per dependency, then who uses it and, when it is down, the fix.</summary>
+    static void Lines(StringBuilder sb, IEnumerable<DependencyHealth> deps, bool markup)
+    {
+        string M(string text, string style) => markup ? $"[{style}]{Markup.Escape(text)}[/]" : text;
+        string E(string text) => markup ? Markup.Escape(text) : text;
+        foreach (var d in deps)
+        {
+            sb.AppendLine($"  {M(Mark(d.State), Color(d.State))} {M(d.Name, "bold")}  {E(d.Message)}");
+            if (d.RequiredBy.Count > 0) sb.AppendLine("      " + M($"used by: {string.Join(", ", d.RequiredBy)}", "grey"));
+            if (d.Down && d.Remediation != null) sb.AppendLine("      " + M("fix: ", "grey") + E(d.Remediation));
+        }
+    }
+
+    /// <summary>
+    /// The guide's environment section (phase A: git, the repository, the provider), with Spectre markup; when an
+    /// essential dependency is down, the fixes and that the guide cannot start.
+    /// </summary>
+    public static string Preflight(IReadOnlyCollection<DependencyHealth> deps)
+    {
+        var sb = new StringBuilder().AppendLine("[bold]Environment[/]");
+        Lines(sb, deps, markup: true);
+        if (deps.Any(d => d.Essential && d.Down))
+            sb.AppendLine().AppendLine("[bold indianred1]CANNOT START[/]  no pull request can be loaded or evaluated until the problem above is fixed.");
+        return sb.AppendLine().ToString();
     }
 
     /// <summary>Stable JSON (schema gitwizz.health/v1). Fields are only ever added, never renamed or removed.</summary>
