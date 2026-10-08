@@ -291,7 +291,7 @@ public class WorkspaceTests : IDisposable
 
         var writer = new StringWriter();
         var console = AnsiConsole.Create(new AnsiConsoleSettings
-            { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors, Interactive = InteractionSupport.No });
+            { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }, ColorSystem = ColorSystemSupport.NoColors, Interactive = InteractionSupport.No });
         console.Profile.Width = 200;
         var opened = new List<string>();
         int Open(PrStatus p)

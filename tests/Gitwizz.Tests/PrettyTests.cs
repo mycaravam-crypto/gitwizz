@@ -8,7 +8,7 @@ public class PrettyTests
     static string Render(Plan plan, int width)
     {
         var w = new StringWriter();
-        var c = AnsiConsole.Create(new AnsiConsoleSettings { Ansi = AnsiSupport.No, Out = new AnsiConsoleOutput(w) });
+        var c = AnsiConsole.Create(new AnsiConsoleSettings { Ansi = AnsiSupport.No, Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }, Out = new AnsiConsoleOutput(w) });
         c.Profile.Width = width;
         Pretty.Render(plan, c);
         return w.ToString();
