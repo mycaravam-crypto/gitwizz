@@ -199,7 +199,7 @@ the summary and the recommended command, and runs nothing.
 ```bash
 gitwizz doctor                 # dependency health and what it means for the verdict
 gitwizz doctor -f json         # schema gitwizz.health/v1, for scripts and CI
-gitwizz doctor --profile full  # only the gates of one profile
+gitwizz doctor --profile full  # only the gates of one profile\ngitwizz doctor --working-tree # validate local .gitwizz.yml before committing
 ```
 
 `doctor` checks what gitwizz relies on before anything expensive runs, and says what a missing piece means:
@@ -209,7 +209,7 @@ gitwizz doctor --profile full  # only the gates of one profile
 | git, repository | `git --version` (2.38 or later), `rev-parse` | |
 | Azure DevOps | `ado --version`, `ado auth status` (asks the server: reachability and token) | prints the token or the user |
 | GitHub | `gh --version`, `gh auth status` | |
-| `.gitwizz.yml` | read at the target as `evaluate` would | |
+| `.gitwizz.yml` | read at the target as `evaluate` would; with `--working-tree`, read the local file | |
 | docwizz | `docwizz --version`; `docwizz.yaml` is valid YAML | runs an analysis |
 | AI endpoint | the self-hosting policy, then `GET {endpoint}/models` and that `review.model` is served | contacts a refused host; sends repository content |
 | Docker | `docker info`, `docker compose version` (for an `environment` gate) | |
@@ -228,7 +228,7 @@ fix. The gates it affects, and the best verdict an evaluation can still reach, f
 
 An unavailable dependency is never a quality failure: it can make a verdict UNDETERMINED, never BLOCKED. Without a PR
 the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
-never stored: each run checks again. Options: `--target`, `--provider`, `--profile`, `-f`, `-o`, `--repo`.
+never stored: each run checks again. By default `doctor` uses the policy committed on the target branch, even if a local `.gitwizz.yml` exists.\nUse `--working-tree` to validate new or uncommitted policy edits (including `context.docwizz.command`) without changing PR evaluation policy.\nOptions: `--target`, `--provider`, `--profile`, `--working-tree`, `-f`, `-o`, `--repo`.
 
 `guide` runs the same checks: the first three rows (git, the repository, the provider) before it loads a PR, stopping
 with the fix when one of them is unusable, and the rest for the gates selected for that PR after its context; see
