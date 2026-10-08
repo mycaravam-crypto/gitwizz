@@ -49,6 +49,7 @@ public record RepoConfig
     public ReviewPolicy Review { get; init; } = new();           // AI review: self-hosted endpoint and context bounds
     public BenchmarkPolicy Benchmark { get; init; } = new();     // AI quality benchmark: cases, baseline, thresholds
     public EnvironmentPolicy Environment { get; init; } = new(); // per-PR test environment for the environment gate
+    public ContextPolicy Context { get; init; } = new();         // system context from docwizz, and whether it is required
 
     /// <summary>Where the rules came from, for the audit trail: "built-in", or the file and the commit it was read at.</summary>
     [YamlDotNet.Serialization.YamlIgnore] public string Source { get; init; } = "built-in";
@@ -137,6 +138,8 @@ public record RepoConfig
         if (c.Review.Timeout <= 0 || c.Review.MaxTokens <= 0 || c.Review.MaxContextChars < 4000 || c.Review.MinConfidence is < 0 or > 1)
             return "review: timeout and max_tokens must be positive, max_context_chars at least 4000, min_confidence between 0 and 1";
         if (c.Risk is null || c.Risk.MaxFiles < 1) return "risk.max_files must be at least 1";
+        if (c.Context?.Docwizz is not { } dw) return "context: needs keys (docwizz)";
+        if (dw.Timeout <= 0 || string.IsNullOrWhiteSpace(dw.Command)) return "context.docwizz: command must be set and timeout a positive number of seconds";
         if (c.Risk.Profiles.FirstOrDefault(r => r.Key is not ("low" or "medium" or "high")) is { Key: not null } rk)
             return $"unknown risk level '{rk.Key}' (low, medium, high)";
         if (c.Risk.Profiles.FirstOrDefault(r => !c.Profiles.ContainsKey(r.Value)) is { Key: not null } rp)
@@ -146,7 +149,8 @@ public record RepoConfig
 
     /// <summary>Configured gates, plus the built-in merge and policy gates unless the file redefines them.</summary>
     public IEnumerable<GateSpec> GateSpecs() =>
-        Gates.Concat(Gitwizz.Gates.BuiltIn.Where(b => Gates.All(g => g.Id != b.Id)));
+        Gates.Concat(Gitwizz.Gates.BuiltIn.Where(b => Gates.All(g => g.Id != b.Id)))
+            .Concat(Context.Docwizz.Enforced && Gates.All(g => g.Kind != "system-context") ? [Gitwizz.Gates.SystemContext] : []);
 
     /// <summary>Glob with * and ?; matched against the file name, or the whole path when the pattern has a '/'.</summary>
     public static bool Matches(string glob, string path) =>

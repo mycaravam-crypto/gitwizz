@@ -63,6 +63,8 @@ public static class Evaluator
             order.Add(specs[id]);
         }
         Add("merge");
+        // Required context is policy, not a profile choice: it applies whatever the profile.
+        if (config.Context.Docwizz.Enforced) Add(specs.Values.First(g => g.Kind == "system-context").Id);
         foreach (var id in ids) Add(id);
         return (name, order);
     }
@@ -105,7 +107,8 @@ public static class Evaluator
                         ctx.Store.Keep("gate", inputs, ctx.Redactor.Apply(r));
                 }
             }
-            var blocking = spec.IsBlocking;
+            // Context the policy requires blocks, also through a configured system-context gate that doesn't say otherwise.
+            var blocking = spec.IsBlocking || (spec.Kind == "system-context" && spec.Blocking == null && ctx.Config.Context.Docwizz.Enforced);
             if (blocking && spec.Kind == "ai-review" && Promotion.Check(ctx) is { } why)
             {
                 // AI judgement blocks only once a benchmark has validated it: until then it is advisory.

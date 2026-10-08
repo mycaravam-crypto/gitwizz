@@ -75,7 +75,8 @@ public static class Repository
         return new RepositoryStatus
         {
             Name = Name(git), Provider = provider, Target = target, TargetSha = targetSha, StoreEnabled = store.Enabled, Exists = store.Exists,
-            Facts = [new("conflict history", store.HistoryState(targetSha, HistoryDepth)), new("policy and test topology", store.TopologyState(git, targetSha))],
+            Facts = [new("conflict history", store.HistoryState(targetSha, HistoryDepth)), new("policy and test topology", store.TopologyState(git, targetSha)),
+                .. DocwizzFact(git, store, targetSha)],
             Prs = [.. prs.Select(pr =>
             {
                 if (pr.BaseRef != "" && pr.BaseRef != target)
@@ -84,6 +85,15 @@ public static class Repository
                 return new PrStatus(pr, store.AnalysisState(provider, pr, targetSha), state, last);
             })],
         };
+    }
+
+    /// <summary>docwizz's repository facts for the target, when docwizz is enabled and installed (otherwise there is nothing to keep current).</summary>
+    static IEnumerable<FactStatus> DocwizzFact(Git git, WorkspaceStore store, string targetSha)
+    {
+        RepoConfig config;
+        try { config = RepoConfig.Load(git, targetSha); }
+        catch (InvalidOperationException) { yield break; }
+        if (SystemContexts.ModelState(git, store, config, targetSha) is { Status: not "off" } state) yield return new("docwizz system model", state);
     }
 
     /// <summary>
@@ -100,9 +110,14 @@ public static class Repository
             store.ConflictHistory(git, targetSha, HistoryDepth, progress);
         }
         if (!store.TopologyState(git, targetSha).Current) store.RefreshTopology(git, targetSha);
+        var config = RepoConfig.Load(git, targetSha);
+        if (SystemContexts.ModelState(git, store, config, targetSha) is { Status: "stale" or "missing" })
+        {
+            progress?.Start("Analyzing the system with docwizz");
+            SystemContexts.RefreshModel(git, store, config, targetSha);
+        }
         var todo = Status(git, store, provider, target, policy, targetSha, prs).Prs
             .Where(p => p.Category == "stale" || (allOpen && p.Category == "missing")).ToList();
-        var config = RepoConfig.Load(git, targetSha);
         var done = new List<Evaluation>();
         progress?.Start($"Evaluating {todo.Count} pull requests", todo.Count);
         foreach (var p in todo)

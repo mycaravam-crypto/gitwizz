@@ -4,13 +4,21 @@ using Spectre.Console;
 namespace Gitwizz;
 
 /// <summary>Where the guide is: the steps in order, then one of the three verdicts, then done.</summary>
-public enum GuideState { Context, Trace, Test, Evaluate, Ready, Blocked, Undetermined, Done }
+public enum GuideState { Context, SystemContext, Trace, Test, Evaluate, Ready, Blocked, Undetermined, Done }
 
 /// <summary>What the developer can do at a step.</summary>
-public enum GuideAction { RunTests, ShowTrace, SkipTests, ShowPlan, ShowExplanation, InspectEvidence, SaveEvidence, Exit }
+public enum GuideAction
+{
+    ContinueWithContext, ShowContextGraph, ShowMissingContext, RefreshContext, ShowContextHelp,
+    RunTests, ShowTrace, SkipTests, ShowPlan, ShowExplanation, InspectEvidence, SaveEvidence, Exit,
+}
 
-/// <summary>What the guide knows so far, as far as it decides the next step.</summary>
-public record GuideFacts(bool Merges = false, int Selected = 0, bool TestsDeferred = false, string? Verdict = null);
+/// <summary>
+/// What the guide knows so far, as far as it decides the next step. Context: the system context's quality (GOOD,
+/// PARTIAL, MISSING, STALE); DocwizzAvailable: docwizz could be run at all.
+/// </summary>
+public record GuideFacts(bool Merges = false, int Selected = 0, bool TestsDeferred = false, string? Verdict = null, string? Context = null,
+    bool DocwizzAvailable = true);
 
 /// <summary>Asks the developer; the guide only uses it on a terminal.</summary>
 public interface IGuidePrompts
@@ -40,8 +48,9 @@ public record GuideOptions(string Rerun, string? Profile = null, string? Evidenc
 public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiConsole output, IAnsiConsole err, IGuidePrompts? prompts,
     Func<ProgressBars, Plan>? planner = null)
 {
-    const int Steps = 5;
+    const int Steps = 6;
 
+    SystemContext? _context;
     Trace? _trace;
     Evaluation? _evaluation;
     Dictionary<string, GateSpec>? _gates;
@@ -50,7 +59,14 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     /// <summary>The next state after state, given the facts and the developer's choice (null: none was asked for).</summary>
     public static GuideState Next(GuideState state, GuideFacts facts, GuideAction? choice = null) => state switch
     {
-        GuideState.Context => GuideState.Trace,
+        GuideState.Context => GuideState.SystemContext,
+        // Looking at the context (graph, gaps, refresh) comes back here; anything else moves on.
+        GuideState.SystemContext => choice switch
+        {
+            GuideAction.Exit => GuideState.Done,
+            GuideAction.ShowContextGraph or GuideAction.ShowMissingContext or GuideAction.RefreshContext or GuideAction.ShowContextHelp => GuideState.SystemContext,
+            _ => GuideState.Trace,
+        },
         // Tests run on the merged state, so a PR that doesn't merge goes straight to the verdict.
         GuideState.Trace => facts.Merges && facts.Selected > 0 && !facts.TestsDeferred ? GuideState.Test : GuideState.Evaluate,
         GuideState.Test => choice switch { GuideAction.Exit => GuideState.Done, GuideAction.ShowTrace => GuideState.Test, _ => GuideState.Evaluate },
@@ -60,8 +76,13 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     };
 
     /// <summary>The choices at a state, the recommended one first.</summary>
-    public static IReadOnlyList<GuideAction> Actions(GuideState state) => state switch
+    public static IReadOnlyList<GuideAction> Actions(GuideState state, GuideFacts? facts = null) => state switch
     {
+        GuideState.SystemContext when facts is { DocwizzAvailable: false } => [GuideAction.ContinueWithContext, GuideAction.ShowContextHelp, GuideAction.Exit],
+        GuideState.SystemContext when facts?.Context == "MISSING" =>
+            [GuideAction.ContinueWithContext, GuideAction.RefreshContext, GuideAction.ShowContextHelp, GuideAction.Exit],
+        GuideState.SystemContext =>
+            [GuideAction.ContinueWithContext, GuideAction.ShowContextGraph, GuideAction.ShowMissingContext, GuideAction.RefreshContext, GuideAction.Exit],
         GuideState.Test => [GuideAction.RunTests, GuideAction.ShowTrace, GuideAction.SkipTests, GuideAction.Exit],
         GuideState.Ready => [GuideAction.ShowPlan, GuideAction.ShowExplanation, GuideAction.SaveEvidence, GuideAction.Exit],
         GuideState.Blocked or GuideState.Undetermined => [GuideAction.ShowExplanation, GuideAction.InspectEvidence, GuideAction.SaveEvidence, GuideAction.Exit],
@@ -69,10 +90,26 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     };
 
     /// <summary>What runs without a terminal (or with --yes): the tests, then stop at the verdict.</summary>
-    public static GuideAction Default(GuideState state) => state == GuideState.Test ? GuideAction.RunTests : GuideAction.Exit;
+    public static GuideAction Default(GuideState state) => state switch
+    {
+        GuideState.Test => GuideAction.RunTests,
+        GuideState.SystemContext => GuideAction.ContinueWithContext, // missing context is advisory unless the policy says otherwise
+        _ => GuideAction.Exit,
+    };
 
     string Label(GuideAction a) => a switch
     {
+        GuideAction.ContinueWithContext => _context switch
+        {
+            { Quality: "MISSING" } => "Continue without docwizz context",
+            { Quality: "STALE" } => "Continue with stale system context",
+            var c when c?.Docs.Any(d => d.Status != "current") == true => "Continue with reduced documentation trust",
+            _ => "Continue with available context",
+        },
+        GuideAction.ShowContextGraph => "Show affected system graph",
+        GuideAction.ShowMissingContext => "Show missing and stale context",
+        GuideAction.RefreshContext => "Refresh docwizz analysis",
+        GuideAction.ShowContextHelp => "Show installation/configuration help",
         GuideAction.RunTests => "Run selected tests",
         GuideAction.ShowTrace => "Show traceability details",
         GuideAction.SkipTests => "Continue without running",
@@ -83,7 +120,8 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         _ => "Exit",
     };
 
-    GuideFacts Facts => new(wf.Context.MergedState != null, _trace?.Selected.Count ?? 0, TestsDeferred, _evaluation?.Verdict);
+    GuideFacts Facts => new(wf.Context.MergedState != null, _trace?.Selected.Count ?? 0, TestsDeferred, _evaluation?.Verdict, _context?.Quality,
+        _context?.Status != "unavailable");
 
     /// <summary>Walks the steps to a verdict. Returns evaluate's exit code: 0 ready, 3 blocked, 4 undetermined or no verdict reached.</summary>
     public int Run()
@@ -95,6 +133,12 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
             switch (state)
             {
                 case GuideState.Context: ShowContext(); break;
+                case GuideState.SystemContext:
+                    if (_context == null) { _context = WithProgress(p => { p.Start("Reading the system context (docwizz)"); return wf.SystemContext(); }); ShowSystemContext(); }
+                    if (_context.Quality == "GOOD") break;
+                    choice = Choose(state, "Next:");
+                    ActOnContext(choice.Value);
+                    break;
                 case GuideState.Trace: _trace = WithProgress(p => { p.Start($"Simulating the merge into {wf.Target}"); return wf.BuildTrace(); }); ShowTrace(); break;
                 case GuideState.Test: choice = Choose(state, "What do you want to do?"); Test(choice.Value); break;
                 case GuideState.Evaluate: Evaluate(); break;
@@ -111,7 +155,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     {
         if (prompts == null) return Default(state);
         output.WriteLine();
-        return prompts.Choose(question, Actions(state), Label);
+        return prompts.Choose(question, Actions(state, Facts), Label);
     }
 
     T WithProgress<T>(Func<ProgressBars, T> work) => ProgressBars.Show(err, work);
@@ -162,10 +206,113 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
         Ok(Plural(pr.Files.Count, "changed file"));
     }
 
+    static string Count(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
+
+    void ShowSystemContext()
+    {
+        var c = _context!;
+        Step(2, "System context");
+        if (!c.Usable)
+        {
+            Warn(c.Status == "unavailable" ? c.Problem ?? "docwizz is not available" : $"docwizz failed: {c.Problem}");
+            Info(wf.Config.Context.Docwizz.Required ? $"context.docwizz.required in {RepoConfig.FileName}: the verdict can't be decided without it"
+                : "AI review can continue with reduced context");
+            output.MarkupLine("  Context quality: [bold orange1]MISSING[/]");
+            return;
+        }
+        output.MarkupLine($"  [bold]Technical context from {Markup.Escape((c.Tool ?? "docwizz").Split(" (")[0])}[/] "
+            + $"[grey](facts at {Short(c.AnalyzedCommit)}{(c.Reused ? ", reused from the workspace" : "")})[/]");
+        if (c.Freshness == "stale") Warn(c.FreshnessReason ?? "the facts are from an earlier analysis");
+        if (!c.DiffAvailable) Warn($"changed symbols taken from the changed lines: {c.Problem}");
+        var changed = c.Symbols.Where(s => s.Change != "removed").ToList();
+        if (c.Symbols.Count == 0) Info(c.UnanalyzedFiles.Count == 0 ? "no code symbols changed" : "no changed symbol found");
+        else Ok($"{Count(c.Symbols.Count, "changed symbol", "changed symbols")} mapped" + (changed.Count(s => s.Change == "added") is > 0 and var added ? $" ({added} new)" : ""));
+        var modules = c.Symbols.Select(s => s.Module).Distinct().Count();
+        if (modules > 0) Ok(Count(modules, "affected module", "affected modules"));
+        int Distinct(string kind, Func<ContextFact, string> key) => c.Of(kind).Where(f => f.Hop == 1).Select(key).Distinct().Count();
+        var (callers, callees) = (Distinct("caller", f => f.Subject), Distinct("callee", f => f.Object));
+        if (callers + callees > 0) Ok($"{Count(callers, "caller", "callers")}, {Count(callees, "callee", "callees")}");
+        if (Distinct("endpoint", f => f.Object) is > 0 and var endpoints) Ok(Count(endpoints, "API endpoint", "API endpoints"));
+        if (c.Of("data").Select(f => f.Relation.StartsWith("is ") ? f.Subject : f.Object).Distinct().Count() is > 0 and var data)
+            Ok(Count(data, "data entity", "data entities"));
+        if (Distinct("external", f => f.Object) is > 0 and var externals)
+            Ok(Count(externals, "external system", "external systems") + (c.Of("external").Any(f => f.Origin == "inferred") ? " (some inferred)" : ""));
+        if (c.Of("flow", "event").Count() is > 0 and var flows) Ok(Count(flows, "flow", "flows"));
+        if (c.Of("caller", "callee").Any(f => f.Hop == 2)) Info("one more dependency hop included: the risk or a requirement justifies it");
+        if (c.Symbols.Count > 0 && c.Facts.All(f => f.Kind == "ownership")) Info("docwizz found no relationships of the changed symbols (callers, data, endpoints, external systems)");
+        foreach (var f in c.Of("architecture")) Bad($"{f.Subject} -> {f.Object}: {f.Relation}");
+        if (c.Unowned.ToList() is { Count: > 0 } unowned) Warn($"{Count(unowned.Count, "changed symbol has", "changed symbols have")} no architecture owner: {string.Join(", ", unowned.Take(3).Select(s => s.Name))}");
+        else if (!c.LayersConfigured && c.Symbols.Count > 0) Info("no architecture layers in docwizz.yaml: ownership is by module only");
+        foreach (var f in c.UnanalyzedFiles.Take(3)) Warn($"{f} is not analyzed by docwizz");
+        if (c.Tests.Count > 0 || c.Unlinked.Count > 0)
+            (c.Unlinked.Count == 0 ? (Action<string>)Ok : Warn)($"{Count(c.Tests.Count, "linked test", "linked tests")}" + (c.Unlinked.Count > 0 ? $", {c.Unlinked.Count} changed without a linked test" : ""));
+
+        if (c.Docs.Count > 0)
+        {
+            output.MarkupLine("  [bold]Documentation[/]");
+            foreach (var (status, mark) in new[] { ("current", "✓"), ("stale", "!"), ("missing", "!"), ("unknown", "?") })
+                if (c.Docs.Count(d => d.Status == status) is > 0 and var n)
+                    output.MarkupLine($"    [{(status == "current" ? "springgreen3" : "gold1")}]{mark}[/] {n} {status}");
+            foreach (var d in c.Docs.Where(d => d.Status is "stale" or "missing").Take(4))
+                output.MarkupLine($"    [gold1]{d.Status.ToUpperInvariant()}[/] {Markup.Escape(d.Document)}\n      [grey]{Markup.Escape(d.Reason)}[/]");
+        }
+        if (c.Criteria.Any(x => x.Related.Count > 0))
+        {
+            output.MarkupLine("  [bold]Requirements and the system they touch[/]");
+            foreach (var x in c.Criteria.Where(x => x.Related.Count > 0))
+                output.MarkupLine($"    {Markup.Escape(x.Criterion)} [grey]↔[/] {Markup.Escape(string.Join(", ", x.Related.Take(6)))}");
+        }
+        ShowAiContext(c);
+        var color = c.Quality switch { "GOOD" => "springgreen3", "PARTIAL" => "gold1", _ => "orange1" };
+        output.MarkupLine($"  Context quality: [bold {color}]{c.Quality}[/]");
+        foreach (var r in c.Reasons.Take(5)) output.MarkupLine($"    [grey]- {Markup.Escape(r)}[/]");
+        if (c.Reasons.Count > 5) output.MarkupLine($"    [grey]- … {c.Reasons.Count - 5} more (Show missing and stale context)[/]");
+    }
+
+    /// <summary>Which context an AI review would get, and whether the budget cuts it.</summary>
+    void ShowAiContext(SystemContext c)
+    {
+        if (!Gates.Values.Any(g => g.Kind == "ai-review"))
+        {
+            Info("no AI review in this policy: the context is shown here only");
+            return;
+        }
+        var truncated = new List<string>();
+        var section = SystemContexts.Evidence(c, SystemContexts.Share(Math.Max(4000, wf.Config.Review.MaxContextChars)), truncated);
+        var sent = new[] { "changedSymbols", "callers", "callees", "apiEndpoints", "dataEntities", "externalSystems", "architecture", "flows", "relevantDocs", "linkedTests" }
+            .Sum(k => section[k] is JsonArray a ? a.Count : 0);
+        Ok($"AI review gets {sent} of {c.Symbols.Count + c.Facts.Count + c.Docs.Count + c.Tests.Count} context items, as data with their provenance");
+        if (truncated.Count > 0) Warn($"cut to fit the AI evidence budget: {string.Join(", ", truncated)} (review.max_context_chars)");
+    }
+
+    void ActOnContext(GuideAction action)
+    {
+        var c = _context!;
+        switch (action)
+        {
+            case GuideAction.ShowContextGraph:
+                output.WriteLine();
+                output.WriteLine(SystemContexts.Text(c).TrimEnd());
+                break;
+            case GuideAction.ShowMissingContext:
+                output.WriteLine();
+                output.WriteLine(SystemContexts.Gaps(c, wf.Target).TrimEnd());
+                break;
+            case GuideAction.RefreshContext:
+                _context = WithProgress(p => { p.Start("Running docwizz again"); return wf.SystemContext(refresh: true); });
+                ShowSystemContext();
+                break;
+            case GuideAction.ShowContextHelp:
+                output.WriteLine();
+                output.WriteLine(SystemContexts.Help(wf.Config.Context.Docwizz).TrimEnd());
+                break;
+        }
+    }
+
     void ShowTrace()
     {
         var t = _trace!;
-        Step(2, "Test impact");
+        Step(3, "Test impact");
         var merge = wf.Merge();
         if (wf.Context.MergedState != null) Ok(merge.Summary);
         else Bad($"{merge.Summary}: tests can't run on the merged state");
@@ -198,7 +345,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     {
         if (choice == GuideAction.ShowTrace) { output.WriteLine(); output.WriteLine(Traceability.Text(_trace!).TrimEnd()); return; }
         if (choice == GuideAction.Exit) return;
-        Step(3, "Tests");
+        Step(4, "Tests");
         _testsShown = true;
         if (choice == GuideAction.SkipTests)
         {
@@ -226,14 +373,14 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
     {
         if (!_testsShown)
         {
-            Step(3, "Tests");
+            Step(4, "Tests");
             Info(wf.Context.MergedState == null ? "can't run: the PR doesn't merge into " + wf.Target
                 : TestsDeferred ? "need their test environment: the evaluation provisions it and runs them"
                 : (_trace?.Selected.Count ?? 0) == 0 ? "no tests selected for this change"
                 : "not run");
         }
         var e = _evaluation = WithProgress(p => wf.Evaluate(options.Profile, p));
-        Step(4, "Merge readiness");
+        Step(5, "Merge readiness");
         output.MarkupLine($"  [grey]policy {Markup.Escape(e.PolicySource)}, profile {Markup.Escape(e.Profile)}[/]");
         foreach (var g in e.Gates)
         {
@@ -256,7 +403,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
 
     void WhatNext(Evaluation e)
     {
-        Step(5, "What next?");
+        Step(6, "What next?");
         if (e.Ready)
         {
             Ok($"every blocking gate passed ({e.Gates.Count(g => g.Blocking && g.Status != GateStatus.Skipped)} run)");
@@ -337,6 +484,10 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
             + $"{package["budget"]?["usedChars"]} of {package["budget"]?["maxChars"]} characters");
         output.MarkupLine($"  {Plural(Count("requirements"), "requirement")}, {Plural(Count("changes", "files"), "changed file")}, {Plural(Count("diff"), "diff")}, "
             + $"{Plural(Count("callers"), "caller")}, {Plural(Count("rules"), "rule")}, {Plural(Count("docs"), "doc excerpt")}, {Plural(Count("tests"), "selected test")}");
+        if (package["systemContext"] is JsonObject sc)
+            output.MarkupLine($"  system context ({Markup.Escape(sc["quality"]?.GetValue<string>() ?? "")}): "
+                + string.Join(", ", new[] { "changedSymbols", "callers", "callees", "apiEndpoints", "dataEntities", "externalSystems", "flows", "relevantDocs", "linkedTests" }
+                    .Where(k => Count("systemContext", k) > 0).Select(k => $"{Count("systemContext", k)} {k}")) is { Length: > 0 } parts ? Markup.Escape(parts) : "none");
         if (Count("budget", "truncated") > 0)
             Warn("cut to fit the budget: " + string.Join(", ", package["budget"]!["truncated"]!.AsArray().Select(t => t!.GetValue<string>())));
         output.MarkupLine($"  [grey]full package (nothing is sent anywhere):[/] gitwizz evidence {Markup.Escape(wf.Pr.Id.TrimStart('#'))}");

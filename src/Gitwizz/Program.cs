@@ -80,13 +80,13 @@ public static partial class Cli
         ["status"] = ["target", "provider", "format", "repo"],
         ["refresh"] = ["target", "provider", "all-open", "repo"],
         ["cache"] = ["repo"],
-        ["context"] = ["target", "provider", "output", "repo", "no-cache"],
+        ["context"] = ["target", "provider", "output", "repo", "no-cache", "system"],
         ["trace"] = [.. Common, "run", "evidence"],
         ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
     };
-    static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache"];
+    static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system"];
 
     /// <summary>
     /// Parses arguments into option → value (flags become "true"), resolving aliases; options the command doesn't take
@@ -367,7 +367,8 @@ public static partial class Cli
 
     /// <summary>
     /// prints the provider-neutral context of one pull request as JSON (schema gitwizz.context/v1): refs, reviewers,
-    /// checks, policy state, linked work items with acceptance criteria, changed files and commits.
+    /// checks, policy state, linked work items with acceptance criteria, changed files and commits. --system prints the
+    /// system context docwizz gives for the change instead (schema gitwizz.system-context/v1).
     /// </summary>
     public static int Context(string subject, Dictionary<string, string> opt, IAnsiConsole err)
     {
@@ -375,7 +376,9 @@ public static partial class Cli
         var json = ProgressBars.Show(err, progress =>
         {
             using var wf = OpenWorkflow(git, opt, subject, null, progress);
-            return Report.Context(git, wf.Pr, wf.Provider, wf.Target, wf.TargetSha);
+            if (!opt.ContainsKey("system")) return Report.Context(git, wf.Pr, wf.Provider, wf.Target, wf.TargetSha);
+            progress.Start("Reading the system context (docwizz)");
+            return SystemContexts.Json(wf.SystemContext(), wf.Pr);
         });
         Write(json + "\n", "json", opt.GetValueOrDefault("output"), err);
         return 0;
@@ -598,6 +601,7 @@ public static partial class Cli
               gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
+                                                --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
               gitwizz benchmark [[options]]      measure AI review quality on labelled cases

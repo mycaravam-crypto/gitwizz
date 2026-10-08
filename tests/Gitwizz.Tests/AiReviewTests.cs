@@ -123,7 +123,7 @@ public class AiReviewTests : IDisposable
         Assert.Contains("2 rejected for missing evidence", r.Summary);
         Assert.Contains(r.Evidence, e => e.StartsWith("evidence package sha256:"));
         Assert.Contains(r.Evidence, e => e.Contains("tokens 900+80"));
-        Assert.Contains("prompt review-v1", r.ToolVersion);
+        Assert.Contains("prompt review-v2", r.ToolVersion);
     }
 
     [Fact]
