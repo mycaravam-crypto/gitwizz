@@ -315,8 +315,7 @@ public static partial class Cli
         var report = ProgressBars.Show(err, progress => { progress.Start("Checking the environment"); return Diagnose(dir, opt, new DependencyHealthService()); });
         if (format != "json" && LocalPolicyNotice(dir, opt.ContainsKey("working-tree")) is { } notice)
             err.MarkupLine($"[gold1]![/] {Markup.Escape(notice)}");
-        if (format == "json") Write(Health.Json(report) + "
-", "json", output, err);
+        if (format == "json") Write(Health.Json(report) + "\n", "json", output, err);
         else if (format == "pretty" && output == null) AnsiConsole.Console.Markup(Health.Text(report, markup: true));
         else Write(Health.Text(report), format, output, err);
         return report.ExitCode;
