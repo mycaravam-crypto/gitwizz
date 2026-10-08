@@ -39,10 +39,12 @@ public static class Evidence
 
     /// <summary>
     /// The package for pr at commit (the merged state or the PR head): PR text, requirements and criteria, changed files
-    /// and symbols, the diff, references to changed symbols elsewhere, applicable rules, doc excerpts and selected tests.
+    /// and symbols, the diff, references to changed symbols elsewhere, applicable rules, doc excerpts, selected tests and,
+    /// with system, the system context docwizz found for the change (systemContext).
     /// Each section has a share of review.max_context_chars; what doesn't fit is cut and listed under budget.truncated.
     /// </summary>
-    public static JsonObject Build(Git git, PullRequest pr, RepoConfig config, string target, string targetSha, string commit, Trace? trace = null)
+    public static JsonObject Build(Git git, PullRequest pr, RepoConfig config, string target, string targetSha, string commit, Trace? trace = null,
+        SystemContext? system = null)
     {
         var budget = Math.Max(4000, config.Review.MaxContextChars);
         var truncated = new List<string>();
@@ -63,7 +65,7 @@ public static class Evidence
             ["requirements"] = new JsonArray([.. pr.WorkItems.Select(w => (JsonNode)new JsonObject
             {
                 ["id"] = w.Id, ["type"] = w.Type, ["title"] = w.Title, ["state"] = w.State,
-                ["criteria"] = new JsonArray([.. w.AcceptanceCriteria.Select((c, i) => (JsonNode)new JsonObject { ["id"] = Traceability.CriterionId(w, i), ["text"] = c })]),
+                ["criteria"] = new JsonArray([.. w.AcceptanceCriteria.Select((c, i) => (JsonNode)Criterion(Traceability.CriterionId(w, i), c, system))]),
             })]),
         };
 
@@ -90,7 +92,7 @@ public static class Evidence
 
         // The diff, file by file, within its share.
         var patch = git.Run("-c", "core.quotePath=false", "diff", "-M", "--no-ext-diff", "--no-color", "-U3", pr.BaseSha, pr.HeadSha);
-        var diffBudget = budget * 55 / 100;
+        var diffBudget = budget * (system?.Usable == true ? 45 : 55) / 100;
         var diff = new JsonArray();
         foreach (var part in Regex.Split(patch, @"(?m)^(?=diff --git )").Where(p => p.StartsWith("diff --git ")))
         {
@@ -155,11 +157,22 @@ public static class Evidence
             ["id"] = s.Suite.Id, ["kind"] = s.Suite.Kind, ["reasons"] = new JsonArray([.. s.Reasons.Select(r => (JsonNode)r)]),
             ["result"] = trace!.Runs.FirstOrDefault(r => r.Suite == s.Suite.Id)?.Summary,
         })]);
+        if (system != null)
+            package["systemContext"] = SystemContexts.Evidence(system, SystemContexts.Share(budget), truncated, SystemContexts.Execution(git, commit, config, trace));
         package["omitted"] = new JsonArray([.. omitted.Select(o => (JsonNode)o)]);
         package["budget"] = new JsonObject { ["maxChars"] = budget, ["truncated"] = new JsonArray([.. truncated.Distinct().Select(t => (JsonNode)t)]) };
         package["budget"]!["usedChars"] = package.ToJsonString().Length;
         package["hash"] = Hash(package);
         return package;
+    }
+
+    /// <summary>A criterion, with the system context items it mentions (names from systemContext).</summary>
+    static JsonObject Criterion(string id, string text, SystemContext? system)
+    {
+        var o = new JsonObject { ["id"] = id, ["text"] = text };
+        if (system?.Criteria.FirstOrDefault(c => c.Criterion == id) is { Related.Count: > 0 } related)
+            o["relatedContext"] = new JsonArray([.. related.Related.Select(r => (JsonNode)r)]);
+        return o;
     }
 
     /// <summary>sha256 of the package without its hash field, so anyone can check that a review saw exactly this package.</summary>

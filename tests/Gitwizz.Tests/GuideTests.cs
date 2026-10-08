@@ -86,8 +86,13 @@ public class GuideTests : IDisposable
             Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors, Interactive = InteractionSupport.No,
         });
         console.Profile.Width = 200;
-        var code = new Guide(wf, new GuideOptions($"gitwizz guide {branch}", EvidenceDir: evidence), console, console, prompts, planner).Run();
-        return (code, writer.ToString());
+        SystemContexts.Override = _ => new FakeDocwizz { VersionText = null }; // no docwizz here, whatever is installed
+        try
+        {
+            var code = new Guide(wf, new GuideOptions($"gitwizz guide {branch}", EvidenceDir: evidence), console, console, prompts, planner).Run();
+            return (code, writer.ToString());
+        }
+        finally { SystemContexts.Override = null; }
     }
 
     int Runs => File.Exists(_runs) ? File.ReadAllLines(_runs).Length : 0;
@@ -96,7 +101,12 @@ public class GuideTests : IDisposable
     public void State_machine_walks_context_trace_test_evaluate_to_a_verdict()
     {
         var facts = new GuideFacts(Merges: true, Selected: 2);
-        Assert.Equal(GuideState.Trace, Gitwizz.Guide.Next(GuideState.Context, facts));
+        Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.Context, facts));
+        Assert.Equal(GuideState.Trace, Gitwizz.Guide.Next(GuideState.SystemContext, facts));                                // good context: nothing asked
+        Assert.Equal(GuideState.Trace, Gitwizz.Guide.Next(GuideState.SystemContext, facts, GuideAction.ContinueWithContext));
+        Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.SystemContext, facts, GuideAction.ShowContextGraph));
+        Assert.Equal(GuideState.SystemContext, Gitwizz.Guide.Next(GuideState.SystemContext, facts, GuideAction.RefreshContext));
+        Assert.Equal(GuideState.Done, Gitwizz.Guide.Next(GuideState.SystemContext, facts, GuideAction.Exit));
         Assert.Equal(GuideState.Test, Gitwizz.Guide.Next(GuideState.Trace, facts));
         Assert.Equal(GuideState.Evaluate, Gitwizz.Guide.Next(GuideState.Trace, facts with { Merges = false }));   // nothing to test on
         Assert.Equal(GuideState.Evaluate, Gitwizz.Guide.Next(GuideState.Trace, facts with { Selected = 0 }));
@@ -117,6 +127,9 @@ public class GuideTests : IDisposable
         Assert.Equal(GuideAction.Exit, Gitwizz.Guide.Default(GuideState.Blocked));
         Assert.Equal(GuideAction.ShowPlan, Gitwizz.Guide.Actions(GuideState.Ready)[0]);
         Assert.Equal(GuideAction.RunTests, Gitwizz.Guide.Actions(GuideState.Test)[0]);
+        Assert.Equal(GuideAction.ContinueWithContext, Gitwizz.Guide.Default(GuideState.SystemContext)); // missing context is advisory
+        Assert.Equal([GuideAction.ContinueWithContext, GuideAction.ShowContextHelp, GuideAction.Exit],
+            Gitwizz.Guide.Actions(GuideState.SystemContext, new GuideFacts(Context: "MISSING", DocwizzAvailable: false)));
     }
 
     [Fact]
@@ -132,7 +145,7 @@ public class GuideTests : IDisposable
         Assert.Contains("1 of 1 suite selected: tax", output);
         Assert.Contains("1/2 acceptance criteria linked to a test", output);
         Assert.Contains("! AB#1.2 has no verifying test", output);          // shown before anything runs
-        Assert.True(output.IndexOf("has no verifying test") < output.IndexOf("Step 3/5"));
+        Assert.True(output.IndexOf("has no verifying test") < output.IndexOf("Step 4/6"));
         Assert.Contains("✓ tax: passed", output);
         Assert.Contains("! AB#1.2 remains uncovered", output);
         Assert.Contains("VERDICT: BLOCKED", output);
@@ -166,7 +179,7 @@ public class GuideTests : IDisposable
             return new Planner(new Simulator(_git, MergeStrategy.Merge), "main", sha, prs).Build(8);
         }
         var evidence = Directory.CreateDirectory(Path.Combine(_dir, ".evidence")).FullName;
-        var script = new Script(GuideAction.ShowTrace, GuideAction.RunTests, GuideAction.ShowPlan, GuideAction.SaveEvidence, GuideAction.Exit);
+        var script = new Script(GuideAction.ContinueWithContext, GuideAction.ShowTrace, GuideAction.RunTests, GuideAction.ShowPlan, GuideAction.SaveEvidence, GuideAction.Exit);
         var (code, output) = Guide("feature", script, items: [Story with { AcceptanceCriteria = ["Food uses 7 %"] }], evidence, Planner);
 
         Assert.Equal(0, code);

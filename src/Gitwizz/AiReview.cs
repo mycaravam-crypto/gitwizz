@@ -50,7 +50,8 @@ public static class Endpoints
 }
 
 /// <summary>A model's finding after validation against the evidence package.</summary>
-public record ReviewFinding(string Rule, string File, int? Line, string Severity, double Confidence, string Message, string Evidence, string Verdict, string? Note);
+public record ReviewFinding(string Rule, string File, int? Line, string Severity, double Confidence, string Message, string Evidence, string Verdict, string? Note,
+    List<string>? Context = null);
 
 /// <summary>
 /// AI review against a self-hosted, OpenAI-compatible endpoint. The model sees only the evidence package, as data;
@@ -60,7 +61,7 @@ public record ReviewFinding(string Rule, string File, int? Line, string Severity
 public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityGate
 {
     /// <summary>Bumped whenever the prompt changes, so results and benchmarks name the prompt they used.</summary>
-    public const string PromptVersion = "review-v1";
+    public const string PromptVersion = "review-v2";
 
     /// <summary>The system prompt: the reviewer's role, the evidence rules and the output contract. Fixed in code, not configurable.</summary>
     public const string SystemPrompt = """
@@ -75,9 +76,20 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
         line(s) from "diff" that show the problem in "evidence", and name the changed file and the new-side line number.
         Do not report style preferences without a rule, and do not guess about code you cannot see.
 
+        "systemContext" (when present) holds facts about the system around the change from static analysis: who calls
+        the changed symbols, what they call, endpoints, data entities, external systems, flows, documents and linked
+        tests, each with an id. Use them to judge impact on callers, data, external systems and acceptance criteria
+        ("relatedContext" names the context a criterion mentions). List the ids of the facts, documents and tests a finding
+        relies on in "context". Origin "detected" was found in the code; "inferred" was derived and may be wrong: say so
+        when you rely on it. Documents with status "stale" or "unknown" are not authoritative, and "missing" means there
+        is none: never treat them as fact. When current code contradicts documentation, the code is right; report the
+        contradiction. Never claim a relationship between parts of the system that no fact in the package shows. A linked
+        test means test code uses the symbol, not that it is covered or ran ("executed" says what ran).
+
         Answer with one JSON object and nothing else:
         {"findings": [{"rule": "short id", "file": "path", "line": 12, "severity": "error|warning|info",
-          "confidence": 0.0-1.0, "message": "what is wrong and why", "evidence": "exact quote from the diff"}]}
+          "confidence": 0.0-1.0, "message": "what is wrong and why", "evidence": "exact quote from the diff",
+          "context": ["F3", "D1"]}]}
         Use {"findings": []} when there is nothing to report.
         """;
 
@@ -92,7 +104,7 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
         if (Endpoints.Problem(review.Endpoint, review.AllowedHosts) is { } problem) return GateResult.Of(GateStatus.Error, problem);
         if (review.Model == "") return GateResult.Of(GateStatus.Error, "review.model is not set");
         var commit = ctx.MergedState ?? ctx.Pr.HeadSha;
-        var package = Evidence.Build(ctx.Git, ctx.Pr, ctx.Config, ctx.Target, ctx.TargetSha, commit, ctx.Trace);
+        var package = Evidence.Build(ctx.Git, ctx.Pr, ctx.Config, ctx.Target, ctx.TargetSha, commit, ctx.Trace, SystemContexts.For(ctx));
         if (ctx.EvidenceDir != null) File.WriteAllText(Path.Combine(ctx.EvidenceDir, $"{spec.Id}-package.json"), Evidence.Json(package));
         var hash = package["hash"]!.GetValue<string>();
         // The same package reviewed by the same model, prompt and settings: reuse the answer.
@@ -118,7 +130,8 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
         {
             Status = status,
             Summary = (kept.Count == 0 ? "no evidenced findings" : $"{kept.Count} finding(s)") + (rejected > 0 ? $"; {rejected} rejected for missing evidence" : ""),
-            Findings = [.. kept.Select(f => new Finding(f.Message + (f.Note != null ? $" ({f.Note})" : ""), f.Severity, f.File, f.Line, f.Rule, f.Evidence))],
+            Findings = [.. kept.Select(f => new Finding(f.Message + (f.Note != null ? $" ({f.Note})" : "") + (f.Context is { Count: > 0 } c ? $" [context: {string.Join(", ", c)}]" : ""),
+                f.Severity, f.File, f.Line, f.Rule, f.Evidence))],
             Evidence = [$"evidence package {packageHash}", meta, .. findings.Where(f => f.Verdict == "rejected").Select(f => $"rejected: {f.File}:{f.Line} {f.Message} ({f.Note})")],
             Tool = "ai-review",
             ToolVersion = $"{review.Model} @ {new Uri(review.Endpoint!).Host}, prompt {PromptVersion} ({Fingerprint(review).Split('|')[2]})",
@@ -170,7 +183,8 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
 
     /// <summary>
     /// Parses the model's answer and checks each finding against the package: the file must be changed, the evidence must
-    /// quote the diff (else rejected); a line outside the changed lines or a low confidence downgrades it to info.
+    /// quote the diff (else rejected); a line outside the changed lines or a low confidence downgrades it to info, and so
+    /// does system context the finding cites that isn't in the package, or that is only inferred, stale or unverified.
     /// </summary>
     public static List<ReviewFinding> Validate(string content, JsonObject package, Dictionary<string, List<(int Start, int End)>> changed, double minConfidence)
     {
@@ -182,6 +196,7 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
 
         var diffs = (package["diff"] as JsonArray ?? []).ToDictionary(d => d!["path"]!.GetValue<string>(), d => d!["patch"]!.GetValue<string>());
         var files = (package["changes"]?["files"] as JsonArray ?? []).Select(f => f!["path"]!.GetValue<string>()).ToHashSet();
+        var context = ContextTrust(package);
         var result = new List<ReviewFinding>();
         foreach (var item in items.OfType<JsonObject>())
         {
@@ -199,11 +214,44 @@ public sealed class AiReviewGate(HttpMessageHandler? handler = null) : IQualityG
                     ? "evidence not found in the diff" : null;
             if (reject != null) { result.Add(new(rule, file, line, severity, confidence, message, evidence, "rejected", reject)); continue; }
 
+            var cited = (item["context"] as JsonArray ?? []).Select(c => c is JsonValue v && v.TryGetValue<string>(out var id) ? id.Trim() : "").Where(id => id != "")
+                .Distinct().ToList();
+            var unknown = cited.Where(id => !context.ContainsKey(id)).ToList();
+            var weak = cited.Where(id => context.GetValueOrDefault(id) is { } trust && trust != "authoritative").ToList();
             var onChange = line is { } n && changed.TryGetValue(file, out var ranges) && ranges.Any(x => n >= x.Start - 3 && n <= x.End + 3);
-            string? note = !onChange ? "line is not part of the change" : confidence < minConfidence ? $"confidence {confidence:0.##} below {minConfidence:0.##}" : null;
-            result.Add(new(rule, file, line, note != null ? "info" : severity, confidence, message, evidence, note != null ? "downgraded" : "kept", note));
+            string? note = !onChange ? "line is not part of the change"
+                : confidence < minConfidence ? $"confidence {confidence:0.##} below {minConfidence:0.##}"
+                : unknown.Count > 0 ? $"cites system context not in the evidence package: {string.Join(", ", unknown)}"
+                : cited.Count > 0 && weak.Count == cited.Count && severity != "info"
+                    ? $"rests only on {string.Join(" or ", weak.Select(w => context[w]).Distinct())} system context ({string.Join(", ", weak)})"
+                : null;
+            result.Add(new(rule, file, line, note != null ? "info" : severity, confidence, message, evidence, note != null ? "downgraded" : "kept", note,
+                cited.Count > 0 ? cited : null));
         }
         return result;
+    }
+
+    /// <summary>
+    /// The system context items of a package by id, and how far a finding may rest on them: authoritative (a detected
+    /// fact, a current document, a direct test link), else inferred, stale, unknown or missing.
+    /// </summary>
+    static Dictionary<string, string> ContextTrust(JsonObject package)
+    {
+        var trust = new Dictionary<string, string>();
+        if (package["systemContext"] is not JsonObject sc) return trust;
+        var stale = sc["freshness"]?.GetValue<string>() == "stale";
+        foreach (var (_, value) in sc)
+            foreach (var item in (value as JsonArray ?? []).OfType<JsonObject>())
+            {
+                if (item["id"]?.GetValue<string>() is not { } id) continue;
+                var status = item["status"]?.GetValue<string>();
+                var origin = item["origin"]?.GetValue<string>();
+                trust[id] = status is "stale" or "unknown" or "missing" ? status
+                    : stale ? "stale"
+                    : origin is "inferred" or "ai-drafted" ? "inferred"
+                    : "authoritative";
+            }
+        return trust;
     }
 }
 

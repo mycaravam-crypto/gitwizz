@@ -91,7 +91,14 @@ public sealed class PullRequestWorkflow : IDisposable
     {
         Merge();
         var trace = Context.Trace ?? (Config.Tests.Count > 0 ? Traceability.Build(Git, Pr, Config, Commit) : null);
-        return Evidence.Build(Git, Pr, Config, Target, TargetSha, Commit, trace);
+        return Evidence.Build(Git, Pr, Config, Target, TargetSha, Commit, trace, SystemContext());
+    }
+
+    /// <summary>The system context docwizz gives for the change (on the merged state), built once; refresh runs docwizz again.</summary>
+    public SystemContext SystemContext(bool refresh = false)
+    {
+        Merge();
+        return SystemContexts.For(Context, refresh);
     }
 
     /// <summary>The evidence package as redacted JSON.</summary>

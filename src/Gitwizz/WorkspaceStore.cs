@@ -156,6 +156,9 @@ public sealed class WorkspaceStore
         "strategy" => "other merge strategy",
         "profile" => "other gate profile",
         "commands" => "other commands",
+        "tree" => "the target's code changed",
+        "commit" => "the change's code changed",
+        "docwizz" => "another docwizz version",
         _ => $"{input} changed",
     };
 

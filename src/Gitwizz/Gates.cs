@@ -46,13 +46,13 @@ public record GateSpec
     public string Id { get; init; } = "";
     public string? Type { get; init; }
     public string? Run { get; init; }               // command line, for workspace gates (build/test detect one when omitted)
-    public bool? Blocking { get; init; }             // default: true, except ai-review (advisory)
+    public bool? Blocking { get; init; }             // default: true, except ai-review and system-context (advisory)
     public int Timeout { get; init; } = 1800;       // seconds
     public List<string>? Needs { get; init; }       // gates that must pass first; workspace gates need merge by default
     public List<string> Paths { get; init; } = [];  // run only when a changed file matches; else skipped
 
     [YamlIgnore] public string Kind => Type ?? (Gates.Types.Contains(Id) ? Id : "command");
-    [YamlIgnore] public bool IsBlocking => Blocking ?? Kind != "ai-review";
+    [YamlIgnore] public bool IsBlocking => Blocking ?? Kind is not ("ai-review" or "system-context");
     [YamlIgnore] public IReadOnlyList<string> Requires => Needs ?? (Gates.Workspace.Contains(Kind) ? ["merge"] : []);
 }
 
@@ -90,6 +90,9 @@ public sealed class GateContext : IDisposable
 
     /// <summary>Requirement-to-test trace, set by the traceability gate.</summary>
     public Trace? Trace { get; set; }
+
+    /// <summary>System context from docwizz, built on first use (SystemContexts.For) and shared by guide, gates and evidence.</summary>
+    public SystemContext? System { get; set; }
 
     /// <summary>Results of the gates run so far, by id.</summary>
     public Dictionary<string, GateResult> Results { get; } = [];
@@ -138,13 +141,16 @@ public sealed class Redactor
 public static partial class Gates
 {
     /// <summary>Known gate types.</summary>
-    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability", "ai-review", "environment"];
+    public static readonly string[] Types = ["merge", "policy", "build", "test", "docwizz", "command", "traceability", "ai-review", "environment", "system-context"];
 
     /// <summary>Types that work on the merged state, so they need the merge gate.</summary>
     public static readonly string[] Workspace = ["build", "test", "docwizz", "command", "traceability", "ai-review", "environment"];
 
     /// <summary>Available without configuration: structural mergeability and repository policy (reviews, checks).</summary>
     public static readonly GateSpec[] BuiltIn = [new() { Id = "merge" }, new() { Id = "policy" }];
+
+    /// <summary>Added when context.docwizz requires context and no system-context gate is configured; it runs in every profile.</summary>
+    public static readonly GateSpec SystemContext = new() { Id = "system-context", Blocking = true };
 
     /// <summary>Test seam: returns a replacement implementation for a gate type, or null. Per thread.</summary>
     [ThreadStatic] public static Func<string, IQualityGate?>? Override;
@@ -157,6 +163,7 @@ public static partial class Gates
         "traceability" => new TraceabilityGate(),
         "ai-review" => new AiReviewGate(),
         "environment" => new EnvironmentGate(),
+        "system-context" => new SystemContextGate(),
         _ => new CommandGate(),
     };
 
