@@ -336,8 +336,65 @@ public class HealthTests : IDisposable
     {
         var o = Cli.Parse(["-f", "json", "--profile", "strict", "--provider", "ado"], "doctor");
         Assert.Equal(("json", "strict", "ado"), (o["format"], o["profile"], o["provider"]));
+        Assert.True(Cli.Parse(["--working-tree"], "doctor").ContainsKey("working-tree"));
+        Assert.Throws<ArgumentException>(() => Cli.Parse(["--working-tree"], "guide"));
         Assert.Throws<ArgumentException>(() => Cli.Parse(["--all-open"], "doctor"));
         Assert.Throws<ArgumentException>(() => Cli.Diagnose(_dir, new() { ["provider"] = "gitlab" }, new DependencyHealthService()));
+    }
+
+    [Fact]
+    public void Doctor_explains_uncommitted_policy_and_next_action()
+    {
+        Assert.Null(Cli.LocalPolicyNotice(_dir, false));
+        Write(RepoConfig.FileName, "context:\\n  docwizz:\\n    command: local-docwizz\\n");
+        Assert.Contains("Uncommitted .gitwizz.yml", Cli.LocalPolicyNotice(_dir, false));
+        Assert.Contains("gitwizz doctor --working-tree", Cli.LocalPolicyNotice(_dir, false));
+        Assert.Contains("checking the local file", Cli.LocalPolicyNotice(_dir, true));
+        Commit("add policy");
+        Assert.Null(Cli.LocalPolicyNotice(_dir, false));
+        Write(RepoConfig.FileName, "context:\\n  docwizz:\\n    command: updated-docwizz\\n");
+        Assert.Contains("Uncommitted .gitwizz.yml", Cli.LocalPolicyNotice(_dir, false));
+    }
+
+    [Fact]
+    public void Doctor_uses_target_policy_by_default_and_uncommitted_policy_when_requested()
+    {
+        Config("context:\n  docwizz:\n    command: docwizz\n");
+        Write(RepoConfig.FileName, "context:\n  docwizz:\n    command: local-docwizz\n");
+        var tools = Everything();
+        tools["local-docwizz --version"] = Ok("1.0.0\n");
+        var fake = new FakeTools(tools);
+        var health = new DependencyHealthService(fake.Exec, new FakeEndpoint());
+
+        var target = Cli.Diagnose(_dir, new() { ["provider"] = "local" }, health);
+        Assert.Contains("docwizz --version", fake.Calls);
+        Assert.DoesNotContain("local-docwizz --version", fake.Calls);
+        Assert.Equal(DependencyState.Available, Dep(target, "docwizz").State);
+
+        fake.Calls.Clear();
+        var local = Cli.Diagnose(_dir, new() { ["provider"] = "local", ["working-tree"] = "true" }, health);
+        Assert.Contains("local-docwizz --version", fake.Calls);
+        Assert.DoesNotContain("docwizz --version", fake.Calls);
+        Assert.Equal(DependencyState.Available, Dep(local, "docwizz").State);
+        Assert.Equal("1.0.0", Dep(local, "docwizz").Version);
+    }
+
+    [Fact]
+    public void Doctor_working_tree_can_validate_a_new_uncommitted_policy()
+    {
+        Write(RepoConfig.FileName, "context:\n  docwizz:\n    command: local-docwizz\n");
+        var tools = Everything();
+        tools["local-docwizz --version"] = Ok("1.0.0\n");
+        var fake = new FakeTools(tools);
+        var health = new DependencyHealthService(fake.Exec, new FakeEndpoint());
+
+        Cli.Diagnose(_dir, new() { ["provider"] = "local" }, health);
+        Assert.DoesNotContain("local-docwizz --version", fake.Calls);
+
+        fake.Calls.Clear();
+        var local = Cli.Diagnose(_dir, new() { ["provider"] = "local", ["working-tree"] = "true" }, health);
+        Assert.Contains("local-docwizz --version", fake.Calls);
+        Assert.Equal(DependencyState.Available, Dep(local, "docwizz").State);
     }
 
     [Fact]
