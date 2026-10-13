@@ -379,13 +379,21 @@ public static partial class History
             if (f.Length < 5) continue;
             var parents = f[1].Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
             var message = f[3].TrimEnd();
-            commits.Add(new HistoryCommit(f[0], parents, message.Split('\n')[0], f[2], parents.Count > 1 ? "merge" : "commit",
+            commits.Add(new HistoryCommit(f[0], parents, message.Split('\n')[0], IsoDate(f[2]), parents.Count > 1 ? "merge" : "commit",
                 parents.Count > 1 ? [] : ParsePatch(f[4]), MessageLinks(message), HistoryCommitLinks.Unknown("not looked up"),
                 new HistoryPrRef(null, "unknown", [], [])));
         }
         var bySha = commits.ToDictionary(c => c.Sha);
         return new([.. shas.Where(bySha.ContainsKey).Select(s => bySha[s])], truncated, Shallow(git), mainline);
     }
+
+    /// <summary>
+    /// A git ISO 8601 date in one form, whatever the git version: newer git writes UTC as "Z", older as "+00:00".
+    /// Always yyyy-MM-ddTHH:mm:ss+HH:mm (or -HH:mm), so the same commits give the same document.
+    /// </summary>
+    public static string IsoDate(string date) =>
+        DateTimeOffset.TryParse(date, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d)
+            ? d.ToString("yyyy-MM-ddTHH:mm:sszzz", System.Globalization.CultureInfo.InvariantCulture) : date;
 
     [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")]
     private static partial Regex HunkHeader();

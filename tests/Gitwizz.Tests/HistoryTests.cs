@@ -469,6 +469,10 @@ public class HistoryTests : IDisposable
         var broken = new AdoHistory(new ScriptedAdo(_ => "not json")).CommitLinks(sha);
         Assert.Equal("unavailable", broken.Status);
         Assert.Equal("https://tfs/x failed", History.Redact("https://build:pat-123@tfs/x failed"));
+        // committedAt has one form whatever the git version writes for UTC.
+        Assert.Equal("2026-10-01T08:36:00+00:00", History.IsoDate("2026-10-01T08:36:00Z"));
+        Assert.Equal("2026-10-01T08:36:00+00:00", History.IsoDate("2026-10-01T08:36:00+00:00"));
+        Assert.Equal("2026-10-01T10:36:00+02:00", History.IsoDate("2026-10-01T10:36:00+02:00"));
     }
 
     [Fact]

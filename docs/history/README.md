@@ -77,7 +77,7 @@ Newest first in `git rev-list --topo-order` order, at most `limit`.
 | Field | Meaning |
 |---|---|
 | `sha`, `parents` | full commit ids; `parents` in git's order (the first parent is the mainline of a merge) |
-| `subject`, `committedAt` | the first line of the message; the committer date (ISO 8601 with offset) |
+| `subject`, `committedAt` | the first line of the message; the committer date in one form whatever the git version: `yyyy-MM-ddTHH:mm:ss+HH:mm`, UTC as `+00:00`, never `Z` |
 | `kind` | `commit`, or `merge` (two or more parents). A merge has no `files`: its changes are its parents'. Changes made while resolving a merge conflict are therefore not attributed |
 | `files[]` | what changed against the first parent (`git diff -U0 -M -C`), in git's diff order |
 | `workItems[]` | work items the commit's **own message names**, `source: commit-message`. These are mentions: nobody verified them, and the provider may link other items or none |
