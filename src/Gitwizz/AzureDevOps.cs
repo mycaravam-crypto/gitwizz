@@ -9,6 +9,12 @@ public interface IAdoClient
     string Run(params string[] args);
 }
 
+/// <summary>An ado command that failed, with its exit code (127 missing, 124 timed out, 3 not logged in, 4 denied, 5 not found).</summary>
+public sealed class AdoCommandException(int exitCode, string message) : InvalidOperationException(message)
+{
+    public int ExitCode { get; } = exitCode;
+}
+
 /// <summary>
 /// The ado CLI (github.com/mycaravam-crypto/ado-devops) as the API adapter: server, project, PAT, API version, TLS and
 /// proxy all come from its configuration (ado auth login, ADO_* variables), so gitwizz never sees or logs a credential.
@@ -18,13 +24,19 @@ public sealed class AdoCli(string dir, string? executable = null) : IAdoClient
     /// <summary>The ado executable: GITWIZZ_ADO, else "ado" on the PATH.</summary>
     public string Executable { get; } = executable ?? Environment.GetEnvironmentVariable("GITWIZZ_ADO") ?? "ado";
 
-    /// <summary>Runs ado; maps its exit codes (127 missing, 3 not logged in, 4 denied, 5 not found) to clear errors.</summary>
+    /// <summary>How long one ado command may take before it counts as failed (exit 124).</summary>
+    public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Runs ado; maps its exit codes (127 missing, 124 timed out, 3 not logged in, 4 denied, 5 not found) to clear errors,
+    /// thrown as AdoCommandException (an InvalidOperationException) that carries the exit code.
+    /// </summary>
     public string Run(params string[] args)
     {
-        var r = Git.Exec(dir, Executable, args, timeout: TimeSpan.FromMinutes(5));
+        var r = Git.Exec(dir, Executable, args, timeout: Timeout);
         if (r.ExitCode == 0) return r.Stdout;
         var what = $"ado {string.Join(' ', args.TakeWhile(a => !a.StartsWith('-')))}";
-        throw new InvalidOperationException(r.ExitCode switch
+        throw new AdoCommandException(r.ExitCode, r.ExitCode switch
         {
             127 => $"{what} failed: '{Executable}' not found (install ado from github.com/mycaravam-crypto/ado-devops or set GITWIZZ_ADO)",
             3 => $"{what} failed: not logged in to Azure DevOps (exit 3): {r.Stderr.Trim()}",

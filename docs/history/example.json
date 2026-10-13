@@ -1,0 +1,456 @@
+{
+  "schema": "gitwizz.history/v2",
+  "provider": "azure-devops",
+  "repository": "https://tfs.example/coll/Platform/_git/backend",
+  "range": {
+    "since": "v1.0",
+    "sinceSha": "192ec59427fe0485ca6c900c2752f6dfbff53d2a",
+    "until": "main",
+    "untilSha": "837b7bbd310aadf9f08ce4cab731c207b39aa141",
+    "limit": 200,
+    "commits": 10,
+    "truncated": false,
+    "shallow": false
+  },
+  "sources": {
+    "commitMessages": "complete: every exported commit's message was read",
+    "providerCommitLinks": "ado commit context, per commit (see commits[].providerLinks)",
+    "pullRequests": "commit messages, confirmed with azure-devops",
+    "pullRequestWorkItems": "azure-devops, per pull request (see workItemsStatus)"
+  },
+  "commits": [
+    {
+      "sha": "837b7bbd310aadf9f08ce4cab731c207b39aa141",
+      "parents": [
+        "d7fa2f9d5fe703a0f4d23729c8012af2ee8520ed",
+        "c61120542baf8576c515ebb9b6833f3764338131"
+      ],
+      "subject": "Merge branch dev",
+      "committedAt": "2026-10-01T08:36:00+00:00",
+      "kind": "merge",
+      "files": [],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": null,
+        "resolution": "unknown",
+        "basis": [],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "c61120542baf8576c515ebb9b6833f3764338131",
+      "parents": [
+        "048af9f245ddd8490350eb467598e5211e68f3ff",
+        "c5aa520f5addc7011f9761220d1ee7921d251137"
+      ],
+      "subject": "Merged PR 11: shared to dev",
+      "committedAt": "2026-10-01T08:34:00+00:00",
+      "kind": "merge",
+      "files": [],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": "#11",
+        "resolution": "inferred",
+        "basis": [
+          "merge-message"
+        ],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "d7fa2f9d5fe703a0f4d23729c8012af2ee8520ed",
+      "parents": [
+        "048af9f245ddd8490350eb467598e5211e68f3ff",
+        "c5aa520f5addc7011f9761220d1ee7921d251137"
+      ],
+      "subject": "Merged PR 10: shared to main",
+      "committedAt": "2026-10-01T08:32:00+00:00",
+      "kind": "merge",
+      "files": [],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": "#10",
+        "resolution": "inferred",
+        "basis": [
+          "merge-message"
+        ],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "c5aa520f5addc7011f9761220d1ee7921d251137",
+      "parents": [
+        "048af9f245ddd8490350eb467598e5211e68f3ff"
+      ],
+      "subject": "Shared helper",
+      "committedAt": "2026-10-01T08:29:00+00:00",
+      "kind": "commit",
+      "files": [
+        {
+          "path": "src/Shared.cs",
+          "oldPath": null,
+          "status": "added",
+          "similarity": null,
+          "granularity": "lines",
+          "ranges": [
+            {
+              "oldStart": 0,
+              "oldCount": 0,
+              "newStart": 1,
+              "newCount": 1
+            }
+          ]
+        }
+      ],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": null,
+        "resolution": "ambiguous",
+        "basis": [
+          "merged-branch"
+        ],
+        "candidates": [
+          "#10",
+          "#11"
+        ]
+      }
+    },
+    {
+      "sha": "048af9f245ddd8490350eb467598e5211e68f3ff",
+      "parents": [
+        "b7c602ab41c8d957657a3010b4c16c05d4914b45"
+      ],
+      "subject": "Drop Round, see #12",
+      "committedAt": "2026-10-01T08:24:00+00:00",
+      "kind": "commit",
+      "files": [
+        {
+          "path": "src/Tax.cs",
+          "oldPath": null,
+          "status": "modified",
+          "similarity": null,
+          "granularity": "lines",
+          "ranges": [
+            {
+              "oldStart": 4,
+              "oldCount": 2,
+              "newStart": 3,
+              "newCount": 0
+            }
+          ]
+        }
+      ],
+      "workItems": [
+        {
+          "workItem": "AB#12",
+          "source": "commit-message",
+          "kind": "mention",
+          "evidence": "#12"
+        }
+      ],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": null,
+        "resolution": "unknown",
+        "basis": [],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "b7c602ab41c8d957657a3010b4c16c05d4914b45",
+      "parents": [
+        "b3ba8538170b7d51da3863e003a40c4553e35bdc"
+      ],
+      "subject": "Merged PR 9: Reduced rate",
+      "committedAt": "2026-10-01T08:21:00+00:00",
+      "kind": "commit",
+      "files": [
+        {
+          "path": "src/Tax.cs",
+          "oldPath": null,
+          "status": "modified",
+          "similarity": null,
+          "granularity": "lines",
+          "ranges": [
+            {
+              "oldStart": 3,
+              "oldCount": 1,
+              "newStart": 3,
+              "newCount": 1
+            }
+          ]
+        }
+      ],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [
+          {
+            "workItem": "AB#4712",
+            "source": "provider",
+            "kind": "commit-link",
+            "evidence": "ado commit context: commit-workitem",
+            "uri": "https://tfs.example/coll/_workitems/edit/4712"
+          }
+        ],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": "#9",
+        "resolution": "inferred",
+        "basis": [
+          "merge-message"
+        ],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "b3ba8538170b7d51da3863e003a40c4553e35bdc",
+      "parents": [
+        "192ec59427fe0485ca6c900c2752f6dfbff53d2a",
+        "bdb101ea7868ffe2b372d8b777e454ddcd0bd778"
+      ],
+      "subject": "Merged PR 7: Rounding",
+      "committedAt": "2026-10-01T08:18:00+00:00",
+      "kind": "merge",
+      "files": [],
+      "workItems": [],
+      "providerLinks": {
+        "status": "unavailable",
+        "items": null,
+        "problem": "ado commit context b3ba8538170b: work item links unavailable: the server did not report work items for the commit"
+      },
+      "pullRequest": {
+        "id": "#7",
+        "resolution": "exact",
+        "basis": [
+          "merge-message",
+          "provider"
+        ],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "bdb101ea7868ffe2b372d8b777e454ddcd0bd778",
+      "parents": [
+        "d90408c611b1f2d28b3248b37381e4c3c1f9392b"
+      ],
+      "subject": "Logo",
+      "committedAt": "2026-10-01T08:15:00+00:00",
+      "kind": "commit",
+      "files": [
+        {
+          "path": "logo.png",
+          "oldPath": null,
+          "status": "added",
+          "similarity": null,
+          "granularity": "file",
+          "ranges": []
+        }
+      ],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": "#7",
+        "resolution": "exact",
+        "basis": [
+          "merged-branch",
+          "provider"
+        ],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "d90408c611b1f2d28b3248b37381e4c3c1f9392b",
+      "parents": [
+        "fb4f818230da65917fa49a0f010b38c87da42714"
+      ],
+      "subject": "Move readme",
+      "committedAt": "2026-10-01T08:12:00+00:00",
+      "kind": "commit",
+      "files": [
+        {
+          "path": "docs/README.md",
+          "oldPath": "README.md",
+          "status": "renamed",
+          "similarity": 100,
+          "granularity": "file",
+          "ranges": []
+        }
+      ],
+      "workItems": [],
+      "providerLinks": {
+        "status": "verified",
+        "items": [],
+        "problem": null
+      },
+      "pullRequest": {
+        "id": "#7",
+        "resolution": "exact",
+        "basis": [
+          "merged-branch",
+          "provider"
+        ],
+        "candidates": []
+      }
+    },
+    {
+      "sha": "fb4f818230da65917fa49a0f010b38c87da42714",
+      "parents": [
+        "192ec59427fe0485ca6c900c2752f6dfbff53d2a"
+      ],
+      "subject": "Round half up AB#100",
+      "committedAt": "2026-10-01T08:08:00+00:00",
+      "kind": "commit",
+      "files": [
+        {
+          "path": "src/Tax.cs",
+          "oldPath": null,
+          "status": "modified",
+          "similarity": null,
+          "granularity": "lines",
+          "ranges": [
+            {
+              "oldStart": 5,
+              "oldCount": 1,
+              "newStart": 5,
+              "newCount": 1
+            }
+          ]
+        }
+      ],
+      "workItems": [
+        {
+          "workItem": "AB#100",
+          "source": "commit-message",
+          "kind": "ab",
+          "evidence": "AB#100"
+        }
+      ],
+      "providerLinks": {
+        "status": "denied",
+        "items": null,
+        "problem": "ado commit context failed: permission denied (exit 4): TF401019"
+      },
+      "pullRequest": {
+        "id": "#7",
+        "resolution": "exact",
+        "basis": [
+          "merged-branch",
+          "provider"
+        ],
+        "candidates": []
+      }
+    }
+  ],
+  "pullRequests": [
+    {
+      "id": "#7",
+      "title": "Rounding",
+      "url": null,
+      "target": "main",
+      "status": "confirmed",
+      "strategy": "merge",
+      "mergeCommit": "b3ba8538170b7d51da3863e003a40c4553e35bdc",
+      "commits": [
+        "b3ba8538170b7d51da3863e003a40c4553e35bdc",
+        "bdb101ea7868ffe2b372d8b777e454ddcd0bd778",
+        "d90408c611b1f2d28b3248b37381e4c3c1f9392b",
+        "fb4f818230da65917fa49a0f010b38c87da42714"
+      ],
+      "workItems": [
+        {
+          "workItem": "AB#4711",
+          "source": "provider",
+          "kind": "pr-link",
+          "evidence": "ado pr context"
+        }
+      ],
+      "workItemsStatus": "verified",
+      "problem": null
+    },
+    {
+      "id": "#9",
+      "title": null,
+      "url": null,
+      "target": null,
+      "status": "unconfirmed",
+      "strategy": "squash",
+      "mergeCommit": "b7c602ab41c8d957657a3010b4c16c05d4914b45",
+      "commits": [
+        "b7c602ab41c8d957657a3010b4c16c05d4914b45"
+      ],
+      "workItems": [],
+      "workItemsStatus": "denied",
+      "problem": "ado pr context failed: permission denied (exit 4): TF401027"
+    },
+    {
+      "id": "#10",
+      "title": null,
+      "url": null,
+      "target": null,
+      "status": "unconfirmed",
+      "strategy": "merge",
+      "mergeCommit": "d7fa2f9d5fe703a0f4d23729c8012af2ee8520ed",
+      "commits": [
+        "d7fa2f9d5fe703a0f4d23729c8012af2ee8520ed",
+        "c5aa520f5addc7011f9761220d1ee7921d251137"
+      ],
+      "workItems": [],
+      "workItemsStatus": "unavailable",
+      "problem": "ado pr context failed: not found (exit 5): pull request 10"
+    },
+    {
+      "id": "#11",
+      "title": null,
+      "url": null,
+      "target": null,
+      "status": "unconfirmed",
+      "strategy": "merge",
+      "mergeCommit": "c61120542baf8576c515ebb9b6833f3764338131",
+      "commits": [
+        "c61120542baf8576c515ebb9b6833f3764338131",
+        "c5aa520f5addc7011f9761220d1ee7921d251137"
+      ],
+      "workItems": [],
+      "workItemsStatus": "unavailable",
+      "problem": "ado pr context failed: not found (exit 5): pull request 11"
+    }
+  ],
+  "warnings": [
+    "#9: ado pr context failed: permission denied (exit 4): TF401027",
+    "#10: ado pr context failed: not found (exit 5): pull request 10",
+    "#11: ado pr context failed: not found (exit 5): pull request 11",
+    "provider commit links: 8 verified, 1 unavailable, 1 denied (see commits[].providerLinks)",
+    "ado commit context b3ba8538170b: work item links unavailable: the server did not report work items for the commit",
+    "ado commit context failed: permission denied (exit 4): TF401019"
+  ]
+}
