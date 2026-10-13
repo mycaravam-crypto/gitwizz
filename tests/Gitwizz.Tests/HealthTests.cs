@@ -553,4 +553,25 @@ public class HealthTests : IDisposable
     {
         public GateResult Run(GateContext ctx, GateSpec spec) => GateResult.Of(GateStatus.Error, summary);
     }
+
+    [Fact]
+    public void Requirement_evidence_is_checked_only_when_enabled_and_only_degrades()
+    {
+        Assert.DoesNotContain(Diagnose(Everything()).Dependencies, d => d.Name == "requirement evidence");
+
+        Config("context:\n  requirements:\n    enabled: true\n    command: gitwizz-no-such-requirements-tool --json\n");
+        var fake = new FakeTools(Everything());
+        var r = Diagnose(Everything(), fake: fake);
+        var dep = Dep(r, "requirement evidence");
+        Assert.Equal((DependencyState.Unavailable, "'gitwizz-no-such-requirements-tool' not found"), (dep.State, dep.Message));
+        Assert.Empty(dep.RequiredBy);
+        Assert.Equal(OverallHealth.Degraded, r.Overall); // advisory: the verdict is not at risk
+        Assert.DoesNotContain(fake.Calls, c => c.StartsWith("gitwizz-no-such-requirements-tool")); // never run
+
+        Config("context:\n  requirements:\n    enabled: true\n");
+        Assert.Equal(DependencyState.Misconfigured, Dep(Diagnose(Everything()), "requirement evidence").State);
+
+        Config("context:\n  requirements:\n    enabled: true\n    command: sh\n");
+        Assert.Equal(DependencyState.Unknown, Dep(Diagnose(Everything()), "requirement evidence").State);
+    }
 }

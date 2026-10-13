@@ -22,10 +22,14 @@ public record DocwizzPolicy
     [YamlIgnore] public bool Enforced => Enabled && (Required || RequireArchitectureForChangedSymbols);
 }
 
-/// <summary>.gitwizz.yml context: which system context the review uses, and whether its absence blocks.</summary>
+/// <summary>
+/// .gitwizz.yml context: which system context the review uses, and whether its absence blocks; optionally, requirement
+/// evidence for the changed symbols (advisory, off by default).
+/// </summary>
 public record ContextPolicy
 {
     public DocwizzPolicy Docwizz { get; init; } = new();
+    public RequirementsPolicy Requirements { get; init; } = new();
 }
 
 /// <summary>
@@ -139,6 +143,7 @@ public record SystemContext
     public List<string> Unlinked { get; init; } = [];
     public List<CriterionContext> Criteria { get; init; } = [];
     public List<string> UnanalyzedFiles { get; init; } = [];
+    public RequirementContext? Requirements { get; init; } // null unless context.requirements.enabled
 
     public bool Usable => Status == "available";
     public IEnumerable<ContextSymbol> Unowned => LayersConfigured ? Symbols.Where(s => s.Layer == null && s.Change != "removed") : [];
@@ -179,11 +184,21 @@ public static class SystemContexts
     }
 
     /// <summary>
-    /// The system context of pr at commit (merged state or head) against targetSha. Never throws for a docwizz problem:
+    /// The system context of pr at commit (merged state or head) against targetSha, with the requirement evidence for its
+    /// changed symbols when context.requirements is enabled. Never throws for a docwizz or requirement problem:
     /// unavailable and failed are states of the result. refresh: run docwizz again even when the workspace holds a result.
     /// </summary>
     public static SystemContext Build(Git git, WorkspaceStore store, string provider, PullRequest pr, RepoConfig config, string targetSha, string commit,
         string risk, bool refresh = false)
+    {
+        var sc = Facts(git, store, provider, pr, config, targetSha, commit, risk, refresh);
+        var requirements = config.Context.Requirements;
+        return requirements.Enabled ? sc with { Requirements = RequirementContexts.Read(git, requirements, sc, targetSha, commit) } : sc;
+    }
+
+    /// <summary>The docwizz part of Build: repository facts, the PR's diff, the selection and its quality.</summary>
+    static SystemContext Facts(Git git, WorkspaceStore store, string provider, PullRequest pr, RepoConfig config, string targetSha, string commit,
+        string risk, bool refresh)
     {
         var policy = config.Context.Docwizz;
         if (!policy.Enabled) return Missing("unavailable", "disabled by context.docwizz.enabled: false", null, targetSha, commit);
@@ -839,6 +854,7 @@ public static class SystemContexts
             })]),
             ["unanalyzedFiles"] = new JsonArray([.. sc.UnanalyzedFiles.Select(f => (JsonNode)f)]),
         };
+        if (sc.Requirements != null) o["requirements"] = RequirementContexts.Json(sc.Requirements);
         return o.ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
 
@@ -846,7 +862,7 @@ public static class SystemContexts
     public static string Text(SystemContext sc)
     {
         var sb = new System.Text.StringBuilder();
-        if (!sc.Usable) return $"No system context: {sc.Problem}\n";
+        if (!sc.Usable) return $"No system context: {sc.Problem}\n" + RequirementsText(sc);
         string Mark(ContextFact f) => (f.Origin == "detected" ? "" : $"  ({f.Origin})") + (f.Hop > 1 ? "  [extra hop]" : "");
         var shown = new HashSet<string>();
         sb.AppendLine($"Affected system (docwizz {sc.Tool}, facts at {Short(sc.AnalyzedCommit)}{(sc.Freshness == "stale" ? ", STALE" : "")})");
@@ -881,8 +897,14 @@ public static class SystemContexts
             sb.AppendLine("Generated documentation");
             foreach (var d in sc.Docs.Where(d => d.AffectedSymbol == null)) sb.AppendLine($"  {d.Status,-8} {d.Document}  ({d.Reason})");
         }
-        return sb.ToString();
+        return sb.ToString() + RequirementsText(sc);
     }
+
+    /// <summary>The requirement evidence as text (advisory), or nothing when context.requirements is off.</summary>
+    static string RequirementsText(SystemContext sc) => sc.Requirements is not { } rc ? ""
+        : "\nRequirements (advisory" + (rc.Tool != null ? $", {rc.Tool}" : "") + ")\n"
+            + (rc.Usable && rc.Links.Count == 0 && rc.Problem == null ? "  no requirement links for the changed symbols\n" : "")
+            + string.Concat(RequirementContexts.Lines(rc).Select(l => $"  {l}\n"));
 
     /// <summary>What is missing, stale or unverified, and what to do about each; nothing here is run for the developer.</summary>
     public static string Gaps(SystemContext sc, string target)

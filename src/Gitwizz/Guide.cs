@@ -324,6 +324,23 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
             foreach (var d in c.Docs.Where(d => d.Status is "stale" or "missing").Take(4))
                 output.MarkupLine($"    [gold1]{d.Status.ToUpperInvariant()}[/] {Markup.Escape(d.Document)}\n      [grey]{Markup.Escape(d.Reason)}[/]");
         }
+        if (c.Requirements is { } rc)
+        {
+            output.MarkupLine("  [bold]Requirement evidence[/] [grey](advisory: it doesn't change the verdict)[/]");
+            if (!rc.Usable) Warn($"requirements {rc.Status}: {rc.Problem}");
+            else
+            {
+                if (rc.Problem != null) Warn(rc.Problem);
+                if (rc.Freshness == "stale") Warn($"requirement links were computed for {Short(rc.AnalyzedCommit ?? "")}, not the target");
+                var verified = rc.Links.Count(l => l.Type == "verified");
+                if (rc.Links.Count == 0) Info(rc.Problem == null ? "no requirement links for the changed symbols" : "no requirement links found in the sources that could be read");
+                else Ok($"{Count(verified, "verified link", "verified links")}, {Count(rc.Links.Count - verified, "candidate", "candidates")}"
+                    + $" to {Count(rc.Links.Select(l => l.Requirement).Distinct().Count(), "requirement", "requirements")}");
+                foreach (var l in rc.Links.Take(4))
+                    output.MarkupLine($"    {(l.Type == "verified" ? "[springgreen3]✓[/]" : "[grey]~[/]")} {Markup.Escape(l.Requirement)} {Markup.Escape(l.Symbol)}"
+                        + (l.Title != null ? $" [grey]{Markup.Escape(l.Title)}[/]" : ""));
+            }
+        }
         if (c.Criteria.Any(x => x.Related.Count > 0))
         {
             output.MarkupLine("  [bold]Requirements and the system they touch[/]");

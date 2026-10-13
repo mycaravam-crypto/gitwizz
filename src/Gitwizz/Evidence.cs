@@ -40,7 +40,8 @@ public static class Evidence
     /// <summary>
     /// The package for pr at commit (the merged state or the PR head): PR text, requirements and criteria, changed files
     /// and symbols, the diff, references to changed symbols elsewhere, applicable rules, doc excerpts, selected tests and,
-    /// with system, the system context docwizz found for the change (systemContext).
+    /// with system, the system context docwizz found for the change (systemContext), with its requirement evidence
+    /// (systemContext.requirements) when context.requirements is enabled.
     /// Each section has a share of review.max_context_chars; what doesn't fit is cut and listed under budget.truncated.
     /// </summary>
     public static JsonObject Build(Git git, PullRequest pr, RepoConfig config, string target, string targetSha, string commit, Trace? trace = null,
@@ -158,7 +159,13 @@ public static class Evidence
             ["result"] = trace!.Runs.FirstOrDefault(r => r.Suite == s.Suite.Id)?.Summary,
         })]);
         if (system != null)
-            package["systemContext"] = SystemContexts.Evidence(system, SystemContexts.Share(budget), truncated, SystemContexts.Execution(git, commit, config, trace));
+        {
+            var section = SystemContexts.Evidence(system, SystemContexts.Share(budget), truncated, SystemContexts.Execution(git, commit, config, trace));
+            if (system.Requirements != null)
+                section["requirements"] = RequirementContexts.Evidence(system.Requirements, RequirementContexts.Share(budget), config.Context.Requirements.Titles,
+                    truncated);
+            package["systemContext"] = section;
+        }
         package["omitted"] = new JsonArray([.. omitted.Select(o => (JsonNode)o)]);
         package["budget"] = new JsonObject { ["maxChars"] = budget, ["truncated"] = new JsonArray([.. truncated.Distinct().Select(t => (JsonNode)t)]) };
         package["budget"]!["usedChars"] = package.ToJsonString().Length;
