@@ -12,7 +12,7 @@ var rest = args.Length > 0 && !args[0].StartsWith('-') ? args[1..] : args;
 if (command is "help" or "-h" || rest.Contains("-h") || rest.Contains("--help")) { Cli.Help(AnsiConsole.Console); return 0; }
 if (command is "version" || rest.Contains("--version"))
 {
-    Console.WriteLine(typeof(Cli).Assembly.GetName().Version?.ToString(3));
+    Console.WriteLine(AppVersion.Display(typeof(Cli).Assembly));
     return 0;
 }
 
