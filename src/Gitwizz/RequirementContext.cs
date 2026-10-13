@@ -24,7 +24,7 @@ public interface IRequirementSource
     GitResult Query(string dir, string queryFile);
 }
 
-/// <summary>The configured command as a process. Command may carry leading arguments ("docwizz requirements").</summary>
+/// <summary>The configured command as a process. Command may carry leading arguments ("docwizz requirements query").</summary>
 public sealed class RequirementCommand(RequirementsPolicy policy) : IRequirementSource
 {
     /// <summary>Runs "&lt;command&gt; &lt;dir&gt; &lt;queryFile&gt;" in dir, killed after the policy's timeout.</summary>

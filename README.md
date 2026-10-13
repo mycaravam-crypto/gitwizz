@@ -588,9 +588,18 @@ provenance. **Off by default, and advisory**: it never changes a gate, the conte
 context:
   requirements:
     enabled: false                  # true: ask for requirement evidence of the changed symbols
-    command: docwizz requirements   # the resolver; gets <repository dir> <query file>, prints JSON on stdout
+    command: docwizz requirements query   # the resolver; gets <repository dir> <query file>, prints JSON on stdout
     timeout: 300                    # seconds
     titles: true                    # false: work item titles stay out of the AI evidence package
+```
+
+With docwizz, export the history and import it once, then point the command at `docwizz requirements query`
+([docwizz#173](https://github.com/mycaravam-crypto/docwizz/issues/173)), which answers from that index without network
+access:
+
+```bash
+gitwizz history export --provider azure-devops -o history.json
+docwizz requirements import . history.json work-items/
 ```
 
 The command gets a query file (`gitwizz.requirement-query/v1`: the target and PR commits and the changed symbols with
@@ -972,7 +981,7 @@ git and asks the provider, nothing else.
 
 The document format is a versioned contract that gitwizz owns: [docs/history](docs/history/README.md) has the field
 reference, the JSON Schema, a complete example, the ordering rules and the compatibility policy. To import it into
-docwizz (needs native v2 import, [docwizz#172](https://github.com/mycaravam-crypto/docwizz/issues/172); older
+docwizz (native v2 import since [docwizz#172](https://github.com/mycaravam-crypto/docwizz/issues/172); older
 versions stop with "unknown schema"):
 
 ```bash
