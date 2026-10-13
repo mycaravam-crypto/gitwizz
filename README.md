@@ -32,7 +32,7 @@ plain local branches. `plan` still works on its own, with no gates configured.
   `git merge-tree`, commands run in temporary worktrees.
 - **Stable output.** Human-readable text and versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
   `gitwizz.context/v1`, `gitwizz.system-context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`,
-  `gitwizz.health/v1`), plus documented
+  `gitwizz.health/v1`, `gitwizz.history/v1`), plus documented
   [exit codes](#exit-codes).
 
 Design rationale: [PLAN.md](PLAN.md) (German).
@@ -73,6 +73,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | `trace <pr> [--run]` | Which tests does the change need, and which acceptance criteria do they cover? |
 | `context <pr> [--system]` | The PR's normalized context from any provider, as JSON; `--system`: the system context docwizz gives for the change |
 | `evidence <pr>` | The bounded package an AI review would see, as JSON, without contacting a model |
+| `history export` | Which commits changed which lines, which PR each came with, which work items they name, as JSON with provenance |
 | `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline |
 | `env down <pr>` | Removes a PR's test environment (idempotent) |
 | `plan` (default) | In which order should these PRs merge? |
@@ -884,6 +885,7 @@ gitwizz never handles or logs a credential. Set `GITWIZZ_ADO` to use an `ado` ex
 | PRs, refs, source commit, description, author | `ado pr list --json --status active` |
 | review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
 | checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
+| completed PRs for `history export` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
 | linked work items, acceptance criteria | `ado pr context N` names them, then `ado workitem show <id> --json` reads each in full (for `evaluate`, `trace` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
 
 Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; reports say so.
@@ -900,6 +902,45 @@ description, author, URL, draft, labels), source and target refs with commits, r
 state (review decision, checks, problems, open dependencies), linked work items with their individual acceptance
 criteria (GitHub: from the closed issues' "Acceptance criteria" section), changed files, changed C# members and
 commits. Lists are sorted, so the same state gives the same document.
+
+## Historical evidence: `history export`
+
+```bash
+gitwizz history export --since v1.4.0                  # commits after v1.4.0 up to the default branch
+gitwizz history export --since v1.4.0 --until release/1.5 --limit 1000 -o history.json
+```
+
+Exports which commits changed which lines, which completed pull request each came in with, and which work items the
+commits and the pull requests name, as one deterministic document (`gitwizz.history/v1`). It is the input for mapping
+code to requirements over time: docwizz maps the changed ranges to its code symbols; gitwizz only collects the evidence
+and says how certain each piece is. Read-only: it reads git and asks the provider, nothing else.
+
+**Bounded.** The range is `--since` (exclusive) to `--until` (default: the default branch), newest first, at most
+`--limit` commits (default 200, max 10000). There is no unbounded default: without `--since`, the limit bounds it. When
+the range holds more, `range.truncated` is true and a warning says so; a shallow clone gets a warning too.
+
+| Field | What it says |
+|---|---|
+| `commits[].files[]` | path, `oldPath` for renames and copies, status, `similarity`, and `ranges` (old and new start and count, from `git diff -U0` against the first parent). `granularity: file` means only the file is known to have changed (binary, a rename without content change, a mode change), so it must not be mapped to a symbol |
+| `commits[].workItems[]` | links the commit's own message names, `source: commit-message`: `AB#123` (kind `ab`), GitHub closing keywords such as `fixes #12` (kind `closes`), and with Azure DevOps plain `#123` mentions (kind `mention`). `evidence` is the matched text |
+| `commits[].pullRequest` | `exact` (the provider confirms it), `inferred` (only the messages say so), `ambiguous` (several PRs claim the commit, see `candidates`) or `unknown` (nothing says which: a rebase merge, a direct push). `basis`: `merge-message`, `squash-subject`, `merged-branch`, `provider` |
+| `pullRequests[]` | each completed PR found in the range: `strategy` (merge or squash), its merge commit and the commits it brought in, `status` (`confirmed`, `unconfirmed` with a `problem`, or `local`), and its own `workItems` (`source: provider`), kept apart from the commits' links |
+| `pullRequests[].workItemsStatus` | `verified` (the provider answered; an empty list is a verified empty list), `unavailable` (it couldn't be read: offline, denied, not completed, or a merge commit that doesn't match), `unknown` (no provider) |
+| `sources` | what each kind of link was read from; commit → work item links kept by the provider are `unavailable` until `ado` can list them |
+
+How pull requests are found: a merge commit `Merge pull request #12 …` (GitHub) or `Merged PR 12: …` (Azure DevOps)
+owns itself and the commits its merge brought in (first parent..second parent); a commit on the first-parent line whose
+subject ends in `(#12)` (GitHub squash) or starts with `Merged PR 12:` (Azure DevOps squash) owns itself. Inside a merged
+branch, `(#75)` names an issue, not a PR. Each PR is then confirmed with the provider: GitHub through
+`gh pr view N --json number,title,state,url,baseRefName,mergeCommit,closingIssuesReferences` (merged, same merge commit;
+linked work items are the issues it closes), Azure DevOps through `ado pr context N` (completed; for a merge, the merged
+head is one of the PR's commits; linked work items). A PR that can't be confirmed stays `inferred`, never `exact`, and
+its work items are `unavailable`, never an empty list.
+
+The git part (commits, files, ranges, message links) is stored in the workspace under its inputs: gitwizz build, schema,
+both commit ids, the limit and whether the clone is shallow; `--no-cache` skips it. Provider answers are never stored,
+as they change without a commit. The repository is identified by its `origin` URL without user, password or query, so
+no credential is exported; author names and e-mail addresses aren't exported either.
 
 ## Configuration reference
 
@@ -952,6 +993,10 @@ gates or profiles are errors.
 - After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one.
 - Synthetic commits are unreferenced objects; `git gc` cleans them up.
 - History needs true merge commits; squash- or rebase-merged repositories have nothing to replay.
+- `history export` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
+  messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
+  conflict aren't attributed. Commit → work item links that live only in Azure DevOps (artifact links without a
+  mention in the message) aren't read yet: `sources.providerCommitLinks` says `unavailable`.
 - Structural and semantic analysis (members, API deltas, test selection by changed symbol) cover C# only; other
   languages use file and hunk overlap. It is syntax-only: same-named members of different classes look alike, which is
   why only a name new to the whole base becomes a hard dependency.
@@ -964,8 +1009,8 @@ with risk-based test selection (#57), advisory AI review on a bounded evidence p
 that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
-docwizz system context for guided and AI-assisted review (#73), and the dependency preflight `doctor` and its checks in
-`guide` (#75).
+docwizz system context for guided and AI-assisted review (#73), the dependency preflight `doctor` and its checks in
+`guide` (#75), and the historical evidence export `history export` for code-to-requirement tracing (#84).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR

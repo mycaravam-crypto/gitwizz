@@ -20,7 +20,7 @@ try
 {
     // evaluate / explain take the pull request as their first argument.
     string? subject = command is "evaluate" or "explain" or "guide" or "context" or "trace" or "evidence" or "env" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
-    var opt = Cli.Parse(command is "env" or "cache" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
+    var opt = Cli.Parse(command is "env" or "cache" or "history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
         var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
@@ -46,13 +46,16 @@ try
     if (command == "cache")
         return Cli.Cache(rest.Length > 0 && rest[0] is "status" or "clear" ? rest[0]
             : throw new ArgumentException("need a cache command: gitwizz cache status | gitwizz cache clear"), opt, err);
+    if (command == "history")
+        return Cli.HistoryExport(rest.Length > 0 && rest[0] == "export" ? rest[0]
+            : throw new ArgumentException("need a history command: gitwizz history export --since <ref>"), opt, err);
     if (command == "trace")
         return Cli.Trace(subject ?? throw new ArgumentException("need a pull request: gitwizz trace <pr>"), opt, err);
     if (command == "context")
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
     if (command is "evaluate" or "explain")
         return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, doctor, status, refresh, cache, evaluate, explain, trace, context, evidence, benchmark, env, example, help)");
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, doctor, status, refresh, cache, evaluate, explain, trace, context, evidence, history, benchmark, env, example, help)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -87,6 +90,7 @@ public static partial class Cli
         ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
+        ["history"] = ["since", "until", "limit", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree"];
 
@@ -526,6 +530,32 @@ public static partial class Cli
     }
 
     /// <summary>
+    /// Exports historical evidence (schema gitwizz.history/v1): the commits since..until with their changed lines,
+    /// the pull request each came in with and the work items commits and pull requests name, each with its source and
+    /// certainty. Bounded by --limit (default 200). Read-only: asks the provider, changes nothing.
+    /// </summary>
+    public static int HistoryExport(string sub, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        if (opt.GetValueOrDefault("format", "json") != "json") throw new ArgumentException($"unknown format '{opt["format"]}' (json)");
+        var limit = opt.TryGetValue("limit", out var l)
+            ? int.TryParse(l, out var n) && n is > 0 and <= History.MaxLimit ? n : throw new ArgumentException($"--limit must be a number from 1 to {History.MaxLimit}")
+            : History.DefaultLimit;
+        var until = opt.GetValueOrDefault("until") ?? DefaultBranch(git);
+        var provider = ProviderFor(git, opt, []) switch
+        {
+            "local" => (IHistoryProvider)new LocalHistory(),
+            "github" => new GitHubHistory(git.RepoDir),
+            "azure-devops" => new AdoHistory(new AdoCli(git.RepoDir)),
+            var p => throw new ArgumentException($"unknown provider '{p}' (local, github, azure-devops)"),
+        };
+        var export = ProgressBars.Show(err, progress => History.Export(git, StoreFor(git, opt), provider, opt.GetValueOrDefault("since"), until, limit, progress));
+        foreach (var w in export.Warnings) err.MarkupLine($"[yellow]![/] {Markup.Escape(w)}");
+        Write(History.Json(export) + "\n", "json", opt.GetValueOrDefault("output"), err);
+        return 0;
+    }
+
+    /// <summary>
     /// Removes a PR's test environment (gitwizz env down 42), e.g. one kept with environment.keep or left by an
     /// interrupted run. Idempotent: removing a missing environment succeeds.
     /// </summary>
@@ -723,6 +753,7 @@ public static partial class Cli
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
                                                 --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
+              gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
               gitwizz benchmark [[options]]      measure AI review quality on labelled cases
               gitwizz trace <pr> [[options]]     which tests the change needs and why; acceptance criteria -> tests -> results
@@ -759,12 +790,18 @@ public static partial class Cli
               [grey]exit code: 0 ok, 5 degraded (advisory checks affected), 6 verdict at risk (a blocking gate can't run), 7 cannot start[/]
 
             [bold]Workspace[/]
-                  --no-cache            neither reuse nor store results (plan, evaluate, explain, guide, trace, context, evidence)
+                  --no-cache            neither reuse nor store results (plan, evaluate, explain, guide, trace, context, evidence, history)
               [grey]stored in .git/gitwizz (or GITWIZZ_WORKSPACE); a result is reused only when every input it came from is unchanged[/]
 
             [bold]Trace[/]
                   --run                 also run the selected test suites on the merged state [grey](exit 3 if one fails)[/]
                   --evidence <dir>      keep each suite's full log in dir
+
+            [bold]History export[/]
+                  --since <ref>         start after this commit (exclusive) [grey](default: none, so --limit bounds it)[/]
+                  --until <ref>         end at this commit [grey](default: origin/HEAD, main or master)[/]
+                  --limit <n>           at most n commits, newest first [grey](default: 200, max 10000; more: "truncated")[/]
+                  --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v1)
 
             [bold]Benchmark[/]
                   --cases <dir>         labelled cases [grey](default: benchmark.cases in .gitwizz.yml, else benchmark)[/]
