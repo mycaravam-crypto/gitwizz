@@ -32,7 +32,7 @@ plain local branches. `plan` still works on its own, with no gates configured.
   `git merge-tree`, commands run in temporary worktrees.
 - **Stable output.** Human-readable text and versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
   `gitwizz.context/v1`, `gitwizz.system-context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`,
-  `gitwizz.health/v1`, `gitwizz.history/v1`), plus documented
+  `gitwizz.health/v1`, [`gitwizz.history/v2`](docs/history/README.md)), plus documented
   [exit codes](#exit-codes).
 
 Design rationale: [PLAN.md](PLAN.md) (German).
@@ -938,6 +938,7 @@ gitwizz never handles or logs a credential. Set `GITWIZZ_ADO` to use an `ado` ex
 | review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
 | checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
 | completed PRs for `history export` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
+| commit → work item links for `history export` | `ado commit context <full sha>` (`ado.commit-context/v1`): the work items the server links to each exported commit (`--commit-lookups`, default 500) |
 | linked work items, acceptance criteria | `ado pr context N` names them, then `ado workitem show <id> --json` reads each in full (for `evaluate`, `trace` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
 
 Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; reports say so.
@@ -960,25 +961,41 @@ commits. Lists are sorted, so the same state gives the same document.
 ```bash
 gitwizz history export --since v1.4.0                  # commits after v1.4.0 up to the default branch
 gitwizz history export --since v1.4.0 --until release/1.5 --limit 1000 -o history.json
+gitwizz history export --since v1.4.0 --provider azure-devops --commit-lookups 100 -o history.json
 ```
 
 Exports which commits changed which lines, which completed pull request each came in with, and which work items the
-commits and the pull requests name, as one deterministic document (`gitwizz.history/v1`). It is the input for mapping
-code to requirements over time: docwizz maps the changed ranges to its code symbols; gitwizz only collects the evidence
-and says how certain each piece is. Read-only: it reads git and asks the provider, nothing else.
+commits name, the provider links to the commits, and the provider links to the pull requests, as one deterministic
+document (`gitwizz.history/v2`). It is the input for mapping code to requirements over time: docwizz maps the changed
+ranges to its code symbols; gitwizz only collects the evidence and says how certain each piece is. Read-only: it reads
+git and asks the provider, nothing else.
+
+The document format is a versioned contract that gitwizz owns: [docs/history](docs/history/README.md) has the field
+reference, the JSON Schema, a complete example, the ordering rules and the compatibility policy. To import it into
+docwizz (needs native v2 import, [docwizz#172](https://github.com/mycaravam-crypto/docwizz/issues/172); older
+versions stop with "unknown schema"):
+
+```bash
+gitwizz history export --since v1.4.0 --provider azure-devops -o history.json
+docwizz requirements import . history.json work-items/
+```
 
 **Bounded.** The range is `--since` (exclusive) to `--until` (default: the default branch), newest first, at most
 `--limit` commits (default 200, max 10000). There is no unbounded default: without `--since`, the limit bounds it. When
-the range holds more, `range.truncated` is true and a warning says so; a shallow clone gets a warning too.
+the range holds more, `range.truncated` is true and a warning says so; a shallow clone sets `range.shallow` and gets a
+warning too. With Azure DevOps, the newest `--commit-lookups` commits (default 500, 0 = none) are asked for their links
+with `ado commit context`, 4 at a time with a one-minute timeout each; the rest are `unknown`. When `ado` is missing or
+not logged in, the remaining commits are `unavailable` without asking again.
 
 | Field | What it says |
 |---|---|
 | `commits[].files[]` | path, `oldPath` for renames and copies, status, `similarity`, and `ranges` (old and new start and count, from `git diff -U0` against the first parent). `granularity: file` means only the file is known to have changed (binary, a rename without content change, a mode change), so it must not be mapped to a symbol |
-| `commits[].workItems[]` | links the commit's own message names, `source: commit-message`: `AB#123` (kind `ab`), GitHub closing keywords such as `fixes #12` (kind `closes`), and with Azure DevOps plain `#123` mentions (kind `mention`). `evidence` is the matched text |
+| `commits[].workItems[]` | links the commit's own message names, `source: commit-message`: `AB#123` (kind `ab`), GitHub closing keywords such as `fixes #12` (kind `closes`), and with Azure DevOps plain `#123` mentions (kind `mention`). `evidence` is the matched text. These are mentions, not verified links |
+| `commits[].providerLinks` | the work items the provider links to the commit itself (`source: provider`, kind `commit-link`, with the work item's `uri`). `status`: `verified` (the list is complete; `[]` means verified "no links"), `unavailable` (failed, timed out, not on the server, or an answer for another commit or repository: `problem`), `denied`, or `unknown` (not asked: GitHub and local keep no commit links, or the commit is beyond `--commit-lookups`). Only `verified` says anything about links |
 | `commits[].pullRequest` | `exact` (the provider confirms it), `inferred` (only the messages say so), `ambiguous` (several PRs claim the commit, see `candidates`) or `unknown` (nothing says which: a rebase merge, a direct push). `basis`: `merge-message`, `squash-subject`, `merged-branch`, `provider` |
-| `pullRequests[]` | each completed PR found in the range: `strategy` (merge or squash), its merge commit and the commits it brought in, `status` (`confirmed`, `unconfirmed` with a `problem`, or `local`), and its own `workItems` (`source: provider`), kept apart from the commits' links |
-| `pullRequests[].workItemsStatus` | `verified` (the provider answered; an empty list is a verified empty list), `unavailable` (it couldn't be read: offline, denied, not completed, or a merge commit that doesn't match), `unknown` (no provider) |
-| `sources` | what each kind of link was read from; commit → work item links kept by the provider are `unavailable` until `ado` can list them |
+| `pullRequests[]` | each completed PR found in the range: `strategy` (merge or squash), its merge commit and the commits it brought in, `status` (`confirmed`, `unconfirmed` with a `problem`, or `local`), and its own `workItems` (`source: provider`), kept apart from the commits' links: they are candidates for the PR's commits, not links of any one commit |
+| `pullRequests[].workItemsStatus` | `verified` (the provider answered; an empty list is a verified empty list), `unavailable` (it couldn't be read: offline, not completed, or a merge commit that doesn't match), `denied` (the provider refused access), `unknown` (no provider) |
+| `sources` | what each kind of link was read from and how complete it is |
 
 How pull requests are found: a merge commit `Merge pull request #12 …` (GitHub) or `Merged PR 12: …` (Azure DevOps)
 owns itself and the commits its merge brought in (first parent..second parent); a commit on the first-parent line whose
@@ -990,8 +1007,8 @@ head is one of the PR's commits; linked work items). A PR that can't be confirme
 its work items are `unavailable`, never an empty list.
 
 The git part (commits, files, ranges, message links) is stored in the workspace under its inputs: gitwizz build, schema,
-both commit ids, the limit and whether the clone is shallow; `--no-cache` skips it. Provider answers are never stored,
-as they change without a commit. The repository is identified by its `origin` URL without user, password or query, so
+both commit ids, the limit and whether the clone is shallow; `--no-cache` skips it. Provider answers (pull requests and
+commit links) are never stored, as they change without a commit. The repository is identified by its `origin` URL without user, password or query, so
 no credential is exported; author names and e-mail addresses aren't exported either.
 
 ## Configuration reference
@@ -1047,8 +1064,8 @@ gates or profiles are errors.
 - History needs true merge commits; squash- or rebase-merged repositories have nothing to replay.
 - `history export` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
-  conflict aren't attributed. Commit → work item links that live only in Azure DevOps (artifact links without a
-  mention in the message) aren't read yet: `sources.providerCommitLinks` says `unavailable`.
+  conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
+  links issues to pull requests, not to commits), and only for the newest `--commit-lookups` commits.
 - Requirement evidence needs a resolver that answers `gitwizz.requirement-input/v1`; gitwizz doesn't build one. Until
   docwizz ships it ([docwizz#166](https://github.com/mycaravam-crypto/docwizz/issues/166)), leave
   `context.requirements` off or point it at your own read-only command.

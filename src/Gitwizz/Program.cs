@@ -90,7 +90,7 @@ public static partial class Cli
         ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
-        ["history"] = ["since", "until", "limit", "provider", "format", "output", "repo", "no-cache"],
+        ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree"];
 
@@ -530,9 +530,10 @@ public static partial class Cli
     }
 
     /// <summary>
-    /// Exports historical evidence (schema gitwizz.history/v1): the commits since..until with their changed lines,
-    /// the pull request each came in with and the work items commits and pull requests name, each with its source and
-    /// certainty. Bounded by --limit (default 200). Read-only: asks the provider, changes nothing.
+    /// Exports historical evidence (schema gitwizz.history/v2): the commits since..until with their changed lines,
+    /// the pull request each came in with and the work items commits and pull requests name or the provider links to
+    /// them, each with its source and certainty. Bounded by --limit (default 200) and --commit-lookups (default 500).
+    /// Read-only: asks the provider, changes nothing.
     /// </summary>
     public static int HistoryExport(string sub, Dictionary<string, string> opt, IAnsiConsole err)
     {
@@ -541,15 +542,18 @@ public static partial class Cli
         var limit = opt.TryGetValue("limit", out var l)
             ? int.TryParse(l, out var n) && n is > 0 and <= History.MaxLimit ? n : throw new ArgumentException($"--limit must be a number from 1 to {History.MaxLimit}")
             : History.DefaultLimit;
+        var lookups = opt.TryGetValue("commit-lookups", out var cl)
+            ? int.TryParse(cl, out var k) && k is >= 0 and <= History.MaxLimit ? k : throw new ArgumentException($"--commit-lookups must be a number from 0 to {History.MaxLimit}")
+            : History.DefaultCommitLookups;
         var until = opt.GetValueOrDefault("until") ?? DefaultBranch(git);
         var provider = ProviderFor(git, opt, []) switch
         {
             "local" => (IHistoryProvider)new LocalHistory(),
             "github" => new GitHubHistory(git.RepoDir),
-            "azure-devops" => new AdoHistory(new AdoCli(git.RepoDir)),
+            "azure-devops" => new AdoHistory(new AdoCli(git.RepoDir) { Timeout = TimeSpan.FromMinutes(1) }, AdoHistory.RepositoryName(History.RepositoryIdentity(git))),
             var p => throw new ArgumentException($"unknown provider '{p}' (local, github, azure-devops)"),
         };
-        var export = ProgressBars.Show(err, progress => History.Export(git, StoreFor(git, opt), provider, opt.GetValueOrDefault("since"), until, limit, progress));
+        var export = ProgressBars.Show(err, progress => History.Export(git, StoreFor(git, opt), provider, opt.GetValueOrDefault("since"), until, limit, progress, lookups));
         foreach (var w in export.Warnings) err.MarkupLine($"[yellow]![/] {Markup.Escape(w)}");
         Write(History.Json(export) + "\n", "json", opt.GetValueOrDefault("output"), err);
         return 0;
@@ -801,7 +805,9 @@ public static partial class Cli
                   --since <ref>         start after this commit (exclusive) [grey](default: none, so --limit bounds it)[/]
                   --until <ref>         end at this commit [grey](default: origin/HEAD, main or master)[/]
                   --limit <n>           at most n commits, newest first [grey](default: 200, max 10000; more: "truncated")[/]
-                  --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v1)
+                  --commit-lookups <n>  ask the provider for the work items linked to the newest n commits [grey](default: 500, 0 = none;[/]
+                                        [grey]azure-devops only, 4 at a time, 1 minute each; the rest: providerLinks "unknown")[/]
+                  --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v2, docs/history/README.md)
 
             [bold]Benchmark[/]
                   --cases <dir>         labelled cases [grey](default: benchmark.cases in .gitwizz.yml, else benchmark)[/]

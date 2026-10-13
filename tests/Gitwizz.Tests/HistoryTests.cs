@@ -37,14 +37,30 @@ public class HistoryTests : IDisposable
         }
     }
 
+    /// <summary>An ado answering through a function (thread-safe: commit lookups run in parallel); records each call.</summary>
+    sealed class ScriptedAdo(Func<string[], string> answer) : IAdoClient
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Calls { get; } = new();
+        public string Run(params string[] args) { Calls.Enqueue(string.Join(' ', args)); return answer(args); }
+    }
+
+    static string CommitContext(string sha, string status = "verified", string items = "[]", string repo = "backend", string schema = "ado.commit-context/v1") => $$"""
+        {"schema": "{{schema}}", "server": "https://tfs.example/coll", "project": "Platform",
+         "repository": {"id": "00000000-0000-0000-0000-000000000001", "name": "{{repo}}"},
+         "commit": {"commitId": "{{sha}}", "parents": [], "comment": "x"},
+         "workItems": {"status": "{{status}}"{{(status == "verified" ? $", \"items\": {items}" : "")}}},
+         "warnings": [{{(status == "verified" ? "" : "\"work item links unavailable: the server did not report work items\"")}}]}
+        """;
+
     sealed class FakeAdo(Dictionary<string, string> responses) : IAdoClient
     {
         public string Run(params string[] args) =>
             responses.TryGetValue(string.Join(' ', args), out var r) ? r : throw new InvalidOperationException($"ado {string.Join(' ', args)} failed (exit 4): denied");
     }
 
-    HistoryExport Export(IHistoryProvider provider, string? since = null, int limit = 50, WorkspaceStore? store = null) =>
-        History.Export(_git, store ?? WorkspaceStore.Off, provider, since, "main", limit);
+    HistoryExport Export(IHistoryProvider provider, string? since = null, int limit = 50, WorkspaceStore? store = null,
+        int commitLookups = History.DefaultCommitLookups) =>
+        History.Export(_git, store ?? WorkspaceStore.Off, provider, since, "main", limit, commitLookups: commitLookups);
 
     static HistoryCommit Of(HistoryExport e, string sha) => e.Commits.Single(c => c.Sha == sha);
 
@@ -60,7 +76,8 @@ public class HistoryTests : IDisposable
         Assert.Equal([("#12", "closes", "fixes #12"), ("AB#4711", "ab", "AB#4711")], c.WorkItems.Select(l => (l.WorkItem, l.Kind, l.Evidence)));
         Assert.All(c.WorkItems, l => Assert.Equal("commit-message", l.Source));
         Assert.Equal("unknown", c.PullRequest.Resolution); // nothing says which PR: never "none"
-        Assert.Equal("unavailable: local provider", e.Sources.ProviderCommitLinks);
+        Assert.Equal("unknown: local provider", e.Sources.ProviderCommitLinks);
+        Assert.Equal(("unknown", null), (c.ProviderLinks.Status, c.ProviderLinks.Items)); // not asked: never "no links"
 
         // Azure DevOps reads #99 as a work item; GitHub doesn't link a plain mention.
         var ado = Export(new AdoHistory(new FakeAdo([])), since);
@@ -334,5 +351,129 @@ public class HistoryTests : IDisposable
         var o = Cli.Parse(["--since", "v1.0", "--until", "main", "--limit", "50", "-o", "h.json", "--no-cache"], "history");
         Assert.Equal(("v1.0", "main", "50", "h.json", "true"), (o["since"], o["until"], o["limit"], o["output"], o["no-cache"]));
         Assert.Throws<ArgumentException>(() => Cli.Parse(["--prs", "1"], "history"));
+    }
+
+    [Fact]
+    public void Ado_commit_links_are_verified_per_commit_and_kept_apart_from_message_mentions()
+    {
+        var since = Head;
+        var linked = Commit("Round tax #12"); // the message mentions #12; the server links 4711
+        var unlinked = Commit("Docs");
+        var denied = Commit("Secret");
+        var older = Commit("Older server");
+        var other = Commit("Other commit answered");
+        var foreign = Commit("Other repository answered");
+        var timeout = Commit("Slow");
+        var ado = new ScriptedAdo(a => a switch
+        {
+            ["commit", "context", var s] when s == linked => CommitContext(s, items: """
+                [{"id": 4711, "source": "commit-workitem", "url": "https://tfs.example/coll/_apis/wit/workItems/4711", "webUrl": "https://tfs.example/coll/_workitems/edit/4711"}]
+                """),
+            ["commit", "context", var s] when s == unlinked => CommitContext(s),
+            ["commit", "context", var s] when s == denied => throw new AdoCommandException(4, "ado commit context failed: permission denied (exit 4): TF401019"),
+            ["commit", "context", var s] when s == older => CommitContext(s, status: "unavailable"),
+            ["commit", "context", var s] when s == other => CommitContext(new string('c', 40)),
+            ["commit", "context", var s] when s == foreign => CommitContext(s, repo: "frontend"),
+            ["commit", "context", var s] when s == timeout => throw new AdoCommandException(124, "ado commit context timed out"),
+            _ => throw new AdoCommandException(5, "ado commit context failed: not found (exit 5)"),
+        });
+        var e = Export(new AdoHistory(ado, "backend"), since);
+
+        var l = Of(e, linked).ProviderLinks;
+        Assert.Equal("verified", l.Status);
+        var item = Assert.Single(l.Items!);
+        Assert.Equal(("AB#4711", "provider", "commit-link", "https://tfs.example/coll/_workitems/edit/4711"), (item.WorkItem, item.Source, item.Kind, item.Uri));
+        // The mention stays a mention: it is not upgraded to a provider link, and the provider link is not copied into it.
+        Assert.Equal([("AB#12", "commit-message", "mention")], Of(e, linked).WorkItems.Select(w => (w.WorkItem, w.Source, w.Kind)));
+
+        Assert.Equal(("verified", 0), (Of(e, unlinked).ProviderLinks.Status, Of(e, unlinked).ProviderLinks.Items!.Count)); // verified: no links
+        Assert.Equal(("denied", null), (Of(e, denied).ProviderLinks.Status, Of(e, denied).ProviderLinks.Items));
+        foreach (var (sha, why) in new[] { (older, "server did not report"), (other, "answered for commit cccc"), (foreign, "repository frontend, not backend"), (timeout, "timed out") })
+        {
+            var x = Of(e, sha).ProviderLinks;
+            Assert.Equal(("unavailable", null), (x.Status, x.Items));
+            Assert.Contains(why, x.Problem);
+        }
+        Assert.Contains(e.Warnings, w => w.StartsWith("provider commit links: 2 verified, 4 unavailable, 1 denied"));
+        Assert.Equal(7, ado.Calls.Count(c => c.StartsWith("commit context")));
+        Assert.All(ado.Calls.Where(c => c.StartsWith("commit context")), c => Assert.Matches("^commit context [0-9a-f]{40}$", c)); // full SHAs only
+        Assert.Equal("ado commit context, per commit (see commits[].providerLinks)", e.Sources.ProviderCommitLinks);
+    }
+
+    [Fact]
+    public void Commit_lookups_are_bounded_and_stop_when_ado_cannot_be_asked()
+    {
+        var since = Head;
+        for (int i = 0; i < 5; i++) Commit($"c{i}");
+        var ok = new ScriptedAdo(a => CommitContext(a[2]));
+        var e = Export(new AdoHistory(ok), since, commitLookups: 2);
+        Assert.Equal(["verified", "verified", "unknown", "unknown", "unknown"], e.Commits.Select(c => c.ProviderLinks.Status)); // newest first
+        Assert.Equal("not looked up: over --commit-lookups 2", e.Commits[4].ProviderLinks.Problem);
+        Assert.Equal(2, ok.Calls.Count);
+        Assert.All(Export(new AdoHistory(ok), since, commitLookups: 0).Commits, c => Assert.Equal("unknown", c.ProviderLinks.Status));
+        Assert.Throws<ArgumentException>(() => Export(new AdoHistory(ok), since, commitLookups: -1));
+
+        // Not logged in: one call fails, the rest are unavailable for the same reason without asking again.
+        var offline = new ScriptedAdo(_ => throw new AdoCommandException(3, "ado commit context failed: not logged in to Azure DevOps (exit 3): run ado auth login"));
+        var o = Export(new AdoHistory(offline), since);
+        Assert.All(o.Commits, c => Assert.Equal(("unavailable", "ado commit context failed: not logged in to Azure DevOps (exit 3): run ado auth login"),
+            (c.ProviderLinks.Status, c.ProviderLinks.Problem)));
+        Assert.InRange(offline.Calls.Count, 1, History.LookupConcurrency);
+
+        // GitHub keeps no commit links: never asked, unknown with the reason.
+        var gh = Export(new FakeProvider("github", []), since);
+        Assert.All(gh.Commits, c => Assert.Equal(("unknown", "unavailable: fake"), (c.ProviderLinks.Status, c.ProviderLinks.Problem)));
+    }
+
+    [Fact]
+    public void Merge_and_squash_commits_are_looked_up_and_a_pr_link_stays_a_candidate()
+    {
+        var since = Head;
+        _git.Run("checkout", "-q", "-b", "f");
+        var work = Commit("work");
+        _git.Run("checkout", "-q", "main");
+        _git.Run("merge", "-q", "--no-ff", "-m", "Merged PR 8: f", "f");
+        var merge = Head;
+        var squash = Commit("Merged PR 9: squashed");
+        var ado = new ScriptedAdo(a => a switch
+        {
+            ["pr", "context", "8"] => $$"""{"pullRequest": {"pullRequestId": 8, "status": "completed"}, "commits": [{"commitId": "{{work}}"}], "workItems": [{"id": 5}]}""",
+            ["pr", "context", "9"] => throw new AdoCommandException(4, "ado pr context failed: permission denied (exit 4): x"),
+            ["commit", "context", var s] when s == merge => CommitContext(s, items: """[{"id": 5, "source": "commit-workitem", "webUrl": "w"}]"""),
+            ["commit", "context", var s] => CommitContext(s),
+            _ => throw new InvalidOperationException("unexpected"),
+        });
+        var e = Export(new AdoHistory(ado), since);
+        Assert.Equal(["AB#5"], Of(e, merge).ProviderLinks.Items!.Select(i => i.WorkItem)); // the server links the PR's merge commit
+        Assert.Empty(Of(e, work).ProviderLinks.Items!); // the PR's work item is not this commit's verified link
+        Assert.Empty(Of(e, work).WorkItems);
+        Assert.Equal(["AB#5"], e.PullRequests.Single(p => p.Id == "#8").WorkItems.Select(w => w.WorkItem));
+        Assert.Equal("verified", Of(e, squash).ProviderLinks.Status);
+        var denied = e.PullRequests.Single(p => p.Id == "#9");
+        Assert.Equal(("unconfirmed", "denied"), (denied.Status, denied.WorkItemsStatus));
+    }
+
+    [Fact]
+    public void Ado_answers_and_repository_names_are_parsed()
+    {
+        Assert.Equal("backend", AdoHistory.RepositoryName("https://tfs.example/coll/Platform/_git/backend"));
+        Assert.Equal("my repo", AdoHistory.RepositoryName("https://dev.azure.com/o/p/_git/my%20repo/"));
+        Assert.Null(AdoHistory.RepositoryName("git@github.com:o/r.git"));
+        Assert.Null(AdoHistory.RepositoryName(null));
+        var sha = new string('a', 40);
+        var upper = AdoHistory.ParseCommitLinks(JsonDocument.Parse(CommitContext(sha.ToUpperInvariant())).RootElement, sha, null);
+        Assert.Equal("verified", upper.Status); // SHAs compare without case
+        var v2 = AdoHistory.ParseCommitLinks(JsonDocument.Parse(CommitContext(sha, schema: "ado.commit-context/v2")).RootElement, sha, null);
+        Assert.Equal("unavailable", v2.Status);
+        Assert.Contains("unsupported schema ado.commit-context/v2", v2.Problem);
+        var broken = new AdoHistory(new ScriptedAdo(_ => "not json")).CommitLinks(sha);
+        Assert.Equal("unavailable", broken.Status);
+        Assert.Equal("https://tfs/x failed", History.Redact("https://build:pat-123@tfs/x failed"));
+    }
+
+    [Fact]
+    public void Cli_takes_commit_lookups()
+    {
+        Assert.Equal("10", Cli.Parse(["--commit-lookups", "10"], "history")["commit-lookups"]);
     }
 }

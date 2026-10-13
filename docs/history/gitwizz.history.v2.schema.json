@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mycaravam-crypto/gitwizz/blob/main/docs/history/gitwizz.history.v2.schema.json",
+  "title": "gitwizz.history/v2",
+  "description": "Historical commit, pull request and work item evidence exported by `gitwizz history export`. Contract and semantics: docs/history/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "provider", "repository", "range", "sources", "commits", "pullRequests", "warnings"],
+  "properties": {
+    "schema": { "const": "gitwizz.history/v2" },
+    "provider": { "enum": ["local", "github", "azure-devops"] },
+    "repository": { "type": ["string", "null"], "description": "origin URL without user, password, query or fragment; null without an origin" },
+    "range": { "$ref": "#/$defs/range" },
+    "sources": { "$ref": "#/$defs/sources" },
+    "commits": { "type": "array", "items": { "$ref": "#/$defs/commit" } },
+    "pullRequests": { "type": "array", "items": { "$ref": "#/$defs/pullRequest" } },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+    "prId": { "type": "string", "pattern": "^#[0-9]+$" },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["since", "sinceSha", "until", "untilSha", "limit", "commits", "truncated", "shallow"],
+      "properties": {
+        "since": { "type": ["string", "null"] },
+        "sinceSha": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "until": { "type": "string" },
+        "untilSha": { "$ref": "#/$defs/sha" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "commits": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "shallow": { "type": "boolean" }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commitMessages", "providerCommitLinks", "pullRequests", "pullRequestWorkItems"],
+      "properties": {
+        "commitMessages": { "type": "string" },
+        "providerCommitLinks": { "type": "string" },
+        "pullRequests": { "type": "string" },
+        "pullRequestWorkItems": { "type": "string" }
+      }
+    },
+    "range-lines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oldStart", "oldCount", "newStart", "newCount"],
+      "properties": {
+        "oldStart": { "type": "integer", "minimum": 0 },
+        "oldCount": { "type": "integer", "minimum": 0 },
+        "newStart": { "type": "integer", "minimum": 0 },
+        "newCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "oldPath", "status", "similarity", "granularity", "ranges"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "oldPath": { "type": ["string", "null"] },
+        "status": { "enum": ["added", "modified", "deleted", "renamed", "copied"] },
+        "similarity": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+        "granularity": { "enum": ["lines", "file"] },
+        "ranges": { "type": "array", "items": { "$ref": "#/$defs/range-lines" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "granularity": { "const": "file" } } }, "then": { "properties": { "ranges": { "maxItems": 0 } } } },
+        { "if": { "properties": { "granularity": { "const": "lines" } } }, "then": { "properties": { "ranges": { "minItems": 1 } } } },
+        { "if": { "properties": { "status": { "enum": ["renamed", "copied"] } } }, "then": { "properties": { "oldPath": { "type": "string" } } } }
+      ]
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workItem", "source", "kind", "evidence"],
+      "properties": {
+        "workItem": { "type": "string", "pattern": "^(AB)?#[0-9]+$" },
+        "source": { "enum": ["commit-message", "provider"] },
+        "kind": { "enum": ["ab", "closes", "mention", "pr-link", "commit-link"] },
+        "evidence": { "type": "string" },
+        "uri": { "type": "string" }
+      },
+      "allOf": [
+        { "if": { "properties": { "source": { "const": "commit-message" } } }, "then": { "properties": { "kind": { "enum": ["ab", "closes", "mention"] } } } },
+        { "if": { "properties": { "source": { "const": "provider" } } }, "then": { "properties": { "kind": { "enum": ["pr-link", "commit-link"] } } } }
+      ]
+    },
+    "messageLink": {
+      "allOf": [{ "$ref": "#/$defs/link" }, { "properties": { "source": { "const": "commit-message" } } }]
+    },
+    "commitLink": {
+      "allOf": [{ "$ref": "#/$defs/link" }, { "properties": { "source": { "const": "provider" }, "kind": { "const": "commit-link" } } }]
+    },
+    "prLink": {
+      "allOf": [{ "$ref": "#/$defs/link" }, { "properties": { "source": { "const": "provider" }, "kind": { "const": "pr-link" } } }]
+    },
+    "providerLinks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "items", "problem"],
+      "properties": {
+        "status": { "enum": ["verified", "unavailable", "denied", "unknown"] },
+        "items": { "type": ["array", "null"], "items": { "$ref": "#/$defs/commitLink" } },
+        "problem": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "verified" } } },
+          "then": { "properties": { "items": { "type": "array" }, "problem": { "type": "null" } } },
+          "else": { "properties": { "items": { "type": "null" }, "problem": { "type": "string" } } }
+        }
+      ]
+    },
+    "prRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "resolution", "basis", "candidates"],
+      "properties": {
+        "id": { "oneOf": [{ "$ref": "#/$defs/prId" }, { "type": "null" }] },
+        "resolution": { "enum": ["exact", "inferred", "ambiguous", "unknown"] },
+        "basis": { "type": "array", "items": { "enum": ["merge-message", "squash-subject", "merged-branch", "provider"] } },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/prId" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "resolution": { "enum": ["exact", "inferred"] } } }, "then": { "properties": { "id": { "$ref": "#/$defs/prId" }, "candidates": { "maxItems": 0 } } } },
+        { "if": { "properties": { "resolution": { "const": "ambiguous" } } }, "then": { "properties": { "id": { "type": "null" }, "candidates": { "minItems": 2 } } } },
+        { "if": { "properties": { "resolution": { "const": "unknown" } } }, "then": { "properties": { "id": { "type": "null" }, "candidates": { "maxItems": 0 } } } }
+      ]
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "parents", "subject", "committedAt", "kind", "files", "workItems", "providerLinks", "pullRequest"],
+      "properties": {
+        "sha": { "$ref": "#/$defs/sha" },
+        "parents": { "type": "array", "items": { "$ref": "#/$defs/sha" } },
+        "subject": { "type": "string" },
+        "committedAt": { "type": "string", "format": "date-time" },
+        "kind": { "enum": ["commit", "merge"] },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        "workItems": { "type": "array", "items": { "$ref": "#/$defs/messageLink" } },
+        "providerLinks": { "$ref": "#/$defs/providerLinks" },
+        "pullRequest": { "$ref": "#/$defs/prRef" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "merge" } } }, "then": { "properties": { "files": { "maxItems": 0 }, "parents": { "minItems": 2 } } } }
+      ]
+    },
+    "pullRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "url", "target", "status", "strategy", "mergeCommit", "commits", "workItems", "workItemsStatus", "problem"],
+      "properties": {
+        "id": { "$ref": "#/$defs/prId" },
+        "title": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "target": { "type": ["string", "null"] },
+        "status": { "enum": ["confirmed", "unconfirmed", "local"] },
+        "strategy": { "enum": ["merge", "squash", "unknown"] },
+        "mergeCommit": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "commits": { "type": "array", "items": { "$ref": "#/$defs/sha" } },
+        "workItems": { "type": "array", "items": { "$ref": "#/$defs/prLink" } },
+        "workItemsStatus": { "enum": ["verified", "unavailable", "denied", "unknown"] },
+        "problem": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "workItemsStatus": { "not": { "const": "verified" } } } }, "then": { "properties": { "workItems": { "maxItems": 0 } } } },
+        { "if": { "properties": { "status": { "const": "unconfirmed" } } }, "then": { "properties": { "problem": { "type": "string" }, "workItemsStatus": { "enum": ["unavailable", "denied"] } } } }
+      ]
+    }
+  }
+}

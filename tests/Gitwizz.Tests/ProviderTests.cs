@@ -139,7 +139,10 @@ public class ProviderTests : IDisposable
         Assert.Null(prs.Single().CiStatus);
 
         var missing = new AdoCli(_git.RepoDir, "no-such-ado-xyz");
-        Assert.Contains("not found", Assert.Throws<InvalidOperationException>(() => missing.Run("pr", "list", "--json")).Message);
+        var error = Assert.Throws<AdoCommandException>(() => missing.Run("pr", "list", "--json"));
+        Assert.Equal(127, error.ExitCode);
+        Assert.Contains("not found", error.Message);
+        Assert.IsAssignableFrom<InvalidOperationException>(error); // callers that catch InvalidOperationException still do
     }
 
     [Fact]
