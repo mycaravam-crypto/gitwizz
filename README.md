@@ -577,6 +577,57 @@ context:
 With either requirement, a blocking `system-context` gate runs in every profile (after `merge`). Without them you can
 still list `- id: system-context` under `gates` to see the context quality in every evaluation as an advisory result.
 
+### Requirement evidence (optional)
+
+The system context can also say which requirements the changed symbols are linked to, from docwizz's requirement
+resolver (fed by [`history export`](#historical-evidence-history-export) and your evidence files). gitwizz keeps no
+requirement index of its own: it asks one read-only command, validates and bounds the answer, and keeps each link's
+provenance. **Off by default, and advisory**: it never changes a gate, the context quality or the verdict.
+
+```yaml
+context:
+  requirements:
+    enabled: false                  # true: ask for requirement evidence of the changed symbols
+    command: docwizz requirements   # the resolver; gets <repository dir> <query file>, prints JSON on stdout
+    timeout: 300                    # seconds
+    titles: true                    # false: work item titles stay out of the AI evidence package
+```
+
+The command gets a query file (`gitwizz.requirement-query/v1`: the target and PR commits and the changed symbols with
+their docwizz ids) and must print `gitwizz.requirement-input/v1`:
+
+```json
+{
+  "schema": "gitwizz.requirement-input/v1",
+  "tool": "docwizz 1.9.0",
+  "analyzedCommit": "<the target commit it answered for>",
+  "links": [
+    { "symbol": "<a queried symbol id>", "requirement": "AB#4711", "type": "verified", "title": "Cancel orders",
+      "revision": 12, "source": "azure-devops", "evidence": ["commit 1a2b3c names AB#4711"], "freshness": "current" },
+    { "symbol": "<a queried symbol id>", "requirement": "AB#4790", "type": "candidate", "confidence": 0.6, "source": "commit-history" }
+  ],
+  "unavailable": [{ "source": "azure-devops", "reason": "server not reachable" }]
+}
+```
+
+- **verified** links are independently traceable (the symbol's commits or an explicit evidence record name the
+  requirement); **candidate** links are inferred and may be wrong. Both keep their source, work item revision,
+  evidence and freshness. A link is never test coverage: traceability still needs executed tests.
+- **Status** is `available`; `partial` when a source couldn't be read (an Azure DevOps server offline is named, so an
+  empty list never reads as "no requirements"); `unavailable` (no command, not installed, or no system context to ask
+  about); or `failed` (non-zero exit, timeout, not JSON, another schema). **Freshness** is `stale` when the answer was
+  computed for another commit than the target.
+- **Untrusted input.** Links to symbols that weren't asked about, malformed requirement ids and unknown types are
+  dropped (counted in `dropped`); titles and evidence are cut to one line of at most 200 characters with control
+  characters removed. In the evidence package they are data under a note saying so, within their own share of the
+  budget (6 % of `max_context_chars`, at least 2000 characters, verified links first, two evidence entries per link);
+  what doesn't fit is listed under `budget.truncated`.
+- **Not stored.** Answers aren't kept in the workspace, as work items change without a commit. The answer's
+  fingerprint is part of the evidence package, so a stored AI review is reused only for the same requirement evidence.
+
+`gitwizz context <pr> --system` shows the full answer under `requirements` (only when enabled); `guide` shows it in the
+system context step; `doctor` reports the command as missing or unset (degraded, never a risk to the verdict).
+
 ## AI review
 
 An `ai-review` gate asks a **self-hosted**, OpenAI-compatible model (vLLM, llama.cpp server, Ollama, TGI, LocalAI, …)
@@ -615,7 +666,8 @@ symbols are used outside the change (`git grep`), the configured rules, the para
 changed, the selected tests, and the [system context](#system-context-from-docwizz) (`systemContext`: changed symbols,
 affected modules, callers, callees, API endpoints, data entities, external systems, architecture, flows, relevant
 documents with their freshness, linked tests and whether their suite ran, each with id, source and origin; criteria
-list the context they mention under `relatedContext`). Each section has a share of `max_context_chars` (system
+list the context they mention under `relatedContext`; with [requirement evidence](#requirement-evidence-optional)
+enabled, `systemContext.requirements`). Each section has a share of `max_context_chars` (system
 context: 12 %, at least 1500 characters, most relevant first); what doesn't fit is cut and listed under
 `budget.truncated`. The package's sha256 is part of the result, so every review traces back to its input.
 
@@ -997,6 +1049,9 @@ gates or profiles are errors.
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
   conflict aren't attributed. Commit → work item links that live only in Azure DevOps (artifact links without a
   mention in the message) aren't read yet: `sources.providerCommitLinks` says `unavailable`.
+- Requirement evidence needs a resolver that answers `gitwizz.requirement-input/v1`; gitwizz doesn't build one. Until
+  docwizz ships it ([docwizz#166](https://github.com/mycaravam-crypto/docwizz/issues/166)), leave
+  `context.requirements` off or point it at your own read-only command.
 - Structural and semantic analysis (members, API deltas, test selection by changed symbol) cover C# only; other
   languages use file and hunk overlap. It is syntax-only: same-named members of different classes look alike, which is
   why only a name new to the whole base becomes a hard dependency.
@@ -1010,7 +1065,8 @@ that decides when AI review may block (#59), and ephemeral per-PR test environme
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
 docwizz system context for guided and AI-assisted review (#73), the dependency preflight `doctor` and its checks in
-`guide` (#75), and the historical evidence export `history export` for code-to-requirement tracing (#84).
+`guide` (#75), the historical evidence export `history export` for code-to-requirement tracing (#84), and optional
+requirement evidence in the PR system context (#85).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR

@@ -77,7 +77,7 @@ public sealed class DependencyHealthService(
 
     public const string RepositoryAccess = "repository-access", ProviderContext = "provider-context", Configuration = "configuration",
         DocumentationAnalysis = "documentation-analysis", SystemContext = "system-context", TestExecution = "test-execution",
-        EnvironmentProvisioning = "environment-provisioning", AiReview = "ai-review";
+        EnvironmentProvisioning = "environment-provisioning", AiReview = "ai-review", RequirementEvidence = "requirement-evidence";
 
     GitResult Probe(string dir, string file, params string[] args) => _exec(dir, file, args, Quick);
 
@@ -226,12 +226,33 @@ public sealed class DependencyHealthService(
 
         foreach (var (tool, (requiredBy, caps)) in tools)
             deps.Add(KnownTool(tool, dir) with { RequiredBy = requiredBy, Capabilities = [.. caps] });
+        if (config.Context.Requirements.Enabled) deps.Add(Requirements(config.Context.Requirements));
 
         if (gates.Where(g => g.Kind == "environment").Select(g => g.Id).ToList() is { Count: > 0 } envGates)
             deps.Add(Docker(dir) with { RequiredBy = envGates });
         if (gates.Where(g => g.Kind == "ai-review").Select(g => g.Id).ToList() is { Count: > 0 } aiGates)
             deps.Add(AiEndpoint(config.Review) with { RequiredBy = aiGates });
         return deps;
+    }
+
+    /// <summary>
+    /// The requirement command of context.requirements: found on the PATH (or as a path) or not. It is never run here,
+    /// as it may contact Azure DevOps; advisory, so it is required by no gate.
+    /// </summary>
+    static DependencyHealth Requirements(RequirementsPolicy policy)
+    {
+        const string name = "requirement evidence";
+        var exe = policy.Command.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (exe == null)
+            return new() { Name = name, State = DependencyState.Misconfigured, Capabilities = [RequirementEvidence], Message = "context.requirements.command is empty",
+                Remediation = $"set context.requirements.command in {RepoConfig.FileName}, or set context.requirements.enabled: false" };
+        var found = Path.IsPathRooted(exe) || exe.Contains('/') ? File.Exists(exe)
+            : (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Any(d => File.Exists(Path.Combine(d, exe)) || (OperatingSystem.IsWindows() && File.Exists(Path.Combine(d, exe + ".exe"))));
+        return found
+            ? new() { Name = name, State = DependencyState.Unknown, Capabilities = [RequirementEvidence], Message = $"'{exe}' found; not run during preflight" }
+            : new() { Name = name, State = DependencyState.Unavailable, Capabilities = [RequirementEvidence], Message = $"'{exe}' not found",
+                Remediation = $"install it, or fix context.requirements.command in {RepoConfig.FileName}; requirement evidence is advisory and shows as unavailable" };
     }
 
     /// <summary>A tool's version for the well-known tools (Gates.Versioned); anything else (a script) is never run: Unknown.</summary>
