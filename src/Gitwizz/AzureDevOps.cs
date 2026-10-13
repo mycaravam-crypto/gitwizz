@@ -27,7 +27,10 @@ public sealed class AdoCli(string dir, string? executable = null) : IAdoClient
     /// <summary>How long one ado command may take before it counts as failed (exit 124).</summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(5);
 
-    /// <summary>Runs ado; maps its exit codes (127 missing, 3 not logged in, 4 denied, 5 not found) to clear errors.</summary>
+    /// <summary>
+    /// Runs ado; maps its exit codes (127 missing, 124 timed out, 3 not logged in, 4 denied, 5 not found) to clear errors,
+    /// thrown as AdoCommandException (an InvalidOperationException) that carries the exit code.
+    /// </summary>
     public string Run(params string[] args)
     {
         var r = Git.Exec(dir, Executable, args, timeout: Timeout);
