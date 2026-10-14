@@ -215,7 +215,7 @@ gitwizz doctor --working-tree # validate local .gitwizz.yml before committing
 | docwizz | `docwizz --version`; `docwizz.yaml` is valid YAML | runs an analysis |
 | AI endpoint | the self-hosting policy, then `GET {endpoint}/models` and that `review.model` is served | contacts a refused host; sends repository content |
 | Docker | `docker info`, `docker compose version` (for an `environment` gate) | |
-| gate and suite tools | `--version` of well-known tools (dotnet, npm, make, ...) | runs a configured command or script: those are `UNKNOWN` |
+| gate and suite tools | `--version` of well-known tools (dotnet, npm, make, docwizz, powerwizz-cli, ...) | runs a configured command or script: those are `UNKNOWN` |
 
 Each dependency is `AVAILABLE`, `UNAVAILABLE`, `MISCONFIGURED` or `UNKNOWN`, with the gates that use it and the exact
 fix. The gates it affects, and the best verdict an evaluation can still reach, follow from the same rules as
