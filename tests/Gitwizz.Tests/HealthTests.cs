@@ -357,6 +357,27 @@ public class HealthTests : IDisposable
     }
 
     [Fact]
+    public void Powerwizz_load_gate_reports_the_cli_version()
+    {
+        Config("""
+            gates:
+              - id: load
+                type: command
+                run: powerwizz-cli run load/test.json --max-p95 200
+            """);
+        var tools = Everything();
+        tools["powerwizz-cli --version"] = Ok("powerwizz 0.2.0\n");
+        var fake = new FakeTools(tools);
+        var r = Diagnose([], fake: fake);
+
+        Assert.Contains("powerwizz-cli --version", fake.Calls);
+        Assert.DoesNotContain(fake.Calls, c => c.StartsWith("powerwizz-cli run"));
+        Assert.Equal(DependencyState.Available, Dep(r, "powerwizz-cli").State);
+        Assert.Equal("powerwizz 0.2.0", Dep(r, "powerwizz-cli").Version);
+        Assert.Contains("load", Dep(r, "powerwizz-cli").RequiredBy);
+    }
+
+    [Fact]
     public void Doctor_uses_target_policy_by_default_and_uncommitted_policy_when_requested()
     {
         Config("context:\n  docwizz:\n    command: docwizz\n");
