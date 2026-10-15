@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mycaravam-crypto/gitwizz/blob/main/docs/version-history/gitwizz.version-history.v2.schema.json",
+  "title": "gitwizz.version-history/v2",
+  "description": "Released SemVer tags and unreleased release branches with the commits each adds, exported by `gitwizz version-history export`. Contract and semantics: docs/version-history/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "repository", "branchPattern", "shallow", "versions", "warnings"],
+  "properties": {
+    "schema": { "const": "gitwizz.version-history/v2" },
+    "repository": { "type": ["string", "null"], "description": "origin URL without user, password, query or fragment; null without an origin" },
+    "branchPattern": { "type": "string", "pattern": "^[^*]+\\*$", "description": "the --branch-pattern used, e.g. release/*" },
+    "shallow": { "type": "boolean", "description": "the clone is shallow: commits beyond its boundary are missing" },
+    "versions": { "type": "array", "items": { "$ref": "#/$defs/version" }, "description": "unreleased versions first (newest first), then released ones (highest SemVer first)" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}$" },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "status", "source", "reference", "commitSha", "committedAt", "taggedAt", "bases", "changes", "truncated", "warnings"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "description": "tag name without a leading v, or the branch name after the prefix" },
+        "status": { "enum": ["released", "unreleased"] },
+        "source": { "enum": ["tag", "branch", "remote-branch"] },
+        "reference": { "type": "string", "pattern": "^refs/(tags|heads|remotes)/.+$" },
+        "commitSha": { "$ref": "#/$defs/sha" },
+        "committedAt": { "$ref": "#/$defs/date" },
+        "taggedAt": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }], "description": "tagger date of an annotated tag; null for lightweight tags and branches" },
+        "bases": { "type": "array", "items": { "$ref": "#/$defs/base" }, "description": "the releases this version builds on, highest first; empty for the first release" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/change" }, "description": "commits none of the bases contain, newest first in topological order" },
+        "truncated": { "type": "boolean", "description": "more commits than --limit: changes is incomplete" },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "reference", "sha"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "reference": { "type": "string", "pattern": "^refs/tags/.+$" },
+        "sha": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "subject", "committedAt", "kind", "category", "type", "scope", "description", "breaking"],
+      "properties": {
+        "sha": { "$ref": "#/$defs/sha" },
+        "subject": { "type": "string", "description": "the first line of the commit message" },
+        "committedAt": { "$ref": "#/$defs/date" },
+        "kind": { "enum": ["commit", "merge"] },
+        "category": { "enum": ["feature", "fix", "performance", "other", "merge"] },
+        "type": { "type": ["string", "null"], "description": "Conventional Commits type, lower case; null when the subject isn't one" },
+        "scope": { "type": ["string", "null"] },
+        "description": { "type": "string", "description": "the subject after type(scope)!:, or the whole subject" },
+        "breaking": { "type": "boolean", "description": "! before the colon or a BREAKING CHANGE footer" }
+      }
+    }
+  }
+}

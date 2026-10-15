@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Gitwizz;
+using Json.Schema;
 using Xunit;
 
 namespace Gitwizz.Tests;
@@ -27,6 +29,17 @@ public sealed class VersionHistoryTests : IDisposable
         return G("rev-parse", "HEAD");
     }
 
+    /// <summary>The export, checked against the v2 schema on the way.</summary>
+    VersionHistoryExport Export(int limit = VersionHistory.DefaultLimit, string prefix = "release/")
+    {
+        var export = VersionHistory.Export(_git, limit, prefix);
+        var result = VersionHistoryContractTests.Schema.Evaluate(JsonDocument.Parse(VersionHistory.Json(export)).RootElement,
+            new EvaluationOptions { OutputFormat = OutputFormat.List });
+        Assert.True(result.IsValid, string.Join("\n", (result.Details ?? []).Where(d => d.Errors is { Count: > 0 })
+            .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Key}: {e.Value}")).Take(20)));
+        return export;
+    }
+
     [Fact]
     public void Tags_define_released_versions_and_exclusive_ranges()
     {
@@ -37,20 +50,21 @@ public sealed class VersionHistoryTests : IDisposable
         var feature = Commit("feat: addition");
         G("tag", "v1.1.0");
 
-        var history = VersionHistory.Export(_git);
+        var history = Export();
         Assert.Equal(VersionHistory.Schema, history.Schema);
         Assert.Equal(["1.1.0", "1.0.1", "1.0.0"], history.Versions.Select(v => v.Version));
         var latest = history.Versions[0];
         Assert.Equal("released", latest.Status);
-        Assert.Equal("1.0.1", latest.BaseVersion);
+        Assert.Equal(["1.0.1"], latest.Bases.Select(b => b.Version));
         Assert.Equal([feature], latest.Changes.Select(c => c.Sha));
         Assert.Equal([fix], history.Versions[1].Changes.Select(c => c.Sha));
-        Assert.Null(history.Versions[2].BaseVersion);
-        Assert.Contains("gitwizz.version-history/v1", VersionHistory.Json(history));
+        Assert.Empty(history.Versions[2].Bases);
+        Assert.Empty(history.Versions[2].Warnings);
+        Assert.Contains("gitwizz.version-history/v2", VersionHistory.Json(history));
     }
 
     [Fact]
-    public void Release_branch_is_unreleased_and_uses_nearest_reachable_tag()
+    public void Release_branch_is_unreleased_listed_first_and_builds_on_the_nearest_tag()
     {
         Commit("initial");
         G("tag", "v1.0.0");
@@ -59,13 +73,13 @@ public sealed class VersionHistoryTests : IDisposable
         Commit("feat: mainline");
         G("tag", "v2.0.0");
 
-        var history = VersionHistory.Export(_git);
-        var branch = Assert.Single(history.Versions.Where(v => v.Source == "branch"));
-        Assert.Equal("1.0", branch.Version);
-        Assert.Equal("unreleased", branch.Status);
+        var history = Export();
+        var branch = history.Versions[0];
+        Assert.Equal(("1.0", "unreleased", "branch"), (branch.Version, branch.Status, branch.Source));
         Assert.Equal("refs/heads/release/1.0", branch.Reference);
-        Assert.Equal("1.0.0", branch.BaseVersion);
+        Assert.Equal(["1.0.0"], branch.Bases.Select(b => b.Version));
         Assert.Equal([fix], branch.Changes.Select(c => c.Sha));
+        Assert.Equal("release/*", history.BranchPattern);
     }
 
     [Fact]
@@ -76,7 +90,7 @@ public sealed class VersionHistoryTests : IDisposable
         Commit("fix one");
         Commit("fix two");
         G("tag", "v1.0.1");
-        var version = VersionHistory.Export(_git, 1).Versions[0];
+        var version = Export(1).Versions[0];
         Assert.True(version.Truncated);
         Assert.Single(version.Changes);
         Assert.NotEmpty(version.Warnings);
@@ -86,9 +100,10 @@ public sealed class VersionHistoryTests : IDisposable
     public void Without_matching_refs_report_is_empty_with_warning()
     {
         Commit("initial");
-        var history = VersionHistory.Export(_git);
+        var history = Export();
         Assert.Empty(history.Versions);
         Assert.NotEmpty(history.Warnings);
+        Assert.Contains("_No versions found._", VersionHistory.Markdown(history));
     }
 
     [Fact]
@@ -96,8 +111,8 @@ public sealed class VersionHistoryTests : IDisposable
     {
         Commit("initial");
         G("tag", "v0.1.0");
-        Assert.Equal(VersionHistory.Json(VersionHistory.Export(_git)),
-            VersionHistory.Json(VersionHistory.Export(_git)));
+        Assert.Equal(VersionHistory.Json(Export()), VersionHistory.Json(Export()));
+        Assert.Equal(VersionHistory.Markdown(Export()), VersionHistory.Markdown(Export()));
         Assert.Throws<ArgumentException>(() => VersionHistory.Export(_git, 0));
     }
 
@@ -114,17 +129,17 @@ public sealed class VersionHistoryTests : IDisposable
         var feature = Commit("feat: mainline");
         G("tag", "v1.1.0");
 
-        var versions = VersionHistory.Export(_git).Versions;
-        Assert.Equal(["1.1.0", "1.0.1", "1.0.0", "1.0"], versions.Select(v => v.Version));
-        Assert.Equal("1.0.0", versions[0].BaseVersion);
-        Assert.Equal([feature], versions[0].Changes.Select(c => c.Sha));
-        Assert.Equal([patch], versions[1].Changes.Select(c => c.Sha));
-        Assert.Equal("1.0.1", versions[3].BaseVersion);
-        Assert.Equal([pending], versions[3].Changes.Select(c => c.Sha));
+        var versions = Export().Versions;
+        Assert.Equal(["1.0", "1.1.0", "1.0.1", "1.0.0"], versions.Select(v => v.Version));
+        Assert.Equal(["1.0.1"], versions[0].Bases.Select(b => b.Version));
+        Assert.Equal([pending], versions[0].Changes.Select(c => c.Sha));
+        Assert.Equal(["1.0.0"], versions[1].Bases.Select(b => b.Version));
+        Assert.Equal([feature], versions[1].Changes.Select(c => c.Sha));
+        Assert.Equal([patch], versions[2].Changes.Select(c => c.Sha));
     }
 
     [Fact]
-    public void Merged_back_maintenance_line_does_not_hide_the_mainline_release()
+    public void Merged_back_backport_is_listed_once()
     {
         Commit("initial");
         G("tag", "v1.0.0");
@@ -140,22 +155,33 @@ public sealed class VersionHistoryTests : IDisposable
         var feature = Commit("feat: three");
         G("tag", "v1.2.0");
 
-        // Topological order reaches v1.0.1 first; v1.1.0 is nearer (3 commits against 4) and already shipped feat: one/two.
-        var latest = VersionHistory.Export(_git).Versions[0];
-        Assert.Equal("1.1.0", latest.BaseVersion);
-        Assert.Equal([feature, merge, backport], latest.Changes.Select(c => c.Sha));
+        // v1.2.0 contains v1.1.0 and v1.0.1, neither contains the other: both are bases, so neither feat: one/two
+        // (shipped in v1.1.0) nor the backport (shipped in v1.0.1) is listed again.
+        var versions = Export().Versions;
+        var latest = versions.Single(v => v.Version == "1.2.0");
+        Assert.Equal(["1.1.0", "1.0.1"], latest.Bases.Select(b => b.Version));
+        Assert.Equal([feature, merge], latest.Changes.Select(c => c.Sha));
+        Assert.DoesNotContain(backport, latest.Changes.Select(c => c.Sha));
+        Assert.Equal("merge", latest.Changes[1].Category);
+        Assert.Contains("1 change and 1 merge commit", VersionHistory.Markdown(Export()));
     }
 
     [Fact]
-    public void Same_version_with_and_without_v_is_reported_once()
+    public void A_release_builds_on_releases_and_a_prerelease_on_any_tag()
     {
         Commit("initial");
         G("tag", "v1.0.0");
-        G("tag", "1.0.0");
+        var feature = Commit("feat: big change");
+        G("tag", "v2.0.0-rc.1");
+        var fix = Commit("fix: found in rc");
+        G("tag", "v2.0.0");
 
-        var history = VersionHistory.Export(_git);
-        Assert.Equal("refs/tags/v1.0.0", Assert.Single(history.Versions).Reference);
-        Assert.Contains(history.Warnings, w => w.Contains("1.0.0 skipped"));
+        var versions = Export().Versions;
+        Assert.Equal(["2.0.0", "2.0.0-rc.1", "1.0.0"], versions.Select(v => v.Version));
+        Assert.Equal(["1.0.0"], versions[0].Bases.Select(b => b.Version));
+        Assert.Equal([fix, feature], versions[0].Changes.Select(c => c.Sha));
+        Assert.Equal(["1.0.0"], versions[1].Bases.Select(b => b.Version));
+        Assert.Equal([feature], versions[1].Changes.Select(c => c.Sha));
     }
 
     [Fact]
@@ -167,23 +193,43 @@ public sealed class VersionHistoryTests : IDisposable
         G("tag", "v1.0.1");
         G("branch", "release/1.0");
 
-        var branch = Assert.Single(VersionHistory.Export(_git).Versions.Where(v => v.Source == "branch"));
-        Assert.Equal("1.0.1", branch.BaseVersion);
+        var branch = Assert.Single(Export().Versions.Where(v => v.Source == "branch"));
+        Assert.Equal(["1.0.1"], branch.Bases.Select(b => b.Version));
         Assert.Empty(branch.Changes);
     }
 
     [Fact]
-    public void Annotated_tags_resolve_and_survive_a_branch_of_the_same_name()
+    public void Remote_only_release_branches_are_listed_and_a_local_branch_wins()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        var local = Commit("fix: local work");
+        G("branch", "release/1.0");
+        var remote = Commit("feat: on the remote");
+        G("remote", "add", "origin", "https://example.invalid/shop.git");
+        G("update-ref", "refs/remotes/origin/release/2.0", remote);
+        G("update-ref", "refs/remotes/origin/release/1.0", "v1.0.0");
+        G("update-ref", "refs/remotes/origin/main", remote);
+
+        var versions = Export().Versions;
+        Assert.Equal(["2.0", "1.0", "1.0.0"], versions.Select(v => v.Version));
+        Assert.Equal(("remote-branch", "refs/remotes/origin/release/2.0"), (versions[0].Source, versions[0].Reference));
+        Assert.Equal(("branch", local), (versions[1].Source, versions[1].CommitSha));
+        Assert.Contains("Remote branch `origin/release/2.0`", VersionHistory.Markdown(Export()));
+    }
+
+    [Fact]
+    public void Annotated_tags_resolve_carry_their_date_and_survive_a_branch_of_the_same_name()
     {
         var first = Commit("initial");
         G("tag", "-a", "v1.0.0", "-m", "release 1.0.0");
         G("branch", "v1.0.0");
         G("tag", "not-a-version");
+        G("tag", "v1.1.0", first + "^{tree}");
 
-        var version = Assert.Single(VersionHistory.Export(_git).Versions);
-        Assert.Equal("1.0.0", version.Version);
-        Assert.Equal(first, version.CommitSha);
-        Assert.Equal("refs/tags/v1.0.0", version.Reference);
+        var version = Assert.Single(Export().Versions);
+        Assert.Equal(("1.0.0", first, "refs/tags/v1.0.0"), (version.Version, version.CommitSha, version.Reference));
+        Assert.NotNull(version.TaggedAt);
     }
 
     [Fact]
@@ -192,18 +238,69 @@ public sealed class VersionHistoryTests : IDisposable
         Commit("initial");
         foreach (var tag in new[] { "v1.0.0-rc.2", "v1.0.0", "v1.0.0-rc.10", "v1.0.0-beta" }) G("tag", tag);
 
-        Assert.Equal(["1.0.0", "1.0.0-rc.10", "1.0.0-rc.2", "1.0.0-beta"], VersionHistory.Export(_git).Versions.Select(v => v.Version));
+        Assert.Equal(["1.0.0", "1.0.0-rc.10", "1.0.0-rc.2", "1.0.0-beta"], Export().Versions.Select(v => v.Version));
     }
 
     [Fact]
-    public void Text_lists_versions_with_their_baseline_and_commits()
+    public void Same_version_with_and_without_v_is_reported_once()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("tag", "1.0.0");
+
+        var history = Export();
+        Assert.Equal("refs/tags/v1.0.0", Assert.Single(history.Versions).Reference);
+        Assert.Contains(history.Warnings, w => w.Contains("1.0.0 skipped"));
+    }
+
+    [Theory]
+    [InlineData("feat(api)!: drop v1", "feature", "feat", "api", "drop v1", true)]
+    [InlineData("fix: empty orders\n\nBREAKING CHANGE: orders need a customer", "fix", "fix", null, "empty orders", true)]
+    [InlineData("perf(db): cache lookups", "performance", "perf", "db", "cache lookups", false)]
+    [InlineData("Docs: typo", "other", "docs", null, "typo", false)]
+    [InlineData("Update the readme", "other", null, null, "Update the readme", false)]
+    [InlineData("feat:no space is no header", "other", null, null, "feat:no space is no header", false)]
+    public void Commits_are_grouped_by_their_conventional_type(string message, string category, string? type, string? scope,
+        string description, bool breaking)
+    {
+        var c = VersionHistory.Classify("abc", false, "2026-10-01T00:00:00+00:00", message);
+        Assert.Equal((category, type, scope, description, breaking), (c.Category, c.Type, c.Scope, c.Description, c.Breaking));
+        Assert.Equal(message.Split('\n')[0], c.Subject);
+        Assert.Equal("merge", VersionHistory.Classify("abc", true, "2026-10-01T00:00:00+00:00", "feat!: x").Category);
+    }
+
+    [Fact]
+    public void Markdown_groups_changes_escapes_them_and_links_commits()
+    {
+        G("remote", "add", "origin", "https://github.com/example/shop.git");
+        Commit("chore: initial");
+        G("tag", "v1.0.0");
+        var feature = Commit("feat(orders): export *all* orders");
+        var breaking = Commit("refactor!: rename <Order> to [Sale]");
+        Commit("- leading dash");
+        G("tag", "v1.1.0");
+
+        var md = VersionHistory.Markdown(Export());
+        Assert.StartsWith("# Version history\n", md);
+        Assert.Contains("## 1.1.0 (", md);
+        Assert.Contains("Tag `v1.1.0` at [`", md);
+        Assert.Contains("· since 1.0.0 · 3 changes\n", md);
+        Assert.Contains($"### Features\n\n- **orders:** export \\*all\\* orders ([`{feature[..8]}`](https://github.com/example/shop/commit/{feature}))", md);
+        Assert.Contains($"### ⚠ Breaking changes\n\n- refactor\\!: rename \\<Order\\> to \\[Sale\\] ([`{breaking[..8]}`]", md);
+        Assert.Contains("### Other changes\n\n- \\- leading dash (", md);
+        Assert.Contains("· first release · 1 change", md);
+        Assert.True(md.IndexOf("### ⚠ Breaking changes", StringComparison.Ordinal) < md.IndexOf("### Features", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Text_lists_versions_with_their_bases_and_commits()
     {
         Commit("initial");
         G("tag", "v1.0.0");
         var fix = Commit("fix: patch");
         G("tag", "v1.0.1");
 
-        var text = VersionHistory.Text(VersionHistory.Export(_git));
+        var text = VersionHistory.Text(Export());
         Assert.Contains("1.0.1 [released] refs/tags/v1.0.1", text);
         Assert.Contains("since: 1.0.0 | commits: 1", text);
         Assert.Contains($"{fix[..8]} fix: patch", text);
@@ -213,21 +310,32 @@ public sealed class VersionHistoryTests : IDisposable
     [Fact]
     public void Cli_takes_version_history_options_and_writes_the_report()
     {
-        var o = Cli.Parse(["--limit", "5", "--branch-pattern", "maint/*", "-f", "text", "-o", "v.txt"], "version-history");
-        Assert.Equal(("5", "maint/*", "text", "v.txt"), (o["limit"], o["branch-pattern"], o["format"], o["output"]));
+        var o = Cli.Parse(["--limit", "5", "--branch-pattern", "maint/*", "-f", "markdown", "-o", "v.md"], "version-history");
+        Assert.Equal(("5", "maint/*", "markdown", "v.md"), (o["limit"], o["branch-pattern"], o["format"], o["output"]));
         Assert.Throws<ArgumentException>(() => Cli.Parse(["--since", "v1.0.0"], "version-history"));
 
         Commit("initial");
         G("tag", "v1.0.0");
-        var output = Path.Combine(_dir, "versions.json");
         var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings
         {
             Out = new Spectre.Console.AnsiConsoleOutput(new StringWriter()), Ansi = Spectre.Console.AnsiSupport.No,
         });
-        Assert.Equal(0, Cli.VersionHistoryCommand("export", new() { ["repo"] = _dir, ["output"] = output }, console));
-        Assert.Contains("\"version\": \"1.0.0\"", File.ReadAllText(output));
-        Assert.Throws<ArgumentException>(() => Cli.VersionHistoryCommand("list", new() { ["repo"] = _dir, ["branch-pattern"] = "release" }, console));
-        Assert.Throws<ArgumentException>(() => Cli.VersionHistoryCommand("list", new() { ["repo"] = _dir, ["limit"] = "0" }, console));
+        int Run(string sub, Dictionary<string, string> opt) => Cli.VersionHistoryCommand(sub, new(opt) { ["repo"] = _dir }, console);
+
+        var json = Path.Combine(_dir, "versions.json");
+        Assert.Equal(0, Run("export", new() { ["output"] = json }));
+        Assert.Contains("\"version\": \"1.0.0\"", File.ReadAllText(json));
+
+        // The format follows the extension: export to versions.md writes the changelog page, not JSON.
+        var md = Path.Combine(_dir, "versions.md");
+        Assert.Equal(0, Run("export", new() { ["output"] = md }));
+        Assert.StartsWith("# Version history", File.ReadAllText(md));
+        Assert.Equal(0, Run("list", new() { ["output"] = json, ["format"] = "md" }));
+        Assert.StartsWith("# Version history", File.ReadAllText(json));
+
+        Assert.Throws<ArgumentException>(() => Run("list", new() { ["branch-pattern"] = "release" }));
+        Assert.Throws<ArgumentException>(() => Run("list", new() { ["limit"] = "0" }));
+        Assert.Throws<ArgumentException>(() => Run("list", new() { ["format"] = "html" }));
     }
 
     public void Dispose() => Directory.Delete(_dir, true);

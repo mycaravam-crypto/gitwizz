@@ -563,13 +563,26 @@ public static partial class Cli
         return 0;
     }
 
-    /// <summary>Read-only hybrid version history of SemVer tags and local release branches.</summary>
+    /// <summary>
+    /// Read-only version history of SemVer tags and release branches (gitwizz version-history list | export): text, JSON
+    /// (gitwizz.version-history/v2) or a Markdown changelog page. Without --format: from the --output extension (.md,
+    /// .json, .txt), else text for list and JSON for export.
+    /// </summary>
     public static int VersionHistoryCommand(string sub, Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
-        var format = opt.GetValueOrDefault("format", sub == "list" ? "text" : "json");
-        if (format is not ("json" or "text"))
-            throw new ArgumentException($"unknown format '{format}' (json, text)");
+        var output = opt.GetValueOrDefault("output");
+        var format = opt.GetValueOrDefault("format") switch
+        {
+            "md" => "markdown",
+            { } given => given,
+            null => Path.GetExtension(output ?? "").ToLowerInvariant() switch
+            {
+                ".md" or ".markdown" => "markdown", ".json" => "json", ".txt" => "text", _ => sub == "list" ? "text" : "json",
+            },
+        };
+        if (format is not ("json" or "text" or "markdown"))
+            throw new ArgumentException($"unknown format '{format}' (json, text, markdown)");
         var limit = opt.TryGetValue("limit", out var raw)
             ? int.TryParse(raw, out var n) && n is > 0 and <= VersionHistory.MaxLimit
                 ? n : throw new ArgumentException($"--limit must be a number from 1 to {VersionHistory.MaxLimit}")
@@ -579,8 +592,12 @@ public static partial class Cli
             throw new ArgumentException("--branch-pattern must be a prefix ending in * (for example release/*)");
         var export = VersionHistory.Export(git, limit, pattern[..^1]);
         foreach (var warning in export.Warnings) err.MarkupLine($"[yellow]![/] {Markup.Escape(warning)}");
-        Write(format == "json" ? VersionHistory.Json(export) + "\n" : VersionHistory.Text(export),
-            format, opt.GetValueOrDefault("output"), err);
+        Write(format switch
+        {
+            "json" => VersionHistory.Json(export) + "\n",
+            "markdown" => VersionHistory.Markdown(export),
+            _ => VersionHistory.Text(export),
+        }, format, output, err);
         return 0;
     }
 
@@ -784,7 +801,7 @@ public static partial class Cli
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
               gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz version-history list | export [[options]]
-                                                released SemVer tags and local release branches, with the commits of each
+                                                released SemVer tags and release branches with their changes (text, JSON, Markdown)
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
               gitwizz benchmark [[options]]      measure AI review quality on labelled cases
               gitwizz trace <pr> [[options]]     which tests the change needs and why; acceptance criteria -> tests -> results
@@ -837,10 +854,10 @@ public static partial class Cli
                   --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v2, docs/history/README.md)
 
             [bold]Version history[/]
-                  --branch-pattern <prefix*> local branches that are release lines [grey](default: release/*)[/]
+                  --branch-pattern <prefix*> branches that are release lines, local or on a remote [grey](default: release/*)[/]
                   --limit <n>           at most n commits per version [grey](default: 200)[/]
-                  -f, --format <name>   json | text [grey](list defaults to text; export to json)[/]
-                  -o, --output <file>   write the report to a file instead of stdout
+                  -f, --format <name>   json | text | markdown [grey](default: from the -o extension, else text for list, json for export)[/]
+                  -o, --output <file>   write the report to a file instead of stdout [grey](versions.md: a changelog page)[/]
 
             [bold]Benchmark[/]
                   --cases <dir>         labelled cases [grey](default: benchmark.cases in .gitwizz.yml, else benchmark)[/]
