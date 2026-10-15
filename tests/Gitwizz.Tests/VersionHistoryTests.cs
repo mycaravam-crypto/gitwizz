@@ -475,6 +475,7 @@ public sealed class VersionHistoryTests : IDisposable
         Commit("fix: round prices (#13)");
         Commit("Merged PR 14: Kundenliste schneller laden");
         Commit("docs: update the manual");
+        Commit("PR 15 (Lieferadresse speichern) gemergt");
         Commit("fix: round prices (#16)"); // the same change again: listed once
         G("tag", "v1.1.0");
         G("remote", "add", "origin", "https://github.com/example/shop.git");
@@ -483,7 +484,7 @@ public sealed class VersionHistoryTests : IDisposable
         var day = history.Versions[0].CommittedAt[..10];
         var md = VersionHistory.Markdown(history, clean: true);
         Assert.StartsWith($"# Version history\n\n## 1.1.0 ({day})\n\n### Features\n\n- {day} · CSV export\n\n### Fixes\n\n- {day} · Round prices\n", md);
-        Assert.Contains($"### Other changes\n\n- {day} · Kundenliste schneller laden\n- {day} · Update the manual\n", md);
+        Assert.Contains($"### Other changes\n\n- {day} · Kundenliste schneller laden\n- {day} · Lieferadresse speichern\n- {day} · Update the manual\n", md);
         Assert.Contains($"## 1.0.0 ({day})\n\n### Other changes\n\n- {day} · Initial\n", md);
         foreach (var jargon in new[] { "#1", "PR", "pull", "merge", "Merge", "commit", "`", "http", "since", "orders:" })
             Assert.DoesNotContain(jargon, md);
@@ -494,6 +495,15 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.Equal("true", Cli.Parse(["--clean"], "version-history")["clean"]);
         Assert.Equal("Fix the login", VersionHistory.CleanText("Merge pull request #7 from me/x fix the login"));
     }
+
+    [Theory]
+    [InlineData("PR 1234 (Kundenliste schneller laden) gemergt", "Kundenliste schneller laden")]
+    [InlineData("PR 0000 (fix: Preise runden) gemergt: Preise runden auf 2 Stellen", "Preise runden")]
+    [InlineData("PR 77 (Export (CSV) ergänzt) gemergt", "Export (CSV) ergänzt")]
+    [InlineData("pr 5 (export) GEMERGT", "Export")]
+    [InlineData("PR 12: Kundenliste (neu)", "Kundenliste (neu)")]   // no "gemergt": brackets are part of the text
+    public void Clean_keeps_only_the_text_in_brackets_of_a_merged_pr(string description, string expected) =>
+        Assert.Equal(expected, VersionHistory.CleanText(description));
 
     [Fact]
     public void Pull_requests_group_the_commits_they_came_with()

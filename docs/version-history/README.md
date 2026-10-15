@@ -168,7 +168,7 @@ only changes when the history does: commit it, and regenerate it in CI. See [exa
   `Upcoming (main)`.
 - Each change is its day and its description: no pull request numbers, commit hashes, links, scopes, types or counts.
   Pull request wording left in a title or message (`Merged PR 12:`, `Merge pull request #12 from ...`, `(#12)`,
-  `PR 12:`) is removed and the first letter upper-cased.
+  `PR 12:`) is removed and the first letter upper-cased. Of `PR 12 (Text) gemergt …` only `Text` is kept.
 - The same description twice in a section (a fix merged twice) is listed once, with its newest day.
 - Merge commits, references and warnings are left out; the command still reports warnings on stderr.
 
