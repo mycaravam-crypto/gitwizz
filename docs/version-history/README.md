@@ -27,6 +27,7 @@ gitwizz version-history export -o docs/architecture/versions.md    # Markdown ch
 gitwizz version-history export -f markdown > CHANGELOG.md
 gitwizz version-history export --target main -o docs/architecture/versions.md   # main's history: unreleased first
 gitwizz version-history export --branch-pattern "release/cxm/*" --from 1.0.6 --to 1.9.0 -o versionhistory.md   # one app's releases
+gitwizz version-history export --branch-pattern "release/cxm/*" --clean -o versionhistory.md   # for end users: day and description only
 gitwizz version-history list --branch-pattern "maint/*" --limit 500
 gitwizz version-history list --repo /path/to/repository
 ```
@@ -39,6 +40,7 @@ gitwizz version-history list --repo /path/to/repository
 | `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version. With `--target`, only those cut from the target |
 | `--from` | none | list only releases after this version (`1.0.6` for `release/cxm/1.0.6`); it is still the base of the next one |
 | `--to` | none | list only releases up to this version; must be higher than `--from` |
+| `--clean` | off | Markdown and text for readers outside development: each change its day and description only ([Clean output](#clean-output)); JSON is unchanged |
 | `--limit` | 200 (max 10000) | at most this many commits per version |
 | `-r, --repo` | `.` | the repository |
 
@@ -143,6 +145,32 @@ subject (`docs: ...`). When the repository's `origin` is an http(s) URL, pull re
 `<origin without .git>/pull/<n>` (`/pullrequest/<n>` on Azure DevOps) and commits to `<origin without .git>/commit/<sha>`.
 Commit text is escaped, so a message can't add emphasis, links, HTML, tables, headings or nested lists. The page carries no generation time, so it
 only changes when the history does: commit it, and regenerate it in CI. See [example.md](example.md).
+
+### Clean output
+
+`--clean` writes the page for people who don't know what a pull request, a commit or a merge is:
+
+```markdown
+# Version history
+
+## 1.9.0 (2026-09-01)
+
+### Features
+
+- 2026-09-01 · Export orders as CSV
+
+### Fixes
+
+- 2026-08-28 · Round prices
+```
+
+- The heading is the version and its date (the tag's, else the branch head's); the target's own entry is
+  `Upcoming (main)`.
+- Each change is its day and its description: no pull request numbers, commit hashes, links, scopes, types or counts.
+  Pull request wording left in a title or message (`Merged PR 12:`, `Merge pull request #12 from ...`, `(#12)`,
+  `PR 12:`) is removed and the first letter upper-cased.
+- The same description twice in a section (a fix merged twice) is listed once, with its newest day.
+- Merge commits, references and warnings are left out; the command still reports warnings on stderr.
 
 ### In the project documentation (docwizz)
 

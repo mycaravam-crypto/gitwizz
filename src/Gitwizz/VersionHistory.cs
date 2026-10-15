@@ -43,7 +43,7 @@ public record VersionTarget(string Name, string Reference, string Sha);
 /// Read-only local Git version discovery. Tags identify released snapshots; branches under a prefix (local, or only on a
 /// remote) identify versions still in progress. No network access, no checkout and no fetch.
 /// </summary>
-public static class VersionHistory
+public static partial class VersionHistory
 {
     public const string Schema = "gitwizz.version-history/v2";
     public const int DefaultLimit = 200;
@@ -514,10 +514,23 @@ public static class VersionHistory
     /// <summary>The document as JSON with history export's options: indented, camelCase, nulls written, "+" kept.</summary>
     public static string Json(VersionHistoryExport result) => JsonSerializer.Serialize(result, History.JsonOptions);
 
-    /// <summary>A terminal listing: per version its reference, bases, pull requests and the commits that came without one.</summary>
-    public static string Text(VersionHistoryExport result)
+    /// <summary>
+    /// A terminal listing: per version its reference, bases, pull requests and the commits that came without one. clean:
+    /// per version its heading and the day and description of each change (CleanChanges), nothing else.
+    /// </summary>
+    public static string Text(VersionHistoryExport result, bool clean = false)
     {
         var lines = new List<string>();
+        if (clean)
+        {
+            foreach (var v in result.Versions)
+            {
+                lines.Add(CleanHeading(v, result.Target));
+                foreach (var (_, changes) in CleanChanges(v))
+                    lines.AddRange(changes.Select(c => $"  {c.Day} {c.Text}"));
+            }
+            return string.Join("\n", lines) + "\n";
+        }
         foreach (var v in result.Versions)
         {
             lines.Add($"{v.Version} [{v.Status}] {v.Reference} ({Short(v.CommitSha)})");
@@ -540,8 +553,9 @@ public static class VersionHistory
     /// commits are counted, not listed. Pull requests and commits link to the repository when its URL is http(s).
     /// Deterministic: no generation time, so the page only changes with the history.
     /// </summary>
-    public static string Markdown(VersionHistoryExport result)
+    public static string Markdown(VersionHistoryExport result, bool clean = false)
     {
+        if (clean) return CleanMarkdown(result);
         var web = WebUrl(result.Repository);
         string Commit(string sha) => web == null ? $"`{Short(sha)}`" : $"[`{Short(sha)}`]({web}/commit/{sha})";
         var azure = web != null && (web.Contains("dev.azure.com", StringComparison.OrdinalIgnoreCase) ||
@@ -615,6 +629,65 @@ public static class VersionHistory
                   .Append($" ({Commit(change.Sha)})\n");
         }
     }
+
+    /// <summary>
+    /// The changelog for readers who don't know what a pull request, a commit or a merge is: per version a heading
+    /// (CleanHeading), then the sections, each change one line with its day and description only. No references,
+    /// links, counts or warnings (the command reports those on stderr).
+    /// </summary>
+    static string CleanMarkdown(VersionHistoryExport result)
+    {
+        var md = new StringBuilder("# Version history\n");
+        if (result.Versions.Count == 0) md.Append("\n_No versions found._\n");
+        foreach (var v in result.Versions)
+        {
+            md.Append($"\n## {CleanHeading(v, result.Target)}\n");
+            var sections = CleanChanges(v);
+            if (sections.Count == 0) md.Append("\n_No changes._\n");
+            foreach (var (heading, changes) in sections)
+            {
+                md.Append($"\n### {heading}\n\n");
+                foreach (var c in changes) md.Append($"- {c.Day} · {Escape(c.Text)}\n");
+            }
+        }
+        return md.ToString();
+    }
+
+    /// <summary>A version as a reader names it: "1.9.0 (2026-09-01)", the target's own entry "Upcoming (main)".</summary>
+    static string CleanHeading(VersionEntry v, VersionTarget? target)
+    {
+        if (v.Source == "target") return $"Upcoming ({v.Version})";
+        return $"{v.Version} ({Day(v.TaggedAt ?? v.CommittedAt)})";
+    }
+
+    /// <summary>
+    /// A version's changes by section (breaking, features, fixes, performance, other), each its day and its description
+    /// alone: a pull request's or a direct commit's, without type, scope or pull request wording ("Merged PR 12:",
+    /// "Merge pull request #12 from ...", "(#12)"), the first letter upper case. The same text twice in a section is
+    /// listed once, with its newest day.
+    /// </summary>
+    static List<(string Heading, List<(string Day, string Text)> Changes)> CleanChanges(VersionEntry v)
+    {
+        var all = v.PullRequests.Select(p => (p.Breaking, p.Category, Day: Day(p.CommittedAt), Text: CleanText(p.Description)))
+            .Concat(v.Changes.Where(c => c.PullRequest == null && c.Kind != "merge")
+                .Select(c => (c.Breaking, c.Category, Day: Day(c.CommittedAt), Text: CleanText(c.Description))))
+            .Where(c => c.Text.Length > 0).ToList();
+        var groups = new[] { ("⚠ Breaking changes", all.Where(c => c.Breaking)) }
+            .Concat(Sections.Select(s => (s.Heading, all.Where(c => !c.Breaking && c.Category == s.Category))));
+        return [.. groups.Select(g => (g.Item1, g.Item2.DistinctBy(c => c.Text, StringComparer.OrdinalIgnoreCase).Select(c => (c.Day, c.Text)).ToList()))
+            .Where(g => g.Item2.Count > 0)];
+    }
+
+    /// <summary>A description without pull request wording, the first letter upper case.</summary>
+    public static string CleanText(string description)
+    {
+        var text = CleanWording().Replace(description, " ").Trim();
+        text = Conventional.Match(text) is { Success: true } m ? m.Groups["desc"].Value.Trim() : text;
+        return text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
+    }
+
+    [GeneratedRegex(@"^Merged PR \d+:|^Merge pull request #\d+( from \S+)?|\(#\d+\)\s*$|^PR \d+:?", RegexOptions.IgnoreCase)]
+    private static partial Regex CleanWording();
 
     /// <summary>The repository's web address for commit links: an http(s) URL without .git, else null.</summary>
     static string? WebUrl(string? repository)

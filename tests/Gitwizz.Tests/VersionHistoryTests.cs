@@ -464,6 +464,38 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
+    public void Clean_output_has_only_the_day_and_description_of_each_change()
+    {
+        Commit("chore: initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "feature/csv");
+        Commit("feat(orders): export as CSV");
+        G("checkout", "-q", "main");
+        G("merge", "-q", "--no-ff", "-m", "Merge pull request #12 from me/feature/csv\n\nfeat(orders): CSV export", "feature/csv");
+        Commit("fix: round prices (#13)");
+        Commit("Merged PR 14: Kundenliste schneller laden");
+        Commit("docs: update the manual");
+        Commit("fix: round prices (#16)"); // the same change again: listed once
+        G("tag", "v1.1.0");
+        G("remote", "add", "origin", "https://github.com/example/shop.git");
+
+        var history = Export();
+        var day = history.Versions[0].CommittedAt[..10];
+        var md = VersionHistory.Markdown(history, clean: true);
+        Assert.StartsWith($"# Version history\n\n## 1.1.0 ({day})\n\n### Features\n\n- {day} · CSV export\n\n### Fixes\n\n- {day} · Round prices\n", md);
+        Assert.Contains($"### Other changes\n\n- {day} · Kundenliste schneller laden\n- {day} · Update the manual\n", md);
+        Assert.Contains($"## 1.0.0 ({day})\n\n### Other changes\n\n- {day} · Initial\n", md);
+        foreach (var jargon in new[] { "#1", "PR", "pull", "merge", "Merge", "commit", "`", "http", "since", "orders:" })
+            Assert.DoesNotContain(jargon, md);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(md, "Round prices"));
+
+        Assert.Contains($"1.1.0 ({day})\n  {day} CSV export\n", VersionHistory.Text(history, clean: true));
+        Assert.Equal("Upcoming (main)", VersionHistory.Text(Export(target: "main"), clean: true).Split('\n')[0]);
+        Assert.Equal("true", Cli.Parse(["--clean"], "version-history")["clean"]);
+        Assert.Equal("Fix the login", VersionHistory.CleanText("Merge pull request #7 from me/x fix the login"));
+    }
+
+    [Fact]
     public void Pull_requests_group_the_commits_they_came_with()
     {
         Commit("chore: initial");
