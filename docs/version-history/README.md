@@ -18,7 +18,8 @@ Default output is text for `list` and JSON for `export`. Both support `--format 
 - Tags matching `vMAJOR.MINOR.PATCH` (optionally with a SemVer prerelease suffix) represent **released** snapshots. Lightweight and annotated tags both resolve to commits.
 - Local `refs/heads/release/*` branches represent **unreleased** moving versions. The suffix is their version identifier and may identify a minor maintenance line.
 - Each entry contains the HEAD/tag commit SHA, its committer date, and commits reachable from that SHA but not reachable from the selected baseline tag (exclusive baseline).
-- The baseline is the first tagged commit met walking back from the entry in `git rev-list --topo-order` order (the highest version wins when one commit carries several tags), rather than the highest version number: maintenance lines diverge, so `v1.1.0` on main is measured from `v1.0.0` even when `v1.0.1` exists on `release/1.0`. A tag never uses tags on its own commit as its baseline; a release branch whose head is tagged has no unreleased changes.
+- The baseline follows `git describe`: of the tagged commits the entry contains, those not contained in another tagged commit, the one with the fewest commits up to the entry (the higher version on a tie). Not the highest version number: maintenance lines diverge, so `v1.1.0` on main is measured from `v1.0.0` even when `v1.0.1` exists on `release/1.0`. Nor the first tag in topological order, which after `release/1.0` is merged back into main would be `v1.0.1`. A tag never uses tags on its own commit as its baseline; a release branch whose head is tagged has no unreleased changes.
+- `v1.0.0` and `1.0.0` are the same version: it is reported once, from the `v`-prefixed tag, with a warning naming the other.
 - The initial release without a reachable older tag includes history from the root, subject to the configured commit limit.
 - Output ordering is descending SemVer precedence for tags (a prerelease sorts below its release, numeric identifiers compare as numbers; equal precedence falls back to the tag name), followed by branch names in ordinal order. Tags that do not point at a commit are skipped.
 - Incomplete ranges are flagged `truncated` or `shallow`; no absence of evidence is interpreted as an absence of changes.
@@ -34,4 +35,4 @@ dotnet test gitwizz.slnx --filter FullyQualifiedName~VersionHistoryTests
 dotnet test gitwizz.slnx
 ```
 
-Tests exercise tag intervals, diverged maintenance lines, a tagged branch head, annotated tags shadowed by a same-named branch, prerelease ordering, text output, the CLI options, missing refs, deterministic JSON and truncation.
+Tests exercise tag intervals, diverged and merged-back maintenance lines, duplicate versions, a tagged branch head, annotated tags shadowed by a same-named branch, prerelease ordering, text output, the CLI options, missing refs, deterministic JSON and truncation.

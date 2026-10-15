@@ -50,6 +50,13 @@ public static class VersionHistory
                 int.Parse(match.Groups["patch"].Value), match.Groups["pre"].Success ? match.Groups["pre"].Value : null));
         }
         tags.Sort((a, b) => CompareTags(b, a));
+        // v1.0.0 and 1.0.0 are one version: the first in order (the v-prefixed one) stands for it.
+        var warnings = new List<string>();
+        tags = [.. tags.GroupBy(t => t.Name.TrimStart('v'), StringComparer.Ordinal).Select(g =>
+        {
+            foreach (var other in g.Skip(1)) warnings.Add($"tag {other.Name} skipped: {g.First().Name} is the same version");
+            return g.First();
+        })];
         var tagsBySha = tags.ToLookup(t => t.Sha, StringComparer.Ordinal);
 
         var branches = Refs(git, "refs/heads")
@@ -63,7 +70,6 @@ public static class VersionHistory
             entries.Add(Build(git, branch[branchPrefix.Length..], "unreleased", "branch", "refs/heads/" + branch,
                 git.RevParse("refs/heads/" + branch), tagsBySha, limit));
 
-        var warnings = new List<string>();
         if (entries.Count == 0) warnings.Add("no SemVer tags or matching local release branches found");
         return new VersionHistoryExport(Schema, History.RepositoryIdentity(git), entries, warnings);
     }
@@ -78,16 +84,7 @@ public static class VersionHistory
     static VersionEntry Build(Git git, string version, string status, string source, string reference, string sha,
         ILookup<string, Tag> tagsBySha, int limit)
     {
-        // The baseline is the first tagged commit in topological order from sha, not the highest version number:
-        // maintenance lines diverge. One rev-list instead of a merge-base per tag pair. A tag skips its own commit (other
-        // tags there name the same snapshot); a branch does not, so a branch whose head is tagged has no unreleased changes.
-        Tag? baseline = null;
-        foreach (var commit in git.Run("rev-list", "--topo-order", sha).Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            if (!(source == "tag" && commit == sha) && tagsBySha[commit].FirstOrDefault() is { } tag)
-            {
-                baseline = tag;
-                break;
-            }
+        var baseline = Baseline(git, sha, source == "tag", tagsBySha);
         var baseSha = baseline?.Sha;
         var history = History.ReadGit(git, baseSha, sha, limit);
         var warnings = new List<string>();
@@ -99,6 +96,31 @@ public static class VersionHistory
         var date = History.IsoDate(git.Run("show", "-s", "--format=%cI", sha).Trim());
         return new VersionEntry(version, status, source, reference, sha, date,
             baseline?.Name.TrimStart('v'), baseSha, changes, history.Truncated, history.Shallow, warnings);
+    }
+
+    /// <summary>
+    /// The release sha's changes are counted from: of the tagged commits it contains, those no other one contains, the
+    /// one with the fewest commits up to sha (git describe's rule), the higher version on a tie. Not the highest version,
+    /// since maintenance lines diverge, and not the first tag in topological order, which after a maintenance line is
+    /// merged back is one of its tags. A tag skips its own commit (other tags there name the same snapshot); a branch
+    /// does not, so a branch whose head is tagged has no unreleased changes.
+    /// </summary>
+    static Tag? Baseline(Git git, string sha, bool skipOwn, ILookup<string, Tag> tagsBySha)
+    {
+        var tagged = git.Run("rev-list", sha).Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(c => tagsBySha.Contains(c) && !(skipOwn && c == sha)).ToHashSet(StringComparer.Ordinal);
+        if (tagged.Count > 1)
+        {
+            // Everything reachable from the candidates' parents is contained in another candidate. Through stdin, as the
+            // candidates may outgrow a command line.
+            var covered = Git.Exec(git.RepoDir, "git", ["rev-list", "--stdin"], stdin: string.Concat(tagged.Select(c => c + "^@\n")));
+            if (covered.ExitCode != 0) throw new InvalidOperationException($"git rev-list failed: {covered.Stderr.Trim()}");
+            tagged.ExceptWith(covered.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        }
+        return tagged
+            .Select(c => (Tag: tagsBySha[c].First(), Distance: int.Parse(git.Run("rev-list", "--count", $"{c}..{sha}"))))
+            .OrderBy(x => x.Distance).ThenByDescending(x => x.Tag, Comparer<Tag>.Create(CompareTags))
+            .Select(x => x.Tag).FirstOrDefault();
     }
 
     static int CompareTags(Tag a, Tag b)

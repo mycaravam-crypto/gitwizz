@@ -124,6 +124,41 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
+    public void Merged_back_maintenance_line_does_not_hide_the_mainline_release()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "release/1.0");
+        var backport = Commit("fix: backport");
+        G("tag", "v1.0.1");
+        G("checkout", "-q", "main");
+        Commit("feat: one");
+        Commit("feat: two");
+        G("tag", "v1.1.0");
+        G("merge", "-q", "--no-ff", "-X", "theirs", "-m", "merge release/1.0", "release/1.0");
+        var merge = G("rev-parse", "HEAD");
+        var feature = Commit("feat: three");
+        G("tag", "v1.2.0");
+
+        // Topological order reaches v1.0.1 first; v1.1.0 is nearer (3 commits against 4) and already shipped feat: one/two.
+        var latest = VersionHistory.Export(_git).Versions[0];
+        Assert.Equal("1.1.0", latest.BaseVersion);
+        Assert.Equal([feature, merge, backport], latest.Changes.Select(c => c.Sha));
+    }
+
+    [Fact]
+    public void Same_version_with_and_without_v_is_reported_once()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("tag", "1.0.0");
+
+        var history = VersionHistory.Export(_git);
+        Assert.Equal("refs/tags/v1.0.0", Assert.Single(history.Versions).Reference);
+        Assert.Contains(history.Warnings, w => w.Contains("1.0.0 skipped"));
+    }
+
+    [Fact]
     public void Tagged_branch_head_has_no_unreleased_changes()
     {
         Commit("initial");
