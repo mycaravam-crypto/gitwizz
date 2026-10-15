@@ -74,7 +74,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | `context <pr> [--system]` | The PR's normalized context from any provider, as JSON, open, merged or closed; `--system`: the system context docwizz gives for the change |
 | `evidence <pr>` | The bounded package an AI review would see, as JSON, without contacting a model |
 | `history export` | Which commits changed which lines, which PR each came with, which work items they name, as JSON with provenance |
-| `version-history list\|export` | Which versions were released (SemVer tags), which are still open (`release/*` branches), and what each changed: a changelog page, JSON or text (`-f markdown\|json\|text`) |
+| `version-history list\|export` | Which versions were released (SemVer tags), which are still open (`release/*` branches), and which pull requests each shipped: a changelog page, JSON or text (`-f markdown\|json\|text`) |
 | `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline |
 | `env down <pr>` | Removes a PR's test environment (idempotent) |
 | `plan` (default) | In which order should these PRs merge? |
@@ -1044,13 +1044,14 @@ gitwizz version-history export -o versions.json                    # JSON (gitwi
 Lists every release and every version still in progress from local refs alone. SemVer tags (`v1.2.3`, `1.2.3`,
 prereleases such as `v2.0.0-rc.1`) are **released**; branches under `--branch-pattern` (default `release/*`), local or
 only on a remote, are **unreleased**, and the branch name after the prefix is their version. Each version lists the
-commits that none of the releases it builds on contain: `v1.1.0` on main builds on `v1.0.0` even when `v1.0.1` exists
+pull requests (merge commits `Merge pull request #12` / `Merged PR 12:`, squash commits `title (#12)`), and the commits
+made without one, that none of the releases it builds on contain: `v1.1.0` on main builds on `v1.0.0` even when `v1.0.1` exists
 on `release/1.0`, and after `release/1.0` is merged back, `v2.0.0` builds on both, so the backport is listed once. A
 release builds on releases only, so `v2.0.0` spans its release candidates. Commits are grouped by their Conventional
-Commits type: breaking changes, features, fixes, performance, other. With `--target main` it is the history of one
-branch: main's unreleased changes come first, then only the releases main contains (a patch released only on
-`release/1.0` counts once that branch is merged back); release branches and other branches' tags are left out, so
-apps kept on separate branches each get their own history.
+Commits type: breaking changes, features, fixes, performance, other; a pull request by its title. With `--target main`
+it is the history of one branch: main's unreleased pull requests come first, then only the release branches cut from
+main and the releases main or they contain, so apps kept on separate branches (`--target app-b`) each get their own
+history, with every pull request under the release it shipped in.
 
 The Markdown page has one section per version (`## 2.0.0 (2026-09-01)`, `## 1.0 (unreleased)`) with the grouped
 changes linked to their commits, and no generation time, so it only changes with the history: commit it next to the
