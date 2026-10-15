@@ -903,8 +903,8 @@ public static partial class Cli
                   --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v2, docs/history/README.md)
 
             [bold]Version history[/]
-                  -t, --target <branch> the branch the history is about: its unreleased changes, then only the releases it contains; no release branches
-                  --branch-pattern <prefix*> branches that are release lines, local or on a remote [grey](default: release/*; not listed with --target)[/]
+                  -t, --target <branch> the branch the history is about: its unreleased changes, then only its release branches and releases
+                  --branch-pattern <prefix*> branches that are release lines, local or on a remote [grey](default: release/*; with --target: those cut from it)[/]
                   --limit <n>           at most n commits per version [grey](default: 200)[/]
                   -f, --format <name>   json | text | markdown [grey](default: from the -o extension, else text for list, json for export)[/]
                   -o, --output <file>   write the report to a file instead of stdout [grey](versions.md: a changelog page)[/]

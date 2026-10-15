@@ -163,7 +163,7 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.Equal([feature, merge], latest.Changes.Select(c => c.Sha));
         Assert.DoesNotContain(backport, latest.Changes.Select(c => c.Sha));
         Assert.Equal("merge", latest.Changes[1].Category);
-        Assert.Contains("1 change and 1 merge commit", VersionHistory.Markdown(Export()));
+        Assert.Contains("1 direct commit and 1 merge commit", VersionHistory.Markdown(Export()));
     }
 
     [Fact]
@@ -284,11 +284,11 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.StartsWith("# Version history\n", md);
         Assert.Contains("## 1.1.0 (", md);
         Assert.Contains("Tag `v1.1.0` at [`", md);
-        Assert.Contains("· since 1.0.0 · 3 changes\n", md);
+        Assert.Contains("· since 1.0.0 · 3 direct commits\n", md);
         Assert.Contains($"### Features\n\n- **orders:** export \\*all\\* orders ([`{feature[..8]}`](https://github.com/example/shop/commit/{feature}))", md);
         Assert.Contains($"### ⚠ Breaking changes\n\n- refactor\\!: rename \\<Order\\> to \\[Sale\\] ([`{breaking[..8]}`]", md);
         Assert.Contains("### Other changes\n\n- \\- leading dash (", md);
-        Assert.Contains("· first release · 1 change", md);
+        Assert.Contains("· first release · 1 direct commit", md);
         Assert.True(md.IndexOf("### ⚠ Breaking changes", StringComparison.Ordinal) < md.IndexOf("### Features", StringComparison.Ordinal));
     }
 
@@ -302,7 +302,7 @@ public sealed class VersionHistoryTests : IDisposable
 
         var text = VersionHistory.Text(Export());
         Assert.Contains("1.0.1 [released] refs/tags/v1.0.1", text);
-        Assert.Contains("since: 1.0.0 | commits: 1", text);
+        Assert.Contains("since: 1.0.0 | pull requests: 0 | commits: 1", text);
         Assert.Contains($"{fix[..8]} fix: patch", text);
         Assert.Contains("since: (initial)", text);
     }
@@ -339,13 +339,13 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
-    public void Target_lists_its_unreleased_changes_first_and_only_the_releases_it_contains()
+    public void Target_lists_its_unreleased_changes_first_then_its_release_branches_and_their_releases()
     {
         Commit("initial");
         G("tag", "v1.0.0");
         G("checkout", "-q", "-b", "release/1.0");
         Commit("fix: backport");
-        G("tag", "v1.0.1"); // only on the maintenance line: not a release of main
+        G("tag", "v1.0.1"); // on the maintenance line cut from main: a release of main's app
         G("checkout", "-q", "main");
         Commit("feat: one");
         G("tag", "v1.1.0");
@@ -354,18 +354,17 @@ public sealed class VersionHistoryTests : IDisposable
 
         var history = Export(target: "main");
         Assert.Equal(new VersionTarget("main", "refs/heads/main", feature), history.Target);
-        Assert.Equal(["main", "1.1.0", "1.0.0"], history.Versions.Select(v => v.Version)); // no release/1.0: not main's
+        Assert.Equal(["main", "1.0", "1.1.0", "1.0.1", "1.0.0"], history.Versions.Select(v => v.Version));
         var main = history.Versions[0];
         Assert.Equal(("unreleased", "target", "refs/heads/main"), (main.Status, main.Source, main.Reference));
-        Assert.Equal(["1.1.0"], main.Bases.Select(b => b.Version));
+        Assert.Equal(["1.1.0"], main.Bases.Select(b => b.Version)); // v1.0.1 is not in main: not one of its bases
         Assert.Equal([feature, fix], main.Changes.Select(c => c.Sha));
+        Assert.Equal(["1.0.1"], history.Versions[1].Bases.Select(b => b.Version)); // the release branch builds on its own tag
 
         var md = VersionHistory.Markdown(history);
         Assert.Contains("The history of `main`", md);
         Assert.Contains("## main (unreleased)\n\nBranch `main` at ", md);
-        Assert.DoesNotContain("## 1.0.1", md);
-        Assert.DoesNotContain("## 1.0 (unreleased)", md);
-        Assert.DoesNotContain("in progress", md);
+        Assert.Contains("## 1.0 (unreleased)", md);
 
         // Without --target nothing changes: no target, every tag, no entry for main.
         var all = Export();
@@ -392,13 +391,79 @@ public sealed class VersionHistoryTests : IDisposable
         var pending = Commit("feat: app b merged, not released");
 
         var appA = Export(target: "main");
-        Assert.Equal(["main", "1.0.0"], appA.Versions.Select(v => v.Version));
+        Assert.Equal(["main", "1.1", "1.0.0"], appA.Versions.Select(v => v.Version));
         Assert.Empty(appA.Versions[0].Changes);
 
         var appB = Export(target: "app-b");
-        Assert.Equal(["app-b", "2.0.0"], appB.Versions.Select(v => v.Version));
+        Assert.Equal(["app-b", "2.1", "2.0.0"], appB.Versions.Select(v => v.Version));
         Assert.Equal([pending], appB.Versions[0].Changes.Select(c => c.Sha));
-        Assert.Equal([b], appB.Versions[1].Changes.Select(c => c.Sha));
+        Assert.Equal([b], appB.Versions[2].Changes.Select(c => c.Sha));
+    }
+
+    [Fact]
+    public void A_release_branch_belongs_to_the_branch_it_was_cut_from_when_apps_share_history()
+    {
+        // app-b started from main: main's first-parent line meets app-b's release branch only where the apps split.
+        Commit("chore: shared start");
+        G("checkout", "-q", "-b", "app-b");
+        Commit("feat: app b");
+        G("checkout", "-q", "-b", "release/b-1.0");
+        Commit("fix: app b release");
+        G("checkout", "-q", "main");
+        Commit("feat: app a");
+        G("checkout", "-q", "-b", "release/a-1.0");
+        Commit("fix: app a release");
+        G("checkout", "-q", "-b", "fix/a-hotfix"); // a pull request branch made from the release branch, not merged yet
+        Commit("fix: hotfix in review");
+        G("checkout", "-q", "main");
+        G("merge", "-q", "--no-ff", "-m", "Merge branch 'release/a-1.0'", "release/a-1.0"); // merged back: still main's
+
+        Assert.Equal(["main", "a-1.0"], Export(target: "main").Versions.Select(v => v.Version));
+        Assert.Equal(["app-b", "b-1.0"], Export(target: "app-b").Versions.Select(v => v.Version));
+    }
+
+    [Fact]
+    public void Pull_requests_group_the_commits_they_came_with()
+    {
+        Commit("chore: initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "feature/csv");
+        var csv1 = Commit("feat(orders): export as CSV");
+        var csv2 = Commit("test: CSV export");
+        G("checkout", "-q", "main");
+        G("merge", "-q", "--no-ff", "-m", "Merge pull request #12 from me/feature/csv\n\nfeat(orders): CSV export", "feature/csv");
+        var merge = G("rev-parse", "HEAD");
+        var squash = Commit("fix: round prices (#13)");
+        var ado = Commit("Merged PR 14: perf: cache lookups");
+        var direct = Commit("docs: readme");
+        G("checkout", "-q", "-b", "feature/plain");
+        var plain = Commit("chore: tidy up");
+        G("checkout", "-q", "main");
+        G("merge", "-q", "--no-ff", "-m", "Merge pull request #15 from me/feature/plain\n\nTidy up", "feature/plain");
+
+        var main = Export(target: "main").Versions[0];
+        Assert.Equal(["#15", "#14", "#13", "#12"], main.PullRequests.Select(p => p.Id));
+        var pr12 = main.PullRequests[3];
+        Assert.Equal(("feat(orders): CSV export", "merge", merge, "feature", "orders"), (pr12.Title, pr12.Strategy, pr12.MergeCommit, pr12.Category, pr12.Scope));
+        Assert.Equal([merge, csv2, csv1], pr12.Commits);
+        Assert.Equal(("fix: round prices", "squash", "fix"), (main.PullRequests[2].Title, main.PullRequests[2].Strategy, main.PullRequests[2].Category));
+        Assert.Equal([squash], main.PullRequests[2].Commits);
+        Assert.Equal(("perf: cache lookups", "performance"), (main.PullRequests[1].Title, main.PullRequests[1].Category));
+        Assert.Equal([ado], main.PullRequests[1].Commits);
+        Assert.Equal(("Tidy up", null, "other"), (main.PullRequests[0].Title, main.PullRequests[0].Type, main.PullRequests[0].Category)); // from its commits
+        Assert.Equal("#12", main.Changes.Single(c => c.Sha == csv1).PullRequest);
+        Assert.Equal("#15", main.Changes.Single(c => c.Sha == plain).PullRequest);
+        Assert.Null(main.Changes.Single(c => c.Sha == direct).PullRequest);
+
+        G("remote", "add", "origin", "https://github.com/example/shop.git");
+        var md = VersionHistory.Markdown(Export(target: "main"));
+        Assert.Contains("· 4 pull requests and 1 direct commit\n", md);
+        Assert.Contains("### Features\n\n- **orders:** CSV export ([#12](https://github.com/example/shop/pull/12), 2 commits)\n", md);
+        Assert.Contains("### Fixes\n\n- round prices ([#13](https://github.com/example/shop/pull/13))\n", md);
+        Assert.Contains("- Tidy up ([#15](https://github.com/example/shop/pull/15), 1 commit)\n", md);
+        Assert.Contains("- docs: readme ([`", md);
+        Assert.DoesNotContain("export as CSV", md); // a pull request's commits are not listed again
+        Assert.Contains("#12 feat(orders): CSV export", VersionHistory.Text(Export(target: "main")));
     }
 
     [Fact]
@@ -419,7 +484,7 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
-    public void A_release_branch_as_target_is_its_own_history_and_origin_stands_in_for_a_missing_local_branch()
+    public void A_release_branch_as_target_is_listed_once_and_origin_stands_in_for_a_missing_local_branch()
     {
         Commit("initial");
         G("tag", "v1.0.0");
@@ -455,7 +520,7 @@ public sealed class VersionHistoryTests : IDisposable
         });
         var md = Path.Combine(_dir, "versions.md");
         Assert.Equal(0, Cli.VersionHistoryCommand("export", new() { ["repo"] = _dir, ["output"] = md, ["target"] = "main" }, console));
-        Assert.Contains($"## main (unreleased)\n\nBranch `main` at `{head[..8]}` · since 1.0.0 · 1 change", File.ReadAllText(md));
+        Assert.Contains($"## main (unreleased)\n\nBranch `main` at `{head[..8]}` · since 1.0.0 · 1 direct commit", File.ReadAllText(md));
     }
 
     public void Dispose() => Directory.Delete(_dir, true);

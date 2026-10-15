@@ -36,7 +36,29 @@
         "bases": { "type": "array", "items": { "$ref": "#/$defs/base" }, "description": "the releases this version builds on, highest first; empty for the first release" },
         "changes": { "type": "array", "items": { "$ref": "#/$defs/change" }, "description": "commits none of the bases contain, newest first in topological order" },
         "truncated": { "type": "boolean", "description": "more commits than --limit: changes is incomplete" },
-        "warnings": { "type": "array", "items": { "type": "string" } }
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "pullRequests": {
+          "type": "array", "items": { "$ref": "#/$defs/pullRequest" },
+          "description": "the pull requests completed in this version, newest first. Written by gitwizz since pull request grouping; optional for older documents"
+        }
+      }
+    },
+    "pullRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "strategy", "mergeCommit", "committedAt", "category", "type", "scope", "description", "breaking", "commits"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^#\\d+$", "description": "#12" },
+        "title": { "type": "string", "description": "the pull request's title as the merge or squash commit carries it" },
+        "strategy": { "enum": ["merge", "squash"] },
+        "mergeCommit": { "$ref": "#/$defs/sha" },
+        "committedAt": { "$ref": "#/$defs/date" },
+        "category": { "enum": ["feature", "fix", "performance", "other"], "description": "from the title's type, else the most significant category of its commits" },
+        "type": { "type": ["string", "null"], "description": "the title's Conventional Commits type, lower case; null when the title isn't one" },
+        "scope": { "type": ["string", "null"] },
+        "description": { "type": "string", "description": "the title after type(scope)!:, or the whole title" },
+        "breaking": { "type": "boolean", "description": "the title or any of its commits is breaking" },
+        "commits": { "type": "array", "items": { "$ref": "#/$defs/sha" }, "description": "its merge or squash commit and the commits the merge brought in, newest first" }
       }
     },
     "target": {
@@ -72,7 +94,8 @@
         "type": { "type": ["string", "null"], "description": "Conventional Commits type, lower case; null when the subject isn't one" },
         "scope": { "type": ["string", "null"] },
         "description": { "type": "string", "description": "the subject after type(scope)!:, or the whole subject" },
-        "breaking": { "type": "boolean", "description": "! before the colon or a BREAKING CHANGE footer" }
+        "breaking": { "type": "boolean", "description": "! before the colon or a BREAKING CHANGE footer" },
+        "pullRequest": { "type": ["string", "null"], "pattern": "^#\\d+$", "description": "the pull request it came with (#12); null without one. Optional for older documents" }
       }
     }
   }

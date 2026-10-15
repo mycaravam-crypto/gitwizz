@@ -64,8 +64,9 @@ public sealed class VersionHistoryContractTests : IDisposable
     }
 
     /// <summary>
-    /// main: v1.0.0, v1.1.0 (a feature and a performance change), release/1.0 (v1.0.1) merged back, a breaking change in
-    /// v2.0.0-rc.1, a fix for v2.0.0. release/1.0 has an unreleased fix; release/2.1 exists only on origin.
+    /// main: v1.0.0, v1.1.0 (pull request #7 merged with two commits, and a performance change), release/1.0 (v1.0.1)
+    /// merged back, a breaking change in v2.0.0-rc.1, a fix squashed from pull request #9 for v2.0.0. release/1.0 has an
+    /// unreleased fix; release/2.1 exists only on origin.
     /// </summary>
     VersionHistoryExport Scenario()
     {
@@ -75,14 +76,20 @@ public sealed class VersionHistoryContractTests : IDisposable
         G("checkout", "-q", "-b", "release/1.0");
         Commit("api.txt", "fix(api): handle empty orders"); Tag("v1.0.1");
         G("checkout", "-q", "main");
+        G("checkout", "-q", "-b", "csv-export");
         Commit("orders.txt", "feat(orders): export orders as CSV");
+        Commit("orders-test.txt", "test(orders): cover the CSV export");
+        G("checkout", "-q", "main");
+        Tick();
+        G("merge", "-q", "--no-ff", "--no-gpg-sign", "-m", "Merge pull request #7 from example/csv-export\n\nfeat(orders): export orders as CSV", "csv-export");
+        G("branch", "-q", "-D", "csv-export");
         Commit("prices.txt", "perf: cache price lookups");
         Tag("v1.1.0");
         Tick();
         G("merge", "-q", "--no-ff", "--no-gpg-sign", "-m", "Merge branch 'release/1.0'", "release/1.0");
         Commit("api2.txt", "feat(api)!: drop the v1 order endpoint\n\nBREAKING CHANGE: clients must call /v2/orders.");
         Tag("v2.0.0-rc.1");
-        Commit("docs.txt", "fix: correct the CSV column order");
+        Commit("docs.txt", "fix: correct the CSV column order (#9)");
         Tag("v2.0.0");
         G("checkout", "-q", "release/1.0");
         Commit("api3.txt", "fix(api): reject negative quantities");
@@ -143,7 +150,12 @@ public sealed class VersionHistoryContractTests : IDisposable
         Assert.Equal(["1.1.0", "1.0.1"], v["2.0.0-rc.1"].Bases.Select(b => b.Version));
         Assert.Contains(v["2.0.0"].Changes, c => c.Breaking && c.Scope == "api");          // a release spans its rc
         Assert.Equal(["feature", "fix", "merge"], v["2.0.0"].Changes.Select(c => c.Category).Order());
-        Assert.Equal(["feature", "performance"], v["1.1.0"].Changes.Select(c => c.Category).Order());
+        Assert.Equal(["feature", "merge", "other", "performance"], v["1.1.0"].Changes.Select(c => c.Category).Order());
+        Assert.Equal(("#7", "merge", "feature", 3), (v["1.1.0"].PullRequests.Single().Id, v["1.1.0"].PullRequests[0].Strategy,
+            v["1.1.0"].PullRequests[0].Category, v["1.1.0"].PullRequests[0].Commits.Count));             // a merged pull request
+        Assert.Equal(("#9", "squash", "fix"), (v["2.0.0"].PullRequests.Single().Id, v["2.0.0"].PullRequests[0].Strategy,
+            v["2.0.0"].PullRequests[0].Category));                                                         // a squashed one
+        Assert.Contains(v["1.1.0"].Changes, c => c.PullRequest == null && c.Category == "performance");     // a direct commit
         Assert.Empty(v["1.0.0"].Bases);
         Assert.All(v.Values.Where(x => x.Status == "released"), x => Assert.NotNull(x.TaggedAt));
     }

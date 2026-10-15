@@ -10,17 +10,27 @@ namespace Gitwizz;
 /// </summary>
 public record VersionEntry(string Version, string Status, string Source, string Reference, string CommitSha,
     string CommittedAt, string? TaggedAt, List<VersionBase> Bases, List<VersionChange> Changes, bool Truncated,
-    List<string> Warnings);
+    List<string> Warnings, List<VersionPr> PullRequests);
 
 /// <summary>A release an entry builds on: its changes are the commits none of its bases contain.</summary>
 public record VersionBase(string Version, string Reference, string Sha);
 
 /// <summary>
 /// One commit of a version. Category from its Conventional Commits type: feature (feat), fix, performance (perf), merge
-/// (more than one parent) or other; Breaking from a "!" before the colon or a BREAKING CHANGE footer.
+/// (more than one parent) or other; Breaking from a "!" before the colon or a BREAKING CHANGE footer. PullRequest: the
+/// pull request it came with ("#12"), null for a commit made or merged without one.
 /// </summary>
 public record VersionChange(string Sha, string Subject, string CommittedAt, string Kind, string Category, string? Type,
-    string? Scope, string Description, bool Breaking);
+    string? Scope, string Description, bool Breaking, string? PullRequest = null);
+
+/// <summary>
+/// A pull request completed in a version, read from the history alone: a merge commit ("Merge pull request #12",
+/// "Merged PR 12:") with the commits its merge brought in, or a squash commit ("title (#12)"). Category, type, scope
+/// and description from its title; a title that isn't a Conventional Commits header takes the most significant category
+/// of its commits (feature, fix, performance, other). Breaking when the title or any of its commits is.
+/// </summary>
+public record VersionPr(string Id, string Title, string Strategy, string MergeCommit, string CommittedAt, string Category,
+    string? Type, string? Scope, string Description, bool Breaking, List<string> Commits);
 
 /// <summary>The gitwizz.version-history/v2 document (docs/version-history/README.md).</summary>
 public record VersionHistoryExport(string Schema, string? Repository, string BranchPattern, VersionTarget? Target, bool Shallow,
@@ -56,9 +66,10 @@ public static class VersionHistory
 
     /// <summary>
     /// Unreleased lines first (branches under branchPrefix, newest version first; a local branch wins over the same
-    /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): only what
-    /// it contains, its unreleased entry (its commits since the releases it contains), then the tags it contains; no
-    /// release branches, so apps kept on separate branches never show up in each other's history.
+    /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): its
+    /// unreleased entry first (its commits since the releases it contains), then only the release branches cut from it
+    /// and the tags it or those branches contain, so apps kept on separate branches never show up in each other's
+    /// history. Each version groups its commits into the pull requests they came with.
     /// Throws ArgumentException for a limit outside 1..MaxLimit or an unusable prefix, InvalidOperationException for an
     /// unknown target.
     /// </summary>
@@ -73,20 +84,24 @@ public static class VersionHistory
         var tags = ReadTags(git, warnings);
         var tagsBySha = tags.ToLookup(t => t.Sha, StringComparer.Ordinal);
         var scope = target == null ? null : ResolveTarget(git, target);
-        // A target's history is what it contains: release branches are work in progress, not part of it yet.
-        var lines = scope == null ? ReadLines(git, branchPrefix) : [];
+        // The target is listed once, as the target, even when it is a release branch itself.
+        var lines = ReadLines(git, branchPrefix).Where(l => l.Reference != scope?.Reference).ToList();
+        var others = scope == null ? [] : OtherBranches(git, branchPrefix, scope);
         var shallow = git.Try("rev-parse", "--is-shallow-repository").Stdout.Trim() == "true";
 
-        var heads = tags.Select(t => t.Sha).Concat(lines.Select(l => l.Sha)).Concat(scope == null ? Array.Empty<string>() : new[] { scope.Sha })
-            .Distinct(StringComparer.Ordinal).ToList();
+        var heads = tags.Select(t => t.Sha).Concat(lines.Select(l => l.Sha)).Concat(others)
+            .Concat(scope == null ? Array.Empty<string>() : new[] { scope.Sha }).Distinct(StringComparer.Ordinal).ToList();
         var graph = heads.Count == 0 ? new Dictionary<string, string[]>() : ReadGraph(git, heads);
         var dates = heads.Count == 0 ? new Dictionary<string, string>() : CommitDates(git, heads);
 
         var entries = new List<VersionEntry>();
         if (scope != null)
         {
-            // Only the releases the target contains; bases still see every tag, so a release branch builds on its own.
+            // Only the release branches cut from the target, and the releases it or they contain; bases still see
+            // every tag, so a release branch builds on its own.
+            lines = [.. lines.Where(l => CutFrom(graph, l.Sha, scope.Sha, others))];
             var contained = Ancestors(graph, scope.Sha);
+            foreach (var line in lines) contained.UnionWith(Ancestors(graph, line.Sha));
             tags = [.. tags.Where(t => contained.Contains(t.Sha))];
             entries.Add(Build(git, scope.Name, "unreleased", "target", scope.Reference, scope.Sha, dates[scope.Sha], null,
                 Bases(graph, scope.Sha, false, false, tagsBySha), limit, shallow));
@@ -113,6 +128,49 @@ public static class VersionHistory
             if (git.Try("rev-parse", "--verify", "--quiet", reference + "^{commit}") is { ExitCode: 0 } r)
                 return new VersionTarget(target, reference, r.Stdout.Trim());
         return new VersionTarget(target, target, git.RevParse(target));
+    }
+
+    /// <summary>
+    /// The heads of the branches a release branch may have been cut from instead of the target: local branches and
+    /// origin's, outside the release prefix, other than the target.
+    /// </summary>
+    static List<string> OtherBranches(Git git, string prefix, VersionTarget target)
+    {
+        var heads = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (root, local) in new[] { ("refs/heads/", true), ("refs/remotes/origin/", false) })
+            foreach (var (name, sha) in Refs(git, root))
+                if (!name.StartsWith(prefix, StringComparison.Ordinal) && name != "HEAD" && root + name != target.Reference &&
+                    !(local ? "refs/remotes/origin/" + name == target.Reference : "refs/heads/" + name == target.Reference))
+                    heads.Add(sha);
+        heads.Remove(target.Sha);
+        return [.. heads];
+    }
+
+    /// <summary>
+    /// Whether the release branch at release was cut from target: target's first-parent line meets the release's
+    /// history, and no other branch's first-parent line meets it at a newer commit (a release of another app cut from
+    /// its own branch meets that branch at the cut, and the target only where the apps split, if at all). Branches merged
+    /// into the release (pull requests: in its history, off its first-parent line) or that start at its head (made from
+    /// it) are not lines it was cut from.
+    /// </summary>
+    static bool CutFrom(Dictionary<string, string[]> graph, string release, string target, List<string> others)
+    {
+        var history = Ancestors(graph, release);
+        var line = FirstParents(graph, release).ToHashSet(StringComparer.Ordinal);
+        string? Meet(string head) => FirstParents(graph, head).FirstOrDefault(history.Contains);
+        if (Meet(target) is not { } cut) return false;
+        if (cut == release) return true;
+        var older = Ancestors(graph, cut);
+        foreach (var other in others)
+            if ((!history.Contains(other) || line.Contains(other)) && Meet(other) is { } meet && meet != release && !older.Contains(meet))
+                return false;
+        return true;
+    }
+
+    /// <summary>head and its first parents, newest first.</summary>
+    static IEnumerable<string> FirstParents(Dictionary<string, string[]> graph, string head)
+    {
+        for (var c = head; c != null; c = graph.GetValueOrDefault(c, None).FirstOrDefault()) yield return c;
     }
 
     /// <summary>Every commit sha contains, itself included, from the graph.</summary>
@@ -279,13 +337,83 @@ public static class VersionHistory
         // the releases before it may only be missing.
         if (bases.Count == 0 && shallow)
             warnings.Add("no earlier release reachable in this shallow clone: the commits listed may include released ones");
+        var (changes, prs) = PullRequests(ReadChanges(git, shas, out var commits), commits, warnings);
         return new VersionEntry(version, status, source, reference, sha, committedAt, taggedAt,
             [.. bases.Select(b => new VersionBase(b.Name.TrimStart('v'), "refs/tags/" + b.Name, b.Sha))],
-            ReadChanges(git, shas), truncated, warnings);
+            changes, truncated, warnings, prs);
     }
 
-    static List<VersionChange> ReadChanges(Git git, List<string> shas)
+    /// <summary>
+    /// The pull requests a version's commits came with, newest first, and the commits marked with theirs. Merges are
+    /// read oldest first, so a pull request merged into another one's branch keeps its own commits. A merge's pull
+    /// request owns what the merge brought in: the version's commits its second parent reaches and its first doesn't
+    /// (a commit outside the version is in a base, and so is everything it reaches). A squash subject ("(#12)") counts
+    /// outside every pull request's branch only: inside one it names an issue.
+    /// </summary>
+    static (List<VersionChange>, List<VersionPr>) PullRequests(List<VersionChange> changes, Dictionary<string, (string[] Parents, string Message)> commits,
+        List<string> warnings)
     {
+        var owner = new Dictionary<string, string>(StringComparer.Ordinal);
+        var found = new List<(string Id, VersionChange Commit, string Strategy, string Title, List<VersionChange> Members)>();
+        var bySha = changes.ToDictionary(c => c.Sha, StringComparer.Ordinal);
+        var order = changes.Select((c, i) => (c.Sha, i)).ToDictionary(x => x.Sha, x => x.i, StringComparer.Ordinal);
+        HashSet<string> Reach(string from)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var stack = new Stack<string>(new[] { from });
+            while (stack.Count > 0)
+                if (stack.Pop() is var c && bySha.ContainsKey(c) && seen.Add(c))
+                    foreach (var p in commits[c].Parents) stack.Push(p);
+            return seen;
+        }
+        bool Claim(string id, VersionChange c, string strategy, string title, List<VersionChange> members)
+        {
+            if (found.FirstOrDefault(f => f.Id == id) is { Id: not null } seen)
+            {
+                warnings.Add($"{id} is named by more than one commit ({Short(seen.Commit.Sha)}, {Short(c.Sha)}); listed once, from {Short(seen.Commit.Sha)}");
+                return false;
+            }
+            found.Add((id, c, strategy, title, members));
+            foreach (var m in members.Prepend(c)) owner[m.Sha] = id;
+            return true;
+        }
+
+        foreach (var c in Enumerable.Reverse(changes).Where(c => c.Kind == "merge"))
+            if (commits[c.Sha].Parents is { Length: 2 } parents && History.PrMarker(c.Subject) is { Basis: "merge-message" } marker)
+            {
+                var brought = Reach(parents[1]);
+                brought.ExceptWith(Reach(parents[0]));
+                Claim(marker.Id, c, "merge", MergeTitle(c.Subject, marker.Marker, commits[c.Sha].Message),
+                    [.. changes.Where(m => brought.Contains(m.Sha) && !owner.ContainsKey(m.Sha))]);
+            }
+        foreach (var c in changes.Where(c => c.Kind == "commit" && !owner.ContainsKey(c.Sha)))
+            if (History.PrMarker(c.Subject) is { } marker)
+                Claim(marker.Id, c, "squash", marker.Basis == "squash-subject" ? c.Subject[..^marker.Marker.Length].TrimEnd()
+                    : c.Subject[marker.Marker.Length..].Trim(), []);
+
+        var prs = found.Select(f =>
+        {
+            var commitsOf = f.Members.Prepend(f.Commit).Where(m => m.Kind == "commit").ToList();
+            var title = Classify(f.Commit.Sha, false, f.Commit.CommittedAt, f.Title.Length > 0 ? f.Title : f.Commit.Subject);
+            var category = title.Type != null ? title.Category
+                : Sections.Select(s => s.Category).FirstOrDefault(cat => commitsOf.Any(m => m.Category == cat)) ?? "other";
+            return (Order: order[f.Commit.Sha], Pr: new VersionPr(f.Id, title.Subject, f.Strategy, f.Commit.Sha, f.Commit.CommittedAt,
+                category, title.Type, title.Scope, title.Description, title.Breaking || commitsOf.Any(m => m.Breaking),
+                [.. f.Members.Prepend(f.Commit).OrderBy(m => order[m.Sha]).Select(m => m.Sha)]));
+        }).OrderBy(x => x.Order).Select(x => x.Pr).ToList();
+        return ([.. changes.Select(c => owner.TryGetValue(c.Sha, out var id) ? c with { PullRequest = id } : c)], prs);
+    }
+
+    /// <summary>A merge's pull request title: GitHub's is the message's first line after the subject, Azure DevOps' follows "Merged PR 12:".</summary>
+    static string MergeTitle(string subject, string marker, string message)
+    {
+        if (subject.StartsWith("Merged PR ", StringComparison.Ordinal)) return subject[marker.Length..].Trim();
+        return message.Split('\n').Skip(1).Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+    }
+
+    static List<VersionChange> ReadChanges(Git git, List<string> shas, out Dictionary<string, (string[] Parents, string Message)> commits)
+    {
+        commits = new Dictionary<string, (string[], string)>(StringComparer.Ordinal);
         if (shas.Count == 0) return [];
         var r = Git.Exec(git.RepoDir, "git", ["log", "--no-walk=unsorted", "--stdin", $"--format={Rec}%H{Unit}%P{Unit}%cI{Unit}%B"],
             stdin: string.Concat(shas.Select(s => s + "\n")));
@@ -295,8 +423,9 @@ public static class VersionHistory
         {
             var f = record.Split(Unit, 4);
             if (f.Length < 4) continue;
-            bySha[f[0]] = Classify(f[0], f[1].Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 1,
-                History.IsoDate(f[2]), f[3].Trim());
+            var parents = f[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            commits[f[0]] = (parents, f[3].Trim());
+            bySha[f[0]] = Classify(f[0], parents.Length > 1, History.IsoDate(f[2]), f[3].Trim());
         }
         return [.. shas.Where(bySha.ContainsKey).Select(s => bySha[s])];
     }
@@ -354,16 +483,17 @@ public static class VersionHistory
     /// <summary>The document as JSON with history export's options: indented, camelCase, nulls written, "+" kept.</summary>
     public static string Json(VersionHistoryExport result) => JsonSerializer.Serialize(result, History.JsonOptions);
 
-    /// <summary>A terminal listing: per version its reference, bases and commit subjects.</summary>
+    /// <summary>A terminal listing: per version its reference, bases, pull requests and the commits that came without one.</summary>
     public static string Text(VersionHistoryExport result)
     {
         var lines = new List<string>();
         foreach (var v in result.Versions)
         {
             lines.Add($"{v.Version} [{v.Status}] {v.Reference} ({Short(v.CommitSha)})");
-            lines.Add($"  since: {(v.Bases.Count == 0 ? "(initial)" : string.Join(", ", v.Bases.Select(b => b.Version)))} | commits: {v.Changes.Count}" +
-                (v.Truncated ? " (truncated)" : ""));
-            foreach (var c in v.Changes) lines.Add($"    {Short(c.Sha)} {c.Subject}");
+            lines.Add($"  since: {(v.Bases.Count == 0 ? "(initial)" : string.Join(", ", v.Bases.Select(b => b.Version)))} | " +
+                      $"pull requests: {v.PullRequests.Count} | commits: {v.Changes.Count}" + (v.Truncated ? " (truncated)" : ""));
+            foreach (var pr in v.PullRequests) lines.Add($"    {pr.Id} {pr.Title}");
+            foreach (var c in v.Changes.Where(c => c.PullRequest == null)) lines.Add($"    {Short(c.Sha)} {c.Subject}");
             foreach (var warning in v.Warnings) lines.Add($"  warning: {warning}");
         }
         foreach (var warning in result.Warnings) lines.Add("warning: " + warning);
@@ -374,14 +504,18 @@ public static class VersionHistory
         [("feature", "Features"), ("fix", "Fixes"), ("performance", "Performance"), ("other", "Other changes")];
 
     /// <summary>
-    /// A changelog page: per version a heading, its reference and bases, then its commits grouped as breaking changes,
-    /// features, fixes, performance and other changes. Merge commits are counted, not listed. Commits link to the
-    /// repository when its URL is http(s). Deterministic: no generation time, so the page only changes with the history.
+    /// A changelog page: per version a heading, its reference and bases, then its pull requests, and the commits that
+    /// came without one, grouped as breaking changes, features, fixes, performance and other changes. Other merge
+    /// commits are counted, not listed. Pull requests and commits link to the repository when its URL is http(s).
+    /// Deterministic: no generation time, so the page only changes with the history.
     /// </summary>
     public static string Markdown(VersionHistoryExport result)
     {
         var web = WebUrl(result.Repository);
         string Commit(string sha) => web == null ? $"`{Short(sha)}`" : $"[`{Short(sha)}`]({web}/commit/{sha})";
+        var azure = web != null && (web.Contains("dev.azure.com", StringComparison.OrdinalIgnoreCase) ||
+                                    web.Contains(".visualstudio.com", StringComparison.OrdinalIgnoreCase));
+        string Pr(string id) => web == null ? id : $"[{id}]({web}/{(azure ? "pullrequest" : "pull")}/{id[1..]})";
 
         var md = new StringBuilder();
         md.Append("# Version history\n\n");
@@ -391,7 +525,7 @@ public static class VersionHistory
         else
             md.Append($"Versions still in progress (branches matching `{result.BranchPattern}`) come first, then released SemVer tags, " +
                       "newest first. ");
-        md.Append("Each version lists the commits that none of the releases it builds on contain. " +
+        md.Append("Each version lists the pull requests, and the commits made without one, that none of the releases it builds on contain. " +
                   "Generated by `gitwizz version-history`; edits are overwritten.\n");
         if (result.Versions.Count == 0) md.Append("\n_No versions found._\n");
 
@@ -404,22 +538,24 @@ public static class VersionHistory
 
             var name = v.Reference.Split('/', 3)[^1];
             var origin = v.Source switch { "tag" => "Tag", "remote-branch" => "Remote branch", _ => "Branch" };
-            var listed = v.Changes.Where(c => c.Kind != "merge").ToList();
-            var merges = v.Changes.Count - listed.Count;
+            var direct = v.Changes.Where(c => c.PullRequest == null && c.Kind != "merge").ToList();
+            var merges = v.Changes.Count(c => c.PullRequest == null && c.Kind == "merge");
+            var counts = new[] { (v.PullRequests.Count, "pull request"), (direct.Count, "direct commit"), (merges, "merge commit") }
+                .Where(x => x.Item1 > 0).Select(x => Plural(x.Item1, x.Item2)).ToList();
             md.Append($"{origin} `{name}` at {Commit(v.CommitSha)}")
               .Append(v.Bases.Count == 0 ? " · first release" : " · since " + string.Join(", ", v.Bases.Select(b => b.Version)))
-              .Append($" · {Plural(listed.Count, "change")}")
-              .Append(merges > 0 ? $" and {Plural(merges, "merge commit")}" : "")
+              .Append(" · ").Append(counts.Count == 0 ? "no changes" : counts.Count == 1 ? counts[0] : string.Join(", ", counts[..^1]) + " and " + counts[^1])
               .Append("\n");
             foreach (var warning in v.Warnings) md.Append($"\n> ⚠ {Escape(warning)}\n");
 
-            if (listed.Count == 0)
+            if (v.PullRequests.Count == 0 && direct.Count == 0)
             {
                 md.Append("\n_No changes._\n");
                 continue;
             }
-            Group("⚠ Breaking changes", listed.Where(c => c.Breaking));
-            foreach (var (category, heading) in Sections) Group(heading, listed.Where(c => !c.Breaking && c.Category == category));
+            Group("⚠ Breaking changes", v.PullRequests.Where(p => p.Breaking), direct.Where(c => c.Breaking));
+            foreach (var (category, heading) in Sections)
+                Group(heading, v.PullRequests.Where(p => !p.Breaking && p.Category == category), direct.Where(c => !c.Breaking && c.Category == category));
         }
         if (result.Warnings.Count > 0)
         {
@@ -428,16 +564,23 @@ public static class VersionHistory
         }
         return md.ToString();
 
-        void Group(string heading, IEnumerable<VersionChange> changes)
+        // The section names features, fixes and performance; other changes keep their type (chore:, docs:, ...).
+        string Line(string category, string? scope, string description, string subject) =>
+            category == "other" ? Escape(subject) : (scope != null ? $"**{Escape(scope)}:** " : "") + Escape(description);
+
+        void Group(string heading, IEnumerable<VersionPr> prs, IEnumerable<VersionChange> commits)
         {
-            var list = changes.ToList();
-            if (list.Count == 0) return;
+            var (p, c) = (prs.ToList(), commits.ToList());
+            if (p.Count == 0 && c.Count == 0) return;
             md.Append($"\n### {heading}\n\n");
-            // The section names features, fixes and performance; other changes keep their type (chore:, docs:, ...).
-            foreach (var c in list)
-                md.Append("- ").Append(c.Category == "other" ? Escape(c.Subject)
-                        : (c.Scope != null ? $"**{Escape(c.Scope)}:** " : "") + Escape(c.Description))
-                  .Append($" ({Commit(c.Sha)})\n");
+            foreach (var pr in p)
+            {
+                var own = pr.Commits.Count - (pr.Strategy == "merge" ? 1 : 0);
+                md.Append("- ").Append(Line(pr.Category, pr.Scope, pr.Description, pr.Title))
+                  .Append($" ({Pr(pr.Id)}{(pr.Strategy == "merge" ? $", {Plural(own, "commit")}" : "")})\n");
+            }
+            foreach (var change in c)
+                md.Append("- ").Append(Line(change.Category, change.Scope, change.Description, change.Subject)).Append($" ({Commit(change.Sha)})\n");
         }
     }
 
