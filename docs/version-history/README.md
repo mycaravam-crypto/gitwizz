@@ -1,38 +1,155 @@
-# Hybrid Version History (MVP)
+# `gitwizz.version-history/v2` — the version history contract
 
-The local, read-only `gitwizz version-history` command reports release snapshots from SemVer tags and active maintenance/release lines from local branches.
+`gitwizz version-history` lists every released version (SemVer tags) and every version still in progress (release
+branches, local or only on a remote), each with the commits it adds to the releases it builds on. It writes the same
+history three ways:
+
+| Format | For | Command |
+|---|---|---|
+| Markdown | a changelog page for people and for the project documentation | `gitwizz version-history export -o versions.md` |
+| JSON (`gitwizz.version-history/v2`) | tools: docwizz, release notes, dashboards | `gitwizz version-history export -o versions.json` |
+| text | a quick look in the terminal | `gitwizz version-history list` |
+
+Read-only and offline: it reads local refs and commits and nothing else, so no provider, token or network is needed.
+Fetch first (`git fetch --tags origin`) in a fresh or partial clone.
+
+- [gitwizz.version-history.v2.schema.json](gitwizz.version-history.v2.schema.json): the JSON Schema (draft 2020-12)
+- [example.json](example.json) and [example.md](example.md): the export of the scripted repository below, kept
+  byte-for-byte by the tests (`VersionHistoryContractTests`)
 
 ## Usage
 
 ```bash
-gitwizz version-history list
-gitwizz version-history export -f json -o versions.json
-gitwizz version-history export --branch-pattern "release/*" --limit 500
+gitwizz version-history list                                       # text
+gitwizz version-history export -o versions.json                    # JSON: the format follows the extension
+gitwizz version-history export -o docs/architecture/versions.md    # Markdown changelog page
+gitwizz version-history export -f markdown > CHANGELOG.md
+gitwizz version-history list --branch-pattern "maint/*" --limit 500
 gitwizz version-history list --repo /path/to/repository
 ```
 
-Default output is text for `list` and JSON for `export`. Both support `--format text|json`. The branch pattern is a literal prefix followed by `*` (default `release/*`); the part of the branch name after the prefix is its version.
+| Option | Default | Meaning |
+|---|---|---|
+| `-f, --format` | from the `-o` extension (`.md`/`.markdown`, `.json`, `.txt`), else `text` for `list` and `json` for `export` | `text`, `json` or `markdown` (`md`) |
+| `-o, --output` | stdout | the file to write |
+| `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version |
+| `--limit` | 200 (max 10000) | at most this many commits per version |
+| `-r, --repo` | `.` | the repository |
 
-## Semantics
+## Which versions
 
-- Tags matching `vMAJOR.MINOR.PATCH` (optionally with a SemVer prerelease suffix) represent **released** snapshots. Lightweight and annotated tags both resolve to commits.
-- Local `refs/heads/release/*` branches represent **unreleased** moving versions. The suffix is their version identifier and may identify a minor maintenance line.
-- Each entry contains the HEAD/tag commit SHA, its committer date, and commits reachable from that SHA but not reachable from the selected baseline tag (exclusive baseline).
-- The baseline follows `git describe`: of the tagged commits the entry contains, those not contained in another tagged commit, the one with the fewest commits up to the entry (the higher version on a tie). Not the highest version number: maintenance lines diverge, so `v1.1.0` on main is measured from `v1.0.0` even when `v1.0.1` exists on `release/1.0`. Nor the first tag in topological order, which after `release/1.0` is merged back into main would be `v1.0.1`. A tag never uses tags on its own commit as its baseline; a release branch whose head is tagged has no unreleased changes.
-- `v1.0.0` and `1.0.0` are the same version: it is reported once, from the `v`-prefixed tag, with a warning naming the other.
-- The initial release without a reachable older tag includes history from the root, subject to the configured commit limit.
-- Output ordering is descending SemVer precedence for tags (a prerelease sorts below its release, numeric identifiers compare as numbers; equal precedence falls back to the tag name), followed by branch names in ordinal order. Tags that do not point at a commit are skipped.
-- Incomplete ranges are flagged `truncated` or `shallow`; no absence of evidence is interpreted as an absence of changes.
-- A tag's commit timestamp is **not** the publication timestamp of a GitHub release.
-- The format `gitwizz.version-history/v1` is independent of `gitwizz.history/v2`. No GitHub API access or write operation is needed to generate it.
+- **Released**: tags `vMAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH`, optionally with a SemVer prerelease
+  (`v2.0.0-rc.1`), lightweight or annotated. Tags that don't parse, or that point at a tree or blob, are skipped.
+  `v1.0.0` and `1.0.0` are one version: it is reported once, from the `v` tag, with a warning naming the other.
+- **Unreleased**: branches whose name starts with the prefix (`release/1.0` → version `1.0`): local branches
+  (`source: branch`) and branches only a remote has (`source: remote-branch`, `refs/remotes/origin/release/2.1`). A
+  local branch wins over the same branch on a remote; among remotes, `origin` first, then by name.
+- **Order**: unreleased versions first, newest first (`2.10` after `2.9`: numeric parts compare as numbers), then
+  released versions by SemVer precedence, highest first (a prerelease sorts below its release; `rc.10` above `rc.2`).
+  Equal precedence falls back to the name, so the order never depends on how git lists refs.
 
-The MVP uses locally available refs: fetch tags/branches before running it if a clone lacks remote history. Deleted release branches cannot be recovered as branches; their tags still appear. This MVP does not yet perform PR/work-item enrichment, cherry-pick equivalence detection or Markdown release-note generation.
+## Which commits: bases
+
+A version's **bases** are the releases it builds on: the tagged commits it contains that no other tagged commit it
+contains contains. Its **changes** are the commits none of its bases contain (`git rev-list <version> ^<base>...`),
+newest first in topological order. So:
+
+- **Diverged maintenance lines**: `v1.1.0` on main builds on `v1.0.0`, even when `v1.0.1` exists on `release/1.0`.
+  The highest version number is not the base.
+- **Merge-backs**: after `release/1.0` (`v1.0.1`) is merged into main, `v2.0.0` builds on both `v1.1.0` and
+  `v1.0.1`. The backport is listed once, under `v1.0.1`, not again under `v2.0.0`.
+- **Prereleases**: a release (no prerelease part) builds on releases only, so `v2.0.0` lists everything since the
+  1.x releases, including what `v2.0.0-rc.1` already had. A prerelease builds on any tag.
+- **Same commit**: a tag never builds on tags on its own commit. A release branch counts every tag, its own head's
+  too: a branch whose head is tagged has no unreleased changes.
+- **First release**: no bases, so it lists the history up to `--limit`.
+
+## Changes and their categories
+
+Each commit is classified by its [Conventional Commits](https://www.conventionalcommits.org) header
+`type(scope)!: description`:
+
+| `category` | From |
+|---|---|
+| `feature` | `feat` |
+| `fix` | `fix` |
+| `performance` | `perf` |
+| `other` | any other type (`docs`, `chore`, `refactor`, ...) or a subject that isn't a header |
+| `merge` | a commit with more than one parent |
+
+`breaking` is true for a `!` before the colon or a `BREAKING CHANGE:` (or `BREAKING-CHANGE:`) footer. `type` is
+the header's type in lower case, `scope` its scope, `description` the text after the colon; without a header, `type`
+and `scope` are null and `description` is the subject.
+
+## The Markdown page
+
+One `##` section per version: `## 2.0.0 (2026-09-01)` for a release (the annotated tag's date, else the commit's), `##
+1.0 (unreleased)` for a branch. Below it the reference, the commit, the bases and the number of changes, then the
+changes in this order: **⚠ Breaking changes**, **Features**, **Fixes**, **Performance**, **Other changes**. Merge
+commits are counted, not listed. Features, fixes and performance show `**scope:** description`; other changes keep
+their whole subject (`docs: ...`). When the repository's `origin` is an http(s) URL, commits link to
+`<origin without .git>/commit/<sha>` (GitHub, Azure DevOps and GitLab all resolve it). Commit text is escaped, so a
+message can't add emphasis, links, HTML, tables, headings or nested lists. The page carries no generation time, so it
+only changes when the history does: commit it, and regenerate it in CI. See [example.md](example.md).
+
+### In the project documentation (docwizz)
+
+docwizz regenerates `docs/*.md` and leaves `docs/architecture/` to you, so write the page there and link it from your
+architecture pages, or write `CHANGELOG.md` at the repository root:
+
+```bash
+git fetch --tags origin
+gitwizz version-history export -o docs/architecture/versions.md
+gitwizz version-history export -o docs/architecture/versions.json   # for tools, and for a native docwizz import
+```
+
+The JSON is the contract a native import (like `docwizz load import` for powerwizz reports) would read: it carries
+everything the page shows, with SHAs, dates and categories as data.
+
+## Fields
+
+| Field | What it says |
+|---|---|
+| `schema` | `gitwizz.version-history/v2` |
+| `repository` | `origin` URL without user, password, query or fragment; `null` without an origin |
+| `branchPattern` | the `--branch-pattern` used (`release/*`) |
+| `shallow` | the clone is shallow: commits beyond its boundary are missing |
+| `versions[]` | one entry per version, in the order above |
+| `versions[].version` | the tag without a leading `v`, or the branch name after the prefix |
+| `versions[].status` | `released` (tag) or `unreleased` (branch) |
+| `versions[].source` | `tag`, `branch` or `remote-branch` |
+| `versions[].reference` | the full ref: `refs/tags/v2.0.0`, `refs/heads/release/1.0`, `refs/remotes/origin/release/2.1` |
+| `versions[].commitSha`, `committedAt` | the commit the ref points at, and its committer date |
+| `versions[].taggedAt` | an annotated tag's tagger date; `null` for lightweight tags and branches |
+| `versions[].bases[]` | `version`, `reference`, `sha` of each base, highest version first; empty for a first release |
+| `versions[].changes[]` | `sha`, `subject`, `committedAt`, `kind` (`commit`/`merge`), `category`, `type`, `scope`, `description`, `breaking` |
+| `versions[].truncated` | more than `--limit` commits: `changes` is incomplete |
+| `versions[].warnings`, `warnings` | what limits the version or the whole export (truncation, shallow clone, duplicate tags) |
+
+Dates are ISO 8601 with offset (`2026-09-01T20:00:00+00:00`). Nothing is left out because it is unknown: a list is
+empty only when there is nothing in it, and `truncated` or `shallow` say when the history is incomplete.
+
+## Compatibility
+
+The schema version changes when a field is removed, renamed, retyped or changes meaning; adding an optional field
+does not. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
+branches only; no categories) and is not read as v1.
+
+## Limits
+
+- Local refs only: what isn't fetched isn't there. Deleted release branches can't be recovered; their tags remain.
+- A tag's dates are git's. When a GitHub or Azure DevOps release was published is not read.
+- Pull requests and work items aren't attached; `gitwizz history export` maps commits to them.
+- Cherry-picks are different commits: a fix cherry-picked to `release/1.0` and also on main is listed in both lines.
 
 ## Verification
 
 ```bash
-dotnet test gitwizz.slnx --filter FullyQualifiedName~VersionHistoryTests
-dotnet test gitwizz.slnx
+dotnet test gitwizz.slnx --filter "FullyQualifiedName~VersionHistory"
 ```
 
-Tests exercise tag intervals, diverged and merged-back maintenance lines, duplicate versions, a tagged branch head, annotated tags shadowed by a same-named branch, prerelease ordering, text output, the CLI options, missing refs, deterministic JSON and truncation.
+`VersionHistoryTests` covers tag ranges, diverged and merged-back maintenance lines, prereleases, tagged branch
+heads, remote-only branches, annotated and same-named tags, duplicate versions, classification, the Markdown page,
+the text output, the CLI and truncation, and validates every export against the schema. `VersionHistoryContractTests`
+rebuilds the example repository (fixed identity and clock) and compares the export with `example.json` and
+`example.md`; `GITWIZZ_UPDATE_GOLDEN=1` rewrites them.

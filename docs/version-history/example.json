@@ -1,0 +1,274 @@
+{
+  "schema": "gitwizz.version-history/v2",
+  "repository": "https://github.com/example/shop.git",
+  "branchPattern": "release/*",
+  "shallow": false,
+  "versions": [
+    {
+      "version": "2.1",
+      "status": "unreleased",
+      "source": "remote-branch",
+      "reference": "refs/remotes/origin/release/2.1",
+      "commitSha": "d44cd4f24d2b6e2d0737849b59578665901172b4",
+      "committedAt": "2026-09-01T22:00:00+00:00",
+      "taggedAt": null,
+      "bases": [
+        {
+          "version": "2.0.0",
+          "reference": "refs/tags/v2.0.0",
+          "sha": "7611dd3b3d5530d9a76900d3945b9d2dafba79de"
+        }
+      ],
+      "changes": [
+        {
+          "sha": "d44cd4f24d2b6e2d0737849b59578665901172b4",
+          "subject": "feat(ui): dark mode",
+          "committedAt": "2026-09-01T22:00:00+00:00",
+          "kind": "commit",
+          "category": "feature",
+          "type": "feat",
+          "scope": "ui",
+          "description": "dark mode",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    },
+    {
+      "version": "1.0",
+      "status": "unreleased",
+      "source": "branch",
+      "reference": "refs/heads/release/1.0",
+      "commitSha": "8e237c3885e51b0c9c2a9ff59c24703be5b16553",
+      "committedAt": "2026-09-01T21:00:00+00:00",
+      "taggedAt": null,
+      "bases": [
+        {
+          "version": "1.0.1",
+          "reference": "refs/tags/v1.0.1",
+          "sha": "d9dfaa90f80fbc8b39caf00e29f184a069999b6c"
+        }
+      ],
+      "changes": [
+        {
+          "sha": "8e237c3885e51b0c9c2a9ff59c24703be5b16553",
+          "subject": "fix(api): reject negative quantities",
+          "committedAt": "2026-09-01T21:00:00+00:00",
+          "kind": "commit",
+          "category": "fix",
+          "type": "fix",
+          "scope": "api",
+          "description": "reject negative quantities",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    },
+    {
+      "version": "2.0.0",
+      "status": "released",
+      "source": "tag",
+      "reference": "refs/tags/v2.0.0",
+      "commitSha": "7611dd3b3d5530d9a76900d3945b9d2dafba79de",
+      "committedAt": "2026-09-01T19:00:00+00:00",
+      "taggedAt": "2026-09-01T20:00:00+00:00",
+      "bases": [
+        {
+          "version": "1.1.0",
+          "reference": "refs/tags/v1.1.0",
+          "sha": "84117a1a3104c40699b431ca10f2c695271d31f8"
+        },
+        {
+          "version": "1.0.1",
+          "reference": "refs/tags/v1.0.1",
+          "sha": "d9dfaa90f80fbc8b39caf00e29f184a069999b6c"
+        }
+      ],
+      "changes": [
+        {
+          "sha": "7611dd3b3d5530d9a76900d3945b9d2dafba79de",
+          "subject": "fix: correct the CSV column order",
+          "committedAt": "2026-09-01T19:00:00+00:00",
+          "kind": "commit",
+          "category": "fix",
+          "type": "fix",
+          "scope": null,
+          "description": "correct the CSV column order",
+          "breaking": false
+        },
+        {
+          "sha": "74b69d5fc196e32436dd96067adf6d5d13e0dfed",
+          "subject": "feat(api)!: drop the v1 order endpoint",
+          "committedAt": "2026-09-01T17:00:00+00:00",
+          "kind": "commit",
+          "category": "feature",
+          "type": "feat",
+          "scope": "api",
+          "description": "drop the v1 order endpoint",
+          "breaking": true
+        },
+        {
+          "sha": "ea23196c80e0097fa725b38832d53be3c29a7682",
+          "subject": "Merge branch 'release/1.0'",
+          "committedAt": "2026-09-01T16:00:00+00:00",
+          "kind": "merge",
+          "category": "merge",
+          "type": null,
+          "scope": null,
+          "description": "Merge branch 'release/1.0'",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    },
+    {
+      "version": "2.0.0-rc.1",
+      "status": "released",
+      "source": "tag",
+      "reference": "refs/tags/v2.0.0-rc.1",
+      "commitSha": "74b69d5fc196e32436dd96067adf6d5d13e0dfed",
+      "committedAt": "2026-09-01T17:00:00+00:00",
+      "taggedAt": "2026-09-01T18:00:00+00:00",
+      "bases": [
+        {
+          "version": "1.1.0",
+          "reference": "refs/tags/v1.1.0",
+          "sha": "84117a1a3104c40699b431ca10f2c695271d31f8"
+        },
+        {
+          "version": "1.0.1",
+          "reference": "refs/tags/v1.0.1",
+          "sha": "d9dfaa90f80fbc8b39caf00e29f184a069999b6c"
+        }
+      ],
+      "changes": [
+        {
+          "sha": "74b69d5fc196e32436dd96067adf6d5d13e0dfed",
+          "subject": "feat(api)!: drop the v1 order endpoint",
+          "committedAt": "2026-09-01T17:00:00+00:00",
+          "kind": "commit",
+          "category": "feature",
+          "type": "feat",
+          "scope": "api",
+          "description": "drop the v1 order endpoint",
+          "breaking": true
+        },
+        {
+          "sha": "ea23196c80e0097fa725b38832d53be3c29a7682",
+          "subject": "Merge branch 'release/1.0'",
+          "committedAt": "2026-09-01T16:00:00+00:00",
+          "kind": "merge",
+          "category": "merge",
+          "type": null,
+          "scope": null,
+          "description": "Merge branch 'release/1.0'",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    },
+    {
+      "version": "1.1.0",
+      "status": "released",
+      "source": "tag",
+      "reference": "refs/tags/v1.1.0",
+      "commitSha": "84117a1a3104c40699b431ca10f2c695271d31f8",
+      "committedAt": "2026-09-01T14:00:00+00:00",
+      "taggedAt": "2026-09-01T15:00:00+00:00",
+      "bases": [
+        {
+          "version": "1.0.0",
+          "reference": "refs/tags/v1.0.0",
+          "sha": "37ed9971956cd8fa64eb43382d6d6790d115ef9f"
+        }
+      ],
+      "changes": [
+        {
+          "sha": "84117a1a3104c40699b431ca10f2c695271d31f8",
+          "subject": "perf: cache price lookups",
+          "committedAt": "2026-09-01T14:00:00+00:00",
+          "kind": "commit",
+          "category": "performance",
+          "type": "perf",
+          "scope": null,
+          "description": "cache price lookups",
+          "breaking": false
+        },
+        {
+          "sha": "8987a14d3290f43fd8d7af17c7b745d163324af2",
+          "subject": "feat(orders): export orders as CSV",
+          "committedAt": "2026-09-01T13:00:00+00:00",
+          "kind": "commit",
+          "category": "feature",
+          "type": "feat",
+          "scope": "orders",
+          "description": "export orders as CSV",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    },
+    {
+      "version": "1.0.1",
+      "status": "released",
+      "source": "tag",
+      "reference": "refs/tags/v1.0.1",
+      "commitSha": "d9dfaa90f80fbc8b39caf00e29f184a069999b6c",
+      "committedAt": "2026-09-01T11:00:00+00:00",
+      "taggedAt": "2026-09-01T12:00:00+00:00",
+      "bases": [
+        {
+          "version": "1.0.0",
+          "reference": "refs/tags/v1.0.0",
+          "sha": "37ed9971956cd8fa64eb43382d6d6790d115ef9f"
+        }
+      ],
+      "changes": [
+        {
+          "sha": "d9dfaa90f80fbc8b39caf00e29f184a069999b6c",
+          "subject": "fix(api): handle empty orders",
+          "committedAt": "2026-09-01T11:00:00+00:00",
+          "kind": "commit",
+          "category": "fix",
+          "type": "fix",
+          "scope": "api",
+          "description": "handle empty orders",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    },
+    {
+      "version": "1.0.0",
+      "status": "released",
+      "source": "tag",
+      "reference": "refs/tags/v1.0.0",
+      "commitSha": "37ed9971956cd8fa64eb43382d6d6790d115ef9f",
+      "committedAt": "2026-09-01T09:00:00+00:00",
+      "taggedAt": "2026-09-01T10:00:00+00:00",
+      "bases": [],
+      "changes": [
+        {
+          "sha": "37ed9971956cd8fa64eb43382d6d6790d115ef9f",
+          "subject": "chore: initial import",
+          "committedAt": "2026-09-01T09:00:00+00:00",
+          "kind": "commit",
+          "category": "other",
+          "type": "chore",
+          "scope": null,
+          "description": "initial import",
+          "breaking": false
+        }
+      ],
+      "truncated": false,
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}
