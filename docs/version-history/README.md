@@ -26,6 +26,8 @@ gitwizz version-history export -o versions.json                    # JSON: the f
 gitwizz version-history export -o docs/architecture/versions.md    # Markdown changelog page
 gitwizz version-history export -f markdown > CHANGELOG.md
 gitwizz version-history export --target main -o docs/architecture/versions.md   # main's history: unreleased first
+gitwizz version-history export --branch-pattern "release/cxm/*" --from 1.0.6 --to 1.9.0 -o versionhistory.md   # one app's releases
+gitwizz version-history export --branch-pattern "release/cxm/*" --clean -o versionhistory.md   # for end users: day and description only
 gitwizz version-history list --branch-pattern "maint/*" --limit 500
 gitwizz version-history list --repo /path/to/repository
 ```
@@ -36,6 +38,9 @@ gitwizz version-history list --repo /path/to/repository
 | `-o, --output` | stdout | the file to write |
 | `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the release branches cut from it and the releases it or they contain |
 | `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version. With `--target`, only those cut from the target |
+| `--from` | none | list only releases after this version (`1.0.6` for `release/cxm/1.0.6`); it is still the base of the next one |
+| `--to` | none | list only releases up to this version; must be higher than `--from` |
+| `--clean` | off | Markdown and text for readers outside development: each change its day and description only ([Clean output](#clean-output)); JSON is unchanged |
 | `--limit` | 200 (max 10000) | at most this many commits per version |
 | `-r, --repo` | `.` | the repository |
 
@@ -86,6 +91,11 @@ newest first in topological order. So:
   1.x releases, including what `v2.0.0-rc.1` already had. A prerelease builds on any tag.
 - **Same commit**: a tag never builds on tags on its own commit. A release branch counts every tag, its own head's
   too: a branch whose head is tagged has no unreleased changes.
+- **Release branches build on the one before**: `release/cxm/1.9.0` builds on `release/cxm/1.8.0`, the next lower
+  version in the same folder, so its changes are `git log release/cxm/1.8.0..release/cxm/1.9.0`: a repository that
+  marks releases with branches instead of tags gets one range per release. Folders are separate lines:
+  `release/cxm/1.8.0` never builds on `release/bfm/2.0.0`, even with `--branch-pattern "release/*"`. Tags the previous
+  branch contains are behind it and aren't listed as bases too.
 - **First release**: no bases, so it lists the history up to `--limit`.
 
 ## Pull requests
@@ -127,13 +137,40 @@ and `scope` are null and `description` is the subject.
 One `##` section per version: `## 2.0.0 (2026-09-01)` for a release (the annotated tag's date, else the commit's), `##
 1.0 (unreleased)` for a branch. Below it the reference, the commit, the bases and how many pull requests, direct commits
 and other merge commits it has, then its pull requests and direct commits in this order: **⚠ Breaking changes**,
-**Features**, **Fixes**, **Performance**, **Other changes**. Each pull request is one line, its commits are not listed
-again (`- **orders:** export orders as CSV (#7, 2 commits)`); merge commits that aren't a pull request's are counted,
+**Features**, **Fixes**, **Performance**, **Other changes**. Each pull request is one line starting with the day it was
+merged, its commits are not listed again (`- 2026-09-01 · **orders:** export orders as CSV (#7, 2 commits)`); a direct
+commit's line starts with its commit day; merge commits that aren't a pull request's are counted,
 not listed. Features, fixes and performance show `**scope:** description`; other changes keep their whole title or
 subject (`docs: ...`). When the repository's `origin` is an http(s) URL, pull requests link to
 `<origin without .git>/pull/<n>` (`/pullrequest/<n>` on Azure DevOps) and commits to `<origin without .git>/commit/<sha>`.
 Commit text is escaped, so a message can't add emphasis, links, HTML, tables, headings or nested lists. The page carries no generation time, so it
 only changes when the history does: commit it, and regenerate it in CI. See [example.md](example.md).
+
+### Clean output
+
+`--clean` writes the page for people who don't know what a pull request, a commit or a merge is:
+
+```markdown
+# Version history
+
+## 1.9.0 (2026-09-01)
+
+### Features
+
+- 2026-09-01 · Export orders as CSV
+
+### Fixes
+
+- 2026-08-28 · Round prices
+```
+
+- The heading is the version and its date (the tag's, else the branch head's); the target's own entry is
+  `Upcoming (main)`.
+- Each change is its day and its description: no pull request numbers, commit hashes, links, scopes, types or counts.
+  Pull request wording left in a title or message (`Merged PR 12:`, `Merge pull request #12 from ...`, `(#12)`,
+  `PR 12:`) is removed and the first letter upper-cased.
+- The same description twice in a section (a fix merged twice) is listed once, with its newest day.
+- Merge commits, references and warnings are left out; the command still reports warnings on stderr.
 
 ### In the project documentation (docwizz)
 
@@ -165,7 +202,7 @@ everything the page shows, with SHAs, dates and categories as data.
 | `versions[].reference` | the full ref: `refs/tags/v2.0.0`, `refs/heads/release/1.0`, `refs/remotes/origin/release/2.1`; a `--target` given as another ref or commit (`HEAD`) as given |
 | `versions[].commitSha`, `committedAt` | the commit the ref points at, and its committer date |
 | `versions[].taggedAt` | an annotated tag's tagger date; `null` for lightweight tags and branches |
-| `versions[].bases[]` | `version`, `reference`, `sha` of each base, highest version first; empty for a first release |
+| `versions[].bases[]` | `version`, `reference`, `sha` of each base: for a release branch the release branch before it first (`refs/heads/...` or `refs/remotes/...`), then tags, highest version first; empty for a first release |
 | `versions[].changes[]` | `sha`, `subject`, `committedAt`, `kind` (`commit`/`merge`), `category`, `type`, `scope`, `description`, `breaking`, `pullRequest` (`#12`, or `null` for a direct commit) |
 | `versions[].pullRequests[]` | `id` (`#12`), `title`, `strategy` (`merge`/`squash`), `mergeCommit`, `committedAt`, `category`, `type`, `scope`, `description`, `breaking`, `commits` (its merge or squash commit and the commits the merge brought in), newest first |
 | `versions[].truncated` | more than `--limit` commits: `changes` is incomplete |
@@ -177,7 +214,7 @@ empty only when there is nothing in it, and `truncated` or `shallow` say when th
 ## Compatibility
 
 The schema version changes when a field is removed, renamed, retyped or changes meaning; adding an optional field
-does not: `target`, `target` as a `source`, `pullRequests` and `changes[].pullRequest` came that way, and documents without them stay valid. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
+does not: `target`, `target` as a `source`, `pullRequests` and `changes[].pullRequest` came that way, and so did a release branch as a base (`bases[].reference` under `refs/heads/` or `refs/remotes/`, not only `refs/tags/`), and documents without them stay valid. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
 branches only; no categories) and is not read as v1.
 
 ## Limits

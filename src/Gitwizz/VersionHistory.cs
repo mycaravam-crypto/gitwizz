@@ -43,7 +43,7 @@ public record VersionTarget(string Name, string Reference, string Sha);
 /// Read-only local Git version discovery. Tags identify released snapshots; branches under a prefix (local, or only on a
 /// remote) identify versions still in progress. No network access, no checkout and no fetch.
 /// </summary>
-public static class VersionHistory
+public static partial class VersionHistory
 {
     public const string Schema = "gitwizz.version-history/v2";
     public const int DefaultLimit = 200;
@@ -69,16 +69,26 @@ public static class VersionHistory
     /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): its
     /// unreleased entry first (its commits since the releases it contains), then only the release branches cut from it
     /// and the tags it or those branches contain, so apps kept on separate branches never show up in each other's
-    /// history. Each version groups its commits into the pull requests they came with.
-    /// Throws ArgumentException for a limit outside 1..MaxLimit or an unusable prefix, InvalidOperationException for an
-    /// unknown target.
+    /// history. A release branch also builds on the release branch before it on its line (release/cxm/1.9.0 on
+    /// release/cxm/1.8.0), so a repository without tags still gets one range per release. Each version groups its
+    /// commits into the pull requests they came with. from (exclusive) and to (inclusive) limit the listed release
+    /// branches and tags by version; the release at from is still the base of the one after it.
+    /// Throws ArgumentException for a limit outside 1..MaxLimit, an unusable prefix or a to not above from,
+    /// InvalidOperationException for an unknown target.
     /// </summary>
-    public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/", string? target = null)
+    public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/", string? target = null,
+        string? from = null, string? to = null)
     {
         if (limit is < 1 or > MaxLimit) throw new ArgumentException($"--limit must be a number from 1 to {MaxLimit}");
         if (string.IsNullOrWhiteSpace(branchPrefix) || branchPrefix.StartsWith('-') || branchPrefix.Contains(' ') ||
             branchPrefix.Contains("..", StringComparison.Ordinal))
             throw new ArgumentException("invalid --branch-pattern: expected a literal prefix such as release/*");
+        (from, to) = (from?.Trim().TrimStart('v'), to?.Trim().TrimStart('v'));
+        if (from is "" || to is "") throw new ArgumentException("--from and --to need a version, such as 1.0.6");
+        if (from != null && to != null && CompareNatural(Number(to), Number(from)) <= 0)
+            throw new ArgumentException($"--to must be a higher version than --from: {from} -> {to}");
+        bool InRange(string version) => (from == null || CompareNatural(Number(version), Number(from)) > 0) &&
+                                        (to == null || CompareNatural(Number(version), Number(to)) <= 0);
 
         var warnings = new List<string>();
         var tags = ReadTags(git, warnings);
@@ -104,14 +114,29 @@ public static class VersionHistory
             foreach (var line in lines) contained.UnionWith(Ancestors(graph, line.Sha));
             tags = [.. tags.Where(t => contained.Contains(t.Sha))];
             entries.Add(Build(git, scope.Name, "unreleased", "target", scope.Reference, scope.Sha, dates[scope.Sha], null,
-                Bases(graph, scope.Sha, false, false, tagsBySha), limit, shallow));
+                TagBases(Bases(graph, scope.Sha, false, false, tagsBySha)), limit, shallow));
         }
-        foreach (var line in lines)
-            entries.Add(Build(git, line.Name[branchPrefix.Length..], "unreleased", line.Source, line.Reference,
-                line.Sha, dates[line.Sha], null, Bases(graph, line.Sha, false, false, tagsBySha), limit, shallow));
-        foreach (var tag in tags)
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            var version = line.Name[branchPrefix.Length..];
+            if (!InRange(version)) continue;
+            var tagBases = Bases(graph, line.Sha, false, false, tagsBySha);
+            // The release branch before it on its line: the next older version in the same folder (cxm/ apart from bfm/).
+            var previous = lines.Skip(i + 1).FirstOrDefault(l => Folder(l.Name[branchPrefix.Length..]) == Folder(version));
+            var bases = TagBases(tagBases);
+            if (previous != null)
+            {
+                // Tags the previous release branch contains are behind it: it stands for them.
+                var behind = Ancestors(graph, previous.Sha);
+                bases = [new VersionBase(previous.Name[branchPrefix.Length..], previous.Reference, previous.Sha),
+                    .. TagBases(tagBases.Where(t => !behind.Contains(t.Sha)).ToList())];
+            }
+            entries.Add(Build(git, version, "unreleased", line.Source, line.Reference, line.Sha, dates[line.Sha], null, bases, limit, shallow));
+        }
+        foreach (var tag in tags.Where(t => InRange(t.Name.TrimStart('v'))))
             entries.Add(Build(git, tag.Name.TrimStart('v'), "released", "tag", "refs/tags/" + tag.Name, tag.Sha,
-                dates[tag.Sha], tag.TaggedAt, Bases(graph, tag.Sha, true, tag.Pre == null, tagsBySha), limit, shallow));
+                dates[tag.Sha], tag.TaggedAt, TagBases(Bases(graph, tag.Sha, true, tag.Pre == null, tagsBySha)), limit, shallow));
 
         if (entries.Count == 0) warnings.Add("no SemVer tags or matching release branches found");
         if (shallow) warnings.Add("shallow clone: commits beyond the shallow boundary are missing; fetch more history for complete versions");
@@ -320,8 +345,16 @@ public static class VersionHistory
         return bases;
     }
 
+    static List<VersionBase> TagBases(List<Tag> tags) => [.. tags.Select(t => new VersionBase(t.Name.TrimStart('v'), "refs/tags/" + t.Name, t.Sha))];
+
+    /// <summary>The folder of a release branch's version ("cxm" for cxm/1.9.0, "" for 1.9.0): release lines are per folder.</summary>
+    static string Folder(string version) => version.LastIndexOf('/') is var i and >= 0 ? version[..i] : "";
+
+    /// <summary>The version number of a release branch's version (1.9.0 for cxm/1.9.0), what --from and --to compare.</summary>
+    static string Number(string version) => version[(version.LastIndexOf('/') + 1)..];
+
     static VersionEntry Build(Git git, string version, string status, string source,
-        string reference, string sha, string committedAt, string? taggedAt, List<Tag> bases, int limit, bool shallow)
+        string reference, string sha, string committedAt, string? taggedAt, List<VersionBase> bases, int limit, bool shallow)
     {
         // Newest first in topological order, at most limit (one more to know whether there are more).
         var range = Git.Exec(git.RepoDir, "git", ["rev-list", "--topo-order", $"--max-count={limit + 1}", "--stdin"],
@@ -338,9 +371,7 @@ public static class VersionHistory
         if (bases.Count == 0 && shallow)
             warnings.Add("no earlier release reachable in this shallow clone: the commits listed may include released ones");
         var (changes, prs) = PullRequests(ReadChanges(git, shas, out var commits), commits, warnings);
-        return new VersionEntry(version, status, source, reference, sha, committedAt, taggedAt,
-            [.. bases.Select(b => new VersionBase(b.Name.TrimStart('v'), "refs/tags/" + b.Name, b.Sha))],
-            changes, truncated, warnings, prs);
+        return new VersionEntry(version, status, source, reference, sha, committedAt, taggedAt, bases, changes, truncated, warnings, prs);
     }
 
     /// <summary>
@@ -483,17 +514,30 @@ public static class VersionHistory
     /// <summary>The document as JSON with history export's options: indented, camelCase, nulls written, "+" kept.</summary>
     public static string Json(VersionHistoryExport result) => JsonSerializer.Serialize(result, History.JsonOptions);
 
-    /// <summary>A terminal listing: per version its reference, bases, pull requests and the commits that came without one.</summary>
-    public static string Text(VersionHistoryExport result)
+    /// <summary>
+    /// A terminal listing: per version its reference, bases, pull requests and the commits that came without one. clean:
+    /// per version its heading and the day and description of each change (CleanChanges), nothing else.
+    /// </summary>
+    public static string Text(VersionHistoryExport result, bool clean = false)
     {
         var lines = new List<string>();
+        if (clean)
+        {
+            foreach (var v in result.Versions)
+            {
+                lines.Add(CleanHeading(v, result.Target));
+                foreach (var (_, changes) in CleanChanges(v))
+                    lines.AddRange(changes.Select(c => $"  {c.Day} {c.Text}"));
+            }
+            return string.Join("\n", lines) + "\n";
+        }
         foreach (var v in result.Versions)
         {
             lines.Add($"{v.Version} [{v.Status}] {v.Reference} ({Short(v.CommitSha)})");
             lines.Add($"  since: {(v.Bases.Count == 0 ? "(initial)" : string.Join(", ", v.Bases.Select(b => b.Version)))} | " +
                       $"pull requests: {v.PullRequests.Count} | commits: {v.Changes.Count}" + (v.Truncated ? " (truncated)" : ""));
-            foreach (var pr in v.PullRequests) lines.Add($"    {pr.Id} {pr.Title}");
-            foreach (var c in v.Changes.Where(c => c.PullRequest == null)) lines.Add($"    {Short(c.Sha)} {c.Subject}");
+            foreach (var pr in v.PullRequests) lines.Add($"    {Day(pr.CommittedAt)} {pr.Id} {pr.Title}");
+            foreach (var c in v.Changes.Where(c => c.PullRequest == null)) lines.Add($"    {Day(c.CommittedAt)} {Short(c.Sha)} {c.Subject}");
             foreach (var warning in v.Warnings) lines.Add($"  warning: {warning}");
         }
         foreach (var warning in result.Warnings) lines.Add("warning: " + warning);
@@ -505,12 +549,13 @@ public static class VersionHistory
 
     /// <summary>
     /// A changelog page: per version a heading, its reference and bases, then its pull requests, and the commits that
-    /// came without one, grouped as breaking changes, features, fixes, performance and other changes. Other merge
+    /// came without one, each with its day, grouped as breaking changes, features, fixes, performance and other changes. Other merge
     /// commits are counted, not listed. Pull requests and commits link to the repository when its URL is http(s).
     /// Deterministic: no generation time, so the page only changes with the history.
     /// </summary>
-    public static string Markdown(VersionHistoryExport result)
+    public static string Markdown(VersionHistoryExport result, bool clean = false)
     {
+        if (clean) return CleanMarkdown(result);
         var web = WebUrl(result.Repository);
         string Commit(string sha) => web == null ? $"`{Short(sha)}`" : $"[`{Short(sha)}`]({web}/commit/{sha})";
         var azure = web != null && (web.Contains("dev.azure.com", StringComparison.OrdinalIgnoreCase) ||
@@ -576,13 +621,73 @@ public static class VersionHistory
             foreach (var pr in p)
             {
                 var own = pr.Commits.Count - (pr.Strategy == "merge" ? 1 : 0);
-                md.Append("- ").Append(Line(pr.Category, pr.Scope, pr.Description, pr.Title))
+                md.Append($"- {Day(pr.CommittedAt)} · ").Append(Line(pr.Category, pr.Scope, pr.Description, pr.Title))
                   .Append($" ({Pr(pr.Id)}{(pr.Strategy == "merge" ? $", {Plural(own, "commit")}" : "")})\n");
             }
             foreach (var change in c)
-                md.Append("- ").Append(Line(change.Category, change.Scope, change.Description, change.Subject)).Append($" ({Commit(change.Sha)})\n");
+                md.Append($"- {Day(change.CommittedAt)} · ").Append(Line(change.Category, change.Scope, change.Description, change.Subject))
+                  .Append($" ({Commit(change.Sha)})\n");
         }
     }
+
+    /// <summary>
+    /// The changelog for readers who don't know what a pull request, a commit or a merge is: per version a heading
+    /// (CleanHeading), then the sections, each change one line with its day and description only. No references,
+    /// links, counts or warnings (the command reports those on stderr).
+    /// </summary>
+    static string CleanMarkdown(VersionHistoryExport result)
+    {
+        var md = new StringBuilder("# Version history\n");
+        if (result.Versions.Count == 0) md.Append("\n_No versions found._\n");
+        foreach (var v in result.Versions)
+        {
+            md.Append($"\n## {CleanHeading(v, result.Target)}\n");
+            var sections = CleanChanges(v);
+            if (sections.Count == 0) md.Append("\n_No changes._\n");
+            foreach (var (heading, changes) in sections)
+            {
+                md.Append($"\n### {heading}\n\n");
+                foreach (var c in changes) md.Append($"- {c.Day} · {Escape(c.Text)}\n");
+            }
+        }
+        return md.ToString();
+    }
+
+    /// <summary>A version as a reader names it: "1.9.0 (2026-09-01)", the target's own entry "Upcoming (main)".</summary>
+    static string CleanHeading(VersionEntry v, VersionTarget? target)
+    {
+        if (v.Source == "target") return $"Upcoming ({v.Version})";
+        return $"{v.Version} ({Day(v.TaggedAt ?? v.CommittedAt)})";
+    }
+
+    /// <summary>
+    /// A version's changes by section (breaking, features, fixes, performance, other), each its day and its description
+    /// alone: a pull request's or a direct commit's, without type, scope or pull request wording ("Merged PR 12:",
+    /// "Merge pull request #12 from ...", "(#12)"), the first letter upper case. The same text twice in a section is
+    /// listed once, with its newest day.
+    /// </summary>
+    static List<(string Heading, List<(string Day, string Text)> Changes)> CleanChanges(VersionEntry v)
+    {
+        var all = v.PullRequests.Select(p => (p.Breaking, p.Category, Day: Day(p.CommittedAt), Text: CleanText(p.Description)))
+            .Concat(v.Changes.Where(c => c.PullRequest == null && c.Kind != "merge")
+                .Select(c => (c.Breaking, c.Category, Day: Day(c.CommittedAt), Text: CleanText(c.Description))))
+            .Where(c => c.Text.Length > 0).ToList();
+        var groups = new[] { ("⚠ Breaking changes", all.Where(c => c.Breaking)) }
+            .Concat(Sections.Select(s => (s.Heading, all.Where(c => !c.Breaking && c.Category == s.Category))));
+        return [.. groups.Select(g => (g.Item1, g.Item2.DistinctBy(c => c.Text, StringComparer.OrdinalIgnoreCase).Select(c => (c.Day, c.Text)).ToList()))
+            .Where(g => g.Item2.Count > 0)];
+    }
+
+    /// <summary>A description without pull request wording, the first letter upper case.</summary>
+    public static string CleanText(string description)
+    {
+        var text = CleanWording().Replace(description, " ").Trim();
+        text = Conventional.Match(text) is { Success: true } m ? m.Groups["desc"].Value.Trim() : text;
+        return text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
+    }
+
+    [GeneratedRegex(@"^Merged PR \d+:|^Merge pull request #\d+( from \S+)?|\(#\d+\)\s*$|^PR \d+:?", RegexOptions.IgnoreCase)]
+    private static partial Regex CleanWording();
 
     /// <summary>The repository's web address for commit links: an http(s) URL without .git, else null.</summary>
     static string? WebUrl(string? repository)
@@ -609,6 +714,9 @@ public static class VersionHistory
     }
 
     static string Short(string sha) => sha[..Math.Min(8, sha.Length)];
+
+    /// <summary>The day of an ISO date as written (2026-09-01): a pull request's is its merge or squash commit's.</summary>
+    static string Day(string date) => date[..Math.Min(10, date.Length)];
 
     static string Plural(int n, string word) => $"{n} {word}{(n == 1 ? "" : "s")}";
 }

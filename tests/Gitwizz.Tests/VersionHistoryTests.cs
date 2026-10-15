@@ -285,9 +285,9 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.Contains("## 1.1.0 (", md);
         Assert.Contains("Tag `v1.1.0` at [`", md);
         Assert.Contains("· since 1.0.0 · 3 direct commits\n", md);
-        Assert.Contains($"### Features\n\n- **orders:** export \\*all\\* orders ([`{feature[..8]}`](https://github.com/example/shop/commit/{feature}))", md);
-        Assert.Contains($"### ⚠ Breaking changes\n\n- refactor\\!: rename \\<Order\\> to \\[Sale\\] ([`{breaking[..8]}`]", md);
-        Assert.Contains("### Other changes\n\n- \\- leading dash (", md);
+        Assert.Contains($"· **orders:** export \\*all\\* orders ([`{feature[..8]}`](https://github.com/example/shop/commit/{feature}))", md);
+        Assert.Contains($"· refactor\\!: rename \\<Order\\> to \\[Sale\\] ([`{breaking[..8]}`]", md);
+        Assert.Contains("· \\- leading dash (", md);
         Assert.Contains("· first release · 1 direct commit", md);
         Assert.True(md.IndexOf("### ⚠ Breaking changes", StringComparison.Ordinal) < md.IndexOf("### Features", StringComparison.Ordinal));
     }
@@ -423,6 +423,79 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
+    public void Release_branches_without_tags_each_list_what_they_add_to_the_one_before()
+    {
+        // Two apps, no tags: release/cxm/* and release/bfm/* cut from develop one after the other.
+        Commit("chore: start");
+        G("checkout", "-q", "-b", "develop");
+        var base106 = Commit("feat: cxm before 1.0.6");
+        G("branch", "release/cxm/1.0.6");
+        var bfm = Commit("feat: bfm work");
+        G("branch", "release/bfm/2.0.0");
+        var a = Commit("feat(cart): cxm for 1.8.0");
+        G("branch", "release/cxm/1.8.0");
+        var b1 = Commit("fix: cxm for 1.9.0");
+        G("branch", "release/cxm/1.9.0");
+        G("checkout", "-q", "release/cxm/1.8.0");
+        var hotfix = Commit("fix: hotfix only on 1.8.0");
+        G("checkout", "-q", "develop");
+
+        var cxm = Export(prefix: "release/cxm/");
+        Assert.Equal(["1.9.0", "1.8.0", "1.0.6"], cxm.Versions.Select(v => v.Version));
+        Assert.Equal(["1.8.0"], cxm.Versions[0].Bases.Select(x => x.Version));
+        Assert.Equal("refs/heads/release/cxm/1.8.0", cxm.Versions[0].Bases[0].Reference);
+        Assert.Equal([b1], cxm.Versions[0].Changes.Select(c => c.Sha));                 // 1.8.0..1.9.0, as git log does
+        Assert.Equal([hotfix, a, bfm], cxm.Versions[1].Changes.Select(c => c.Sha));     // 1.0.6..1.8.0
+        Assert.Empty(cxm.Versions[2].Bases);                                             // the first release
+        Assert.Contains(base106, cxm.Versions[2].Changes.Select(c => c.Sha));
+
+        // One pattern for both apps: each folder is its own line, so cxm/1.8.0 builds on cxm/1.0.6, not on bfm/2.0.0.
+        var all = Export(prefix: "release/").Versions.ToDictionary(v => v.Version);
+        Assert.Equal(["cxm/1.0.6"], all["cxm/1.8.0"].Bases.Select(x => x.Version));
+        Assert.Empty(all["bfm/2.0.0"].Bases);
+
+        // --from 1.0.6 --to 1.8.0: 1.8.0 alone, still since 1.0.6.
+        var range = VersionHistory.Export(_git, branchPrefix: "release/cxm/", from: "1.0.6", to: "1.8.0");
+        Assert.Equal(["1.8.0"], range.Versions.Select(v => v.Version));
+        Assert.Equal(["1.0.6"], range.Versions[0].Bases.Select(x => x.Version));
+        Assert.Contains("· since 1.0.6 · 3 direct commits", VersionHistory.Markdown(range));
+        Assert.Throws<ArgumentException>(() => VersionHistory.Export(_git, from: "1.9.0", to: "1.8.0"));
+        Assert.Equal("1.0.6", Cli.Parse(["--from", "1.0.6", "--to", "1.9.0"], "version-history")["from"]);
+    }
+
+    [Fact]
+    public void Clean_output_has_only_the_day_and_description_of_each_change()
+    {
+        Commit("chore: initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "feature/csv");
+        Commit("feat(orders): export as CSV");
+        G("checkout", "-q", "main");
+        G("merge", "-q", "--no-ff", "-m", "Merge pull request #12 from me/feature/csv\n\nfeat(orders): CSV export", "feature/csv");
+        Commit("fix: round prices (#13)");
+        Commit("Merged PR 14: Kundenliste schneller laden");
+        Commit("docs: update the manual");
+        Commit("fix: round prices (#16)"); // the same change again: listed once
+        G("tag", "v1.1.0");
+        G("remote", "add", "origin", "https://github.com/example/shop.git");
+
+        var history = Export();
+        var day = history.Versions[0].CommittedAt[..10];
+        var md = VersionHistory.Markdown(history, clean: true);
+        Assert.StartsWith($"# Version history\n\n## 1.1.0 ({day})\n\n### Features\n\n- {day} · CSV export\n\n### Fixes\n\n- {day} · Round prices\n", md);
+        Assert.Contains($"### Other changes\n\n- {day} · Kundenliste schneller laden\n- {day} · Update the manual\n", md);
+        Assert.Contains($"## 1.0.0 ({day})\n\n### Other changes\n\n- {day} · Initial\n", md);
+        foreach (var jargon in new[] { "#1", "PR", "pull", "merge", "Merge", "commit", "`", "http", "since", "orders:" })
+            Assert.DoesNotContain(jargon, md);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(md, "Round prices"));
+
+        Assert.Contains($"1.1.0 ({day})\n  {day} CSV export\n", VersionHistory.Text(history, clean: true));
+        Assert.Equal("Upcoming (main)", VersionHistory.Text(Export(target: "main"), clean: true).Split('\n')[0]);
+        Assert.Equal("true", Cli.Parse(["--clean"], "version-history")["clean"]);
+        Assert.Equal("Fix the login", VersionHistory.CleanText("Merge pull request #7 from me/x fix the login"));
+    }
+
+    [Fact]
     public void Pull_requests_group_the_commits_they_came_with()
     {
         Commit("chore: initial");
@@ -458,12 +531,14 @@ public sealed class VersionHistoryTests : IDisposable
         G("remote", "add", "origin", "https://github.com/example/shop.git");
         var md = VersionHistory.Markdown(Export(target: "main"));
         Assert.Contains("· 4 pull requests and 1 direct commit\n", md);
-        Assert.Contains("### Features\n\n- **orders:** CSV export ([#12](https://github.com/example/shop/pull/12), 2 commits)\n", md);
-        Assert.Contains("### Fixes\n\n- round prices ([#13](https://github.com/example/shop/pull/13))\n", md);
-        Assert.Contains("- Tidy up ([#15](https://github.com/example/shop/pull/15), 1 commit)\n", md);
-        Assert.Contains("- docs: readme ([`", md);
+        var day = main.PullRequests[3].CommittedAt[..10]; // the merge commit's day
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}$", day);
+        Assert.Contains($"### Features\n\n- {day} · **orders:** CSV export ([#12](https://github.com/example/shop/pull/12), 2 commits)\n", md);
+        Assert.Contains("· round prices ([#13](https://github.com/example/shop/pull/13))\n", md);
+        Assert.Contains("· Tidy up ([#15](https://github.com/example/shop/pull/15), 1 commit)\n", md);
+        Assert.Contains("· docs: readme ([`", md);
         Assert.DoesNotContain("export as CSV", md); // a pull request's commits are not listed again
-        Assert.Contains("#12 feat(orders): CSV export", VersionHistory.Text(Export(target: "main")));
+        Assert.Contains($"{day} #12 feat(orders): CSV export", VersionHistory.Text(Export(target: "main")));
     }
 
     [Fact]

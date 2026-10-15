@@ -1047,7 +1047,10 @@ only on a remote, are **unreleased**, and the branch name after the prefix is th
 pull requests (merge commits `Merge pull request #12` / `Merged PR 12:`, squash commits `title (#12)`), and the commits
 made without one, that none of the releases it builds on contain: `v1.1.0` on main builds on `v1.0.0` even when `v1.0.1` exists
 on `release/1.0`, and after `release/1.0` is merged back, `v2.0.0` builds on both, so the backport is listed once. A
-release builds on releases only, so `v2.0.0` spans its release candidates. Commits are grouped by their Conventional
+release builds on releases only, so `v2.0.0` spans its release candidates. A release branch builds on the one before
+it in its folder (`release/cxm/1.9.0` on `release/cxm/1.8.0`: `git log 1.8.0..1.9.0`), so releases marked by branches
+alone work too, and `--from 1.0.6 --to 1.9.0` lists just that span. `--clean` writes the page for end users: each
+change only its day and description, with no pull request numbers, commits or links. Commits are grouped by their Conventional
 Commits type: breaking changes, features, fixes, performance, other; a pull request by its title. With `--target main`
 it is the history of one branch: main's unreleased pull requests come first, then only the release branches cut from
 main and the releases main or they contain, so apps kept on separate branches (`--target app-b`) each get their own
