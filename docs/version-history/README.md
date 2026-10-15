@@ -33,7 +33,7 @@ gitwizz version-history list --repo /path/to/repository
 |---|---|---|
 | `-f, --format` | from the `-o` extension (`.md`/`.markdown`, `.json`, `.txt`), else `text` for `list` and `json` for `export` | `text`, `json` or `markdown` (`md`) |
 | `-o, --output` | stdout | the file to write |
-| `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the releases it contains |
+| `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the releases it contains; no release branches |
 | `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version |
 | `--limit` | 200 (max 10000) | at most this many commits per version |
 | `-r, --repo` | `.` | the repository |
@@ -58,8 +58,9 @@ gitwizz version-history list --repo /path/to/repository
   with the commits it has since the releases it contains, the same bases rule as below.
 - **Only its releases**: tags the branch contains. A patch released only on `release/1.0` (`v1.0.1`) is not a
   release of main until `release/1.0` is merged back; then it is.
-- **Release branches stay listed**, as versions in progress next to it; a target that is a release branch itself is
-  listed once, as the target.
+- **Nothing it doesn't contain**: no release branches (they are versions in progress, not part of the branch yet) and
+  no tags of other lines, so in a repository with several apps on their own branches, `--target app-b` lists only
+  app-b's work. A release branch as the target is its own history: its changes, then the releases it contains.
 - The branch is the local one, else `origin/<name>` (a CI checkout often has no local branch), else any ref or commit
   git resolves (`HEAD`, a tag); an unknown name stops with "unknown branch or ref".
 - The document names it in `target` (`name`, `reference`, `sha`); without `--target`, `target` is null and nothing

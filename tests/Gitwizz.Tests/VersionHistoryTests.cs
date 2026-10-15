@@ -354,23 +354,51 @@ public sealed class VersionHistoryTests : IDisposable
 
         var history = Export(target: "main");
         Assert.Equal(new VersionTarget("main", "refs/heads/main", feature), history.Target);
-        Assert.Equal(["main", "1.0", "1.1.0", "1.0.0"], history.Versions.Select(v => v.Version));
+        Assert.Equal(["main", "1.1.0", "1.0.0"], history.Versions.Select(v => v.Version)); // no release/1.0: not main's
         var main = history.Versions[0];
         Assert.Equal(("unreleased", "target", "refs/heads/main"), (main.Status, main.Source, main.Reference));
         Assert.Equal(["1.1.0"], main.Bases.Select(b => b.Version));
         Assert.Equal([feature, fix], main.Changes.Select(c => c.Sha));
-        Assert.Equal(["1.0.1"], history.Versions[1].Bases.Select(b => b.Version)); // the release branch still builds on its own tag
 
         var md = VersionHistory.Markdown(history);
         Assert.Contains("The history of `main`", md);
         Assert.Contains("## main (unreleased)\n\nBranch `main` at ", md);
         Assert.DoesNotContain("## 1.0.1", md);
+        Assert.DoesNotContain("## 1.0 (unreleased)", md);
+        Assert.DoesNotContain("in progress", md);
 
         // Without --target nothing changes: no target, every tag, no entry for main.
         var all = Export();
         Assert.Null(all.Target);
         Assert.Equal(["1.0", "1.1.0", "1.0.1", "1.0.0"], all.Versions.Select(v => v.Version));
         Assert.Contains("\"target\": null", VersionHistory.Json(all));
+    }
+
+    [Fact]
+    public void Apps_on_separate_branches_each_get_only_their_own_history()
+    {
+        // App A on main, app B on an unrelated branch: neither history may show the other's tags or release branches.
+        Commit("feat: app a");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "release/1.1");
+        Commit("fix: app a maintenance");
+        G("checkout", "-q", "--orphan", "app-b");
+        G("rm", "-q", "-rf", ".");
+        var b = Commit("feat: app b");
+        G("tag", "2.0.0");
+        G("checkout", "-q", "-b", "release/2.1");
+        Commit("fix: app b in progress");
+        G("checkout", "-q", "app-b");
+        var pending = Commit("feat: app b merged, not released");
+
+        var appA = Export(target: "main");
+        Assert.Equal(["main", "1.0.0"], appA.Versions.Select(v => v.Version));
+        Assert.Empty(appA.Versions[0].Changes);
+
+        var appB = Export(target: "app-b");
+        Assert.Equal(["app-b", "2.0.0"], appB.Versions.Select(v => v.Version));
+        Assert.Equal([pending], appB.Versions[0].Changes.Select(c => c.Sha));
+        Assert.Equal([b], appB.Versions[1].Changes.Select(c => c.Sha));
     }
 
     [Fact]
@@ -391,7 +419,7 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
-    public void A_release_branch_as_target_is_listed_once_and_origin_stands_in_for_a_missing_local_branch()
+    public void A_release_branch_as_target_is_its_own_history_and_origin_stands_in_for_a_missing_local_branch()
     {
         Commit("initial");
         G("tag", "v1.0.0");
