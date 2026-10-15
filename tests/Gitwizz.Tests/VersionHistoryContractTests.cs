@@ -14,7 +14,8 @@ namespace Gitwizz.Tests;
 public sealed class VersionHistoryContractTests : IDisposable
 {
     public static readonly string Docs = Path.Combine(FindRoot(), "docs", "version-history");
-    static readonly JsonSchema Schema = JsonSchema.FromText(File.ReadAllText(Path.Combine(Docs, "gitwizz.version-history.v2.schema.json")));
+    // Loaded once for every test class: JsonSchema.Net registers a schema globally by its $id, and a second load throws.
+    public static readonly JsonSchema Schema = JsonSchema.FromText(File.ReadAllText(Path.Combine(Docs, "gitwizz.version-history.v2.schema.json")));
 
     readonly string _dir = Directory.CreateTempSubdirectory("gitwizz-version-contract").FullName;
     readonly Dictionary<string, string> _env = new()

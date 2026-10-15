@@ -7,9 +7,6 @@ namespace Gitwizz.Tests;
 
 public sealed class VersionHistoryTests : IDisposable
 {
-    static readonly JsonSchema Schema = JsonSchema.FromText(File.ReadAllText(Path.Combine(VersionHistoryContractTests.Docs,
-        "gitwizz.version-history.v2.schema.json")));
-
     readonly string _dir = Directory.CreateTempSubdirectory("gitwizz-version-history").FullName;
     readonly Git _git;
     int _counter;
@@ -36,7 +33,7 @@ public sealed class VersionHistoryTests : IDisposable
     VersionHistoryExport Export(int limit = VersionHistory.DefaultLimit, string prefix = "release/")
     {
         var export = VersionHistory.Export(_git, limit, prefix);
-        var result = Schema.Evaluate(JsonDocument.Parse(VersionHistory.Json(export)).RootElement,
+        var result = VersionHistoryContractTests.Schema.Evaluate(JsonDocument.Parse(VersionHistory.Json(export)).RootElement,
             new EvaluationOptions { OutputFormat = OutputFormat.List });
         Assert.True(result.IsValid, string.Join("\n", (result.Details ?? []).Where(d => d.Errors is { Count: > 0 })
             .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Key}: {e.Value}")).Take(20)));
