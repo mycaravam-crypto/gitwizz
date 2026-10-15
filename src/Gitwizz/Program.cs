@@ -20,7 +20,7 @@ try
 {
     // evaluate / explain take the pull request as their first argument.
     string? subject = command is "evaluate" or "explain" or "guide" or "context" or "trace" or "evidence" or "env" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
-    var opt = Cli.Parse(command is "env" or "cache" or "history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
+    var opt = Cli.Parse(command is "env" or "cache" or "history" or "version-history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
         var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
@@ -49,6 +49,9 @@ try
     if (command == "history")
         return Cli.HistoryExport(rest.Length > 0 && rest[0] == "export" ? rest[0]
             : throw new ArgumentException("need a history command: gitwizz history export --since <ref>"), opt, err);
+    if (command == "version-history")
+        return Cli.VersionHistoryCommand(rest.Length > 0 && rest[0] is "list" or "export" ? rest[0]
+            : throw new ArgumentException("need a version-history command: gitwizz version-history list | export"), opt, err);
     if (command == "trace")
         return Cli.Trace(subject ?? throw new ArgumentException("need a pull request: gitwizz trace <pr>"), opt, err);
     if (command == "context")
@@ -90,6 +93,7 @@ public static partial class Cli
         ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
+        ["version-history"] = ["limit", "branch-pattern", "format", "output", "repo"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree"];
@@ -559,6 +563,27 @@ public static partial class Cli
         return 0;
     }
 
+    /// <summary>Read-only hybrid version history of SemVer tags and local release branches.</summary>
+    public static int VersionHistoryCommand(string sub, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var format = opt.GetValueOrDefault("format", sub == "list" ? "text" : "json");
+        if (format is not ("json" or "text"))
+            throw new ArgumentException($"unknown format '{format}' (json, text)");
+        var limit = opt.TryGetValue("limit", out var raw)
+            ? int.TryParse(raw, out var n) && n is > 0 and <= VersionHistory.MaxLimit
+                ? n : throw new ArgumentException($"--limit must be a number from 1 to {VersionHistory.MaxLimit}")
+            : VersionHistory.DefaultLimit;
+        var pattern = opt.GetValueOrDefault("branch-pattern", "release/*");
+        if (!pattern.EndsWith('*') || pattern[..^1].Contains('*'))
+            throw new ArgumentException("--branch-pattern must be a prefix ending in * (for example release/*)");
+        var export = VersionHistory.Export(git, limit, pattern[..^1]);
+        foreach (var warning in export.Warnings) err.MarkupLine($"[yellow]![/] {Markup.Escape(warning)}");
+        Write(format == "json" ? VersionHistory.Json(export) + "\n" : VersionHistory.Text(export),
+            format, opt.GetValueOrDefault("output"), err);
+        return 0;
+    }
+
     /// <summary>
     /// Removes a PR's test environment (gitwizz env down 42), e.g. one kept with environment.keep or left by an
     /// interrupted run. Idempotent: removing a missing environment succeeds.
@@ -757,7 +782,7 @@ public static partial class Cli
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
                                                 --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
-              gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
+              gitwizz version-history list | export [[options]] released tags and active release branches\n              gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
               gitwizz benchmark [[options]]      measure AI review quality on labelled cases
               gitwizz trace <pr> [[options]]     which tests the change needs and why; acceptance criteria -> tests -> results
@@ -808,6 +833,12 @@ public static partial class Cli
                   --commit-lookups <n>  ask the provider for the work items linked to the newest n commits [grey](default: 500, 0 = none;[/]
                                         [grey]azure-devops only, 4 at a time, 1 minute each; the rest: providerLinks "unknown")[/]
                   --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v2, docs/history/README.md)
+
+            [bold]Version history[/]
+                  --branch-pattern <glob> matching local release branches [grey](default: release/*)[/]
+                  --limit <n>           at most n commits per version [grey](default: 200)[/]
+                  -f, --format <name>   json | text [grey](list defaults to text; export to json)[/]
+                  -o, --output <file>   write the report to a file instead of stdout
 
             [bold]Benchmark[/]
                   --cases <dir>         labelled cases [grey](default: benchmark.cases in .gitwizz.yml, else benchmark)[/]
