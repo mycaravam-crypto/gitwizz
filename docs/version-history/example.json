@@ -2,6 +2,7 @@
   "schema": "gitwizz.version-history/v2",
   "repository": "https://github.com/example/shop.git",
   "branchPattern": "release/*",
+  "target": null,
   "shallow": false,
   "versions": [
     {
