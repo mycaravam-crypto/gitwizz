@@ -93,7 +93,7 @@ public static partial class Cli
         ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
-        ["version-history"] = ["limit", "branch-pattern", "format", "output", "repo"],
+        ["version-history"] = ["target", "limit", "branch-pattern", "format", "output", "repo"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree"];
@@ -569,7 +569,8 @@ public static partial class Cli
     /// <summary>
     /// Read-only version history of SemVer tags and release branches (gitwizz version-history list | export): text, JSON
     /// (gitwizz.version-history/v2) or a Markdown changelog page. Without --format: from the --output extension (.md,
-    /// .json, .txt), else text for list and JSON for export.
+    /// .json, .txt), else text for list and JSON for export. --target: the history of that branch (its unreleased
+    /// changes first, then only the releases it contains).
     /// </summary>
     public static int VersionHistoryCommand(string sub, Dictionary<string, string> opt, IAnsiConsole err)
     {
@@ -593,7 +594,7 @@ public static partial class Cli
         var pattern = opt.GetValueOrDefault("branch-pattern", "release/*");
         if (!pattern.EndsWith('*') || pattern[..^1].Contains('*'))
             throw new ArgumentException("--branch-pattern must be a prefix ending in * (for example release/*)");
-        var export = VersionHistory.Export(git, limit, pattern[..^1]);
+        var export = VersionHistory.Export(git, limit, pattern[..^1], opt.GetValueOrDefault("target"));
         foreach (var warning in export.Warnings) err.MarkupLine($"[yellow]![/] {Markup.Escape(warning)}");
         Write(format switch
         {
@@ -700,7 +701,10 @@ public static partial class Cli
             { Analysis = analysis };
     }
 
-    /// <summary>One pull request with its linked work items; without an explicit target, against the branch it targets.</summary>
+    /// <summary>
+    /// One pull request with its linked work items; without an explicit target, against the branch it targets. One the
+    /// open list doesn't have is looked up on its own (LoadClosed): allowClosed takes it when it's merged or closed.
+    /// </summary>
     static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadOne(Git git, string provider, ref string target, string id, bool targetGiven,
         bool allowClosed = false)
     {
@@ -899,6 +903,7 @@ public static partial class Cli
                   --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v2, docs/history/README.md)
 
             [bold]Version history[/]
+                  -t, --target <branch> the branch the history is about: its unreleased changes first, then only the releases it contains
                   --branch-pattern <prefix*> branches that are release lines, local or on a remote [grey](default: release/*)[/]
                   --limit <n>           at most n commits per version [grey](default: 200)[/]
                   -f, --format <name>   json | text | markdown [grey](default: from the -o extension, else text for list, json for export)[/]

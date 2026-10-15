@@ -1037,6 +1037,7 @@ no credential is exported; author names and e-mail addresses aren't exported eit
 ```bash
 gitwizz version-history list                                       # text: each version, its bases and its commits
 gitwizz version-history export -o docs/architecture/versions.md    # a Markdown changelog page
+gitwizz version-history export -t main -o CHANGELOG.md             # main's history: its unreleased changes first
 gitwizz version-history export -o versions.json                    # JSON (gitwizz.version-history/v2)
 ```
 
@@ -1046,7 +1047,9 @@ only on a remote, are **unreleased**, and the branch name after the prefix is th
 commits that none of the releases it builds on contain: `v1.1.0` on main builds on `v1.0.0` even when `v1.0.1` exists
 on `release/1.0`, and after `release/1.0` is merged back, `v2.0.0` builds on both, so the backport is listed once. A
 release builds on releases only, so `v2.0.0` spans its release candidates. Commits are grouped by their Conventional
-Commits type: breaking changes, features, fixes, performance, other.
+Commits type: breaking changes, features, fixes, performance, other. With `--target main` it is the history of one
+branch: main's unreleased changes come first, and only the releases main contains are listed (a patch released only on
+`release/1.0` counts once that branch is merged back).
 
 The Markdown page has one section per version (`## 2.0.0 (2026-09-01)`, `## 1.0 (unreleased)`) with the grouped
 changes linked to their commits, and no generation time, so it only changes with the history: commit it next to the

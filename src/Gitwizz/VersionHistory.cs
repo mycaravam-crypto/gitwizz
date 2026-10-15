@@ -23,8 +23,11 @@ public record VersionChange(string Sha, string Subject, string CommittedAt, stri
     string? Scope, string Description, bool Breaking);
 
 /// <summary>The gitwizz.version-history/v2 document (docs/version-history/README.md).</summary>
-public record VersionHistoryExport(string Schema, string? Repository, string BranchPattern, bool Shallow,
+public record VersionHistoryExport(string Schema, string? Repository, string BranchPattern, VersionTarget? Target, bool Shallow,
     List<VersionEntry> Versions, List<string> Warnings);
+
+/// <summary>The branch a history is about (--target): its unreleased entry comes first, and only releases it contains are listed.</summary>
+public record VersionTarget(string Name, string Reference, string Sha);
 
 /// <summary>
 /// Read-only local Git version discovery. Tags identify released snapshots; branches under a prefix (local, or only on a
@@ -53,10 +56,12 @@ public static class VersionHistory
 
     /// <summary>
     /// Unreleased lines first (branches under branchPrefix, newest version first; a local branch wins over the same
-    /// branch on a remote), then released SemVer tags, highest version first. Throws ArgumentException for a limit
-    /// outside 1..MaxLimit or an unusable prefix.
+    /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): its
+    /// unreleased entry (its commits since the releases it contains) comes first, and only tags it contains are listed.
+    /// Throws ArgumentException for a limit outside 1..MaxLimit or an unusable prefix, InvalidOperationException for an
+    /// unknown target.
     /// </summary>
-    public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/")
+    public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/", string? target = null)
     {
         if (limit is < 1 or > MaxLimit) throw new ArgumentException($"--limit must be a number from 1 to {MaxLimit}");
         if (string.IsNullOrWhiteSpace(branchPrefix) || branchPrefix.StartsWith('-') || branchPrefix.Contains(' ') ||
@@ -66,14 +71,25 @@ public static class VersionHistory
         var warnings = new List<string>();
         var tags = ReadTags(git, warnings);
         var tagsBySha = tags.ToLookup(t => t.Sha, StringComparer.Ordinal);
-        var lines = ReadLines(git, branchPrefix);
+        var scope = target == null ? null : ResolveTarget(git, target);
+        // The target is listed once, as the target, even when it is a release branch itself.
+        var lines = ReadLines(git, branchPrefix).Where(l => l.Reference != scope?.Reference).ToList();
         var shallow = git.Try("rev-parse", "--is-shallow-repository").Stdout.Trim() == "true";
 
-        var heads = tags.Select(t => t.Sha).Concat(lines.Select(l => l.Sha)).Distinct(StringComparer.Ordinal).ToList();
+        var heads = tags.Select(t => t.Sha).Concat(lines.Select(l => l.Sha)).Concat(scope == null ? Array.Empty<string>() : new[] { scope.Sha })
+            .Distinct(StringComparer.Ordinal).ToList();
         var graph = heads.Count == 0 ? new Dictionary<string, string[]>() : ReadGraph(git, heads);
         var dates = heads.Count == 0 ? new Dictionary<string, string>() : CommitDates(git, heads);
 
         var entries = new List<VersionEntry>();
+        if (scope != null)
+        {
+            // Only the releases the target contains; bases still see every tag, so a release branch builds on its own.
+            var contained = Ancestors(graph, scope.Sha);
+            tags = [.. tags.Where(t => contained.Contains(t.Sha))];
+            entries.Add(Build(git, scope.Name, "unreleased", "target", scope.Reference, scope.Sha, dates[scope.Sha], null,
+                Bases(graph, scope.Sha, false, false, tagsBySha), limit, shallow));
+        }
         foreach (var line in lines)
             entries.Add(Build(git, line.Name[branchPrefix.Length..], "unreleased", line.Source, line.Reference,
                 line.Sha, dates[line.Sha], null, Bases(graph, line.Sha, false, false, tagsBySha), limit, shallow));
@@ -83,7 +99,33 @@ public static class VersionHistory
 
         if (entries.Count == 0) warnings.Add("no SemVer tags or matching release branches found");
         if (shallow) warnings.Add("shallow clone: commits beyond the shallow boundary are missing; fetch more history for complete versions");
-        return new VersionHistoryExport(Schema, History.RepositoryIdentity(git), branchPrefix + "*", shallow, entries, warnings);
+        return new VersionHistoryExport(Schema, History.RepositoryIdentity(git), branchPrefix + "*", scope, shallow, entries, warnings);
+    }
+
+    /// <summary>
+    /// The target's ref: a local branch, else the branch on origin (a CI checkout may have no local one), else any ref or
+    /// commit git resolves (HEAD, a tag). Throws InvalidOperationException ("unknown branch or ref") otherwise.
+    /// </summary>
+    static VersionTarget ResolveTarget(Git git, string target)
+    {
+        foreach (var reference in new[] { "refs/heads/" + target, "refs/remotes/origin/" + target })
+            if (git.Try("rev-parse", "--verify", "--quiet", reference + "^{commit}") is { ExitCode: 0 } r)
+                return new VersionTarget(target, reference, r.Stdout.Trim());
+        return new VersionTarget(target, target, git.RevParse(target));
+    }
+
+    /// <summary>Every commit sha contains, itself included, from the graph.</summary>
+    static HashSet<string> Ancestors(Dictionary<string, string[]> graph, string sha)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>(new[] { sha });
+        while (stack.Count > 0)
+        {
+            var c = stack.Pop();
+            if (!seen.Add(c)) continue;
+            foreach (var p in graph.GetValueOrDefault(c, None)) stack.Push(p);
+        }
+        return seen;
     }
 
     /// <summary>
@@ -342,8 +384,13 @@ public static class VersionHistory
 
         var md = new StringBuilder();
         md.Append("# Version history\n\n");
-        md.Append($"Versions still in progress (branches matching `{result.BranchPattern}`) come first, then released SemVer tags, " +
-                  "newest first. Each version lists the commits that none of the releases it builds on contain. " +
+        if (result.Target != null)
+            md.Append($"The history of `{result.Target.Name}`: its unreleased changes first, then versions still in progress (branches " +
+                      $"matching `{result.BranchPattern}`), then the releases `{result.Target.Name}` contains, newest first. ");
+        else
+            md.Append($"Versions still in progress (branches matching `{result.BranchPattern}`) come first, then released SemVer tags, " +
+                      "newest first. ");
+        md.Append("Each version lists the commits that none of the releases it builds on contain. " +
                   "Generated by `gitwizz version-history`; edits are overwritten.\n");
         if (result.Versions.Count == 0) md.Append("\n_No versions found._\n");
 

@@ -10,6 +10,10 @@
     "schema": { "const": "gitwizz.version-history/v2" },
     "repository": { "type": ["string", "null"], "description": "origin URL without user, password, query or fragment; null without an origin" },
     "branchPattern": { "type": "string", "pattern": "^[^*]+\\*$", "description": "the --branch-pattern used, e.g. release/*" },
+    "target": {
+      "oneOf": [{ "$ref": "#/$defs/target" }, { "type": "null" }],
+      "description": "the --target branch the history is about; null without one. Written by gitwizz since --target; optional for older documents"
+    },
     "shallow": { "type": "boolean", "description": "the clone is shallow: commits beyond its boundary are missing" },
     "versions": { "type": "array", "items": { "$ref": "#/$defs/version" }, "description": "unreleased versions first (newest first), then released ones (highest SemVer first)" },
     "warnings": { "type": "array", "items": { "type": "string" } }
@@ -24,8 +28,8 @@
       "properties": {
         "version": { "type": "string", "minLength": 1, "description": "tag name without a leading v, or the branch name after the prefix" },
         "status": { "enum": ["released", "unreleased"] },
-        "source": { "enum": ["tag", "branch", "remote-branch"] },
-        "reference": { "type": "string", "pattern": "^refs/(tags|heads|remotes)/.+$" },
+        "source": { "enum": ["tag", "branch", "remote-branch", "target"] },
+        "reference": { "type": "string", "minLength": 1, "description": "the full ref (refs/tags/..., refs/heads/..., refs/remotes/...), or a --target given as another ref or commit" },
         "commitSha": { "$ref": "#/$defs/sha" },
         "committedAt": { "$ref": "#/$defs/date" },
         "taggedAt": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }], "description": "tagger date of an annotated tag; null for lightweight tags and branches" },
@@ -33,6 +37,16 @@
         "changes": { "type": "array", "items": { "$ref": "#/$defs/change" }, "description": "commits none of the bases contain, newest first in topological order" },
         "truncated": { "type": "boolean", "description": "more commits than --limit: changes is incomplete" },
         "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "reference", "sha"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "as given: main" },
+        "reference": { "type": "string", "minLength": 1, "description": "refs/heads/main, refs/remotes/origin/main when there is no local branch, else the ref as given" },
+        "sha": { "$ref": "#/$defs/sha" }
       }
     },
     "base": {

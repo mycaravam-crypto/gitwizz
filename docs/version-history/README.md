@@ -24,6 +24,7 @@ gitwizz version-history list                                       # text
 gitwizz version-history export -o versions.json                    # JSON: the format follows the extension
 gitwizz version-history export -o docs/architecture/versions.md    # Markdown changelog page
 gitwizz version-history export -f markdown > CHANGELOG.md
+gitwizz version-history export --target main -o docs/architecture/versions.md   # main's history: unreleased first
 gitwizz version-history list --branch-pattern "maint/*" --limit 500
 gitwizz version-history list --repo /path/to/repository
 ```
@@ -32,6 +33,7 @@ gitwizz version-history list --repo /path/to/repository
 |---|---|---|
 | `-f, --format` | from the `-o` extension (`.md`/`.markdown`, `.json`, `.txt`), else `text` for `list` and `json` for `export` | `text`, `json` or `markdown` (`md`) |
 | `-o, --output` | stdout | the file to write |
+| `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the releases it contains |
 | `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version |
 | `--limit` | 200 (max 10000) | at most this many commits per version |
 | `-r, --repo` | `.` | the repository |
@@ -47,6 +49,21 @@ gitwizz version-history list --repo /path/to/repository
 - **Order**: unreleased versions first, newest first (`2.10` after `2.9`: numeric parts compare as numbers), then
   released versions by SemVer precedence, highest first (a prerelease sorts below its release; `rc.10` above `rc.2`).
   Equal precedence falls back to the name, so the order never depends on how git lists refs.
+
+## A target branch
+
+`--target main` writes the history of one branch, the usual changelog of a repository:
+
+- **Unreleased first**: an entry for the branch itself (`version: main`, `source: target`, `status: unreleased`)
+  with the commits it has since the releases it contains, the same bases rule as below.
+- **Only its releases**: tags the branch contains. A patch released only on `release/1.0` (`v1.0.1`) is not a
+  release of main until `release/1.0` is merged back; then it is.
+- **Release branches stay listed**, as versions in progress next to it; a target that is a release branch itself is
+  listed once, as the target.
+- The branch is the local one, else `origin/<name>` (a CI checkout often has no local branch), else any ref or commit
+  git resolves (`HEAD`, a tag); an unknown name stops with "unknown branch or ref".
+- The document names it in `target` (`name`, `reference`, `sha`); without `--target`, `target` is null and nothing
+  else changes.
 
 ## Which commits: bases
 
@@ -113,12 +130,13 @@ everything the page shows, with SHAs, dates and categories as data.
 | `schema` | `gitwizz.version-history/v2` |
 | `repository` | `origin` URL without user, password, query or fragment; `null` without an origin |
 | `branchPattern` | the `--branch-pattern` used (`release/*`) |
+| `target` | `name`, `reference`, `sha` of the `--target` branch; `null` without one |
 | `shallow` | the clone is shallow: commits beyond its boundary are missing |
 | `versions[]` | one entry per version, in the order above |
 | `versions[].version` | the tag without a leading `v`, or the branch name after the prefix |
 | `versions[].status` | `released` (tag) or `unreleased` (branch) |
-| `versions[].source` | `tag`, `branch` or `remote-branch` |
-| `versions[].reference` | the full ref: `refs/tags/v2.0.0`, `refs/heads/release/1.0`, `refs/remotes/origin/release/2.1` |
+| `versions[].source` | `tag`, `branch`, `remote-branch`, or `target` for the `--target` branch's own entry |
+| `versions[].reference` | the full ref: `refs/tags/v2.0.0`, `refs/heads/release/1.0`, `refs/remotes/origin/release/2.1`; a `--target` given as another ref or commit (`HEAD`) as given |
 | `versions[].commitSha`, `committedAt` | the commit the ref points at, and its committer date |
 | `versions[].taggedAt` | an annotated tag's tagger date; `null` for lightweight tags and branches |
 | `versions[].bases[]` | `version`, `reference`, `sha` of each base, highest version first; empty for a first release |
@@ -132,7 +150,7 @@ empty only when there is nothing in it, and `truncated` or `shallow` say when th
 ## Compatibility
 
 The schema version changes when a field is removed, renamed, retyped or changes meaning; adding an optional field
-does not. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
+does not: `target`, and `target` as a `source`, came that way, and documents without them stay valid. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
 branches only; no categories) and is not read as v1.
 
 ## Limits

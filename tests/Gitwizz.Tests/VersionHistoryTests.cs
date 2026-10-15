@@ -30,9 +30,9 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     /// <summary>The export, checked against the v2 schema on the way.</summary>
-    VersionHistoryExport Export(int limit = VersionHistory.DefaultLimit, string prefix = "release/")
+    VersionHistoryExport Export(int limit = VersionHistory.DefaultLimit, string prefix = "release/", string? target = null)
     {
-        var export = VersionHistory.Export(_git, limit, prefix);
+        var export = VersionHistory.Export(_git, limit, prefix, target);
         var result = VersionHistoryContractTests.Schema.Evaluate(JsonDocument.Parse(VersionHistory.Json(export)).RootElement,
             new EvaluationOptions { OutputFormat = OutputFormat.List });
         Assert.True(result.IsValid, string.Join("\n", (result.Details ?? []).Where(d => d.Errors is { Count: > 0 })
@@ -336,6 +336,98 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.Throws<ArgumentException>(() => Run("list", new() { ["branch-pattern"] = "release" }));
         Assert.Throws<ArgumentException>(() => Run("list", new() { ["limit"] = "0" }));
         Assert.Throws<ArgumentException>(() => Run("list", new() { ["format"] = "html" }));
+    }
+
+    [Fact]
+    public void Target_lists_its_unreleased_changes_first_and_only_the_releases_it_contains()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "release/1.0");
+        Commit("fix: backport");
+        G("tag", "v1.0.1"); // only on the maintenance line: not a release of main
+        G("checkout", "-q", "main");
+        Commit("feat: one");
+        G("tag", "v1.1.0");
+        var fix = Commit("fix: not released yet");
+        var feature = Commit("feat: neither");
+
+        var history = Export(target: "main");
+        Assert.Equal(new VersionTarget("main", "refs/heads/main", feature), history.Target);
+        Assert.Equal(["main", "1.0", "1.1.0", "1.0.0"], history.Versions.Select(v => v.Version));
+        var main = history.Versions[0];
+        Assert.Equal(("unreleased", "target", "refs/heads/main"), (main.Status, main.Source, main.Reference));
+        Assert.Equal(["1.1.0"], main.Bases.Select(b => b.Version));
+        Assert.Equal([feature, fix], main.Changes.Select(c => c.Sha));
+        Assert.Equal(["1.0.1"], history.Versions[1].Bases.Select(b => b.Version)); // the release branch still builds on its own tag
+
+        var md = VersionHistory.Markdown(history);
+        Assert.Contains("The history of `main`", md);
+        Assert.Contains("## main (unreleased)\n\nBranch `main` at ", md);
+        Assert.DoesNotContain("## 1.0.1", md);
+
+        // Without --target nothing changes: no target, every tag, no entry for main.
+        var all = Export();
+        Assert.Null(all.Target);
+        Assert.Equal(["1.0", "1.1.0", "1.0.1", "1.0.0"], all.Versions.Select(v => v.Version));
+        Assert.Contains("\"target\": null", VersionHistory.Json(all));
+    }
+
+    [Fact]
+    public void Target_contains_a_backport_once_it_is_merged_back()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "release/1.0");
+        Commit("fix: backport");
+        G("tag", "v1.0.1");
+        G("checkout", "-q", "main");
+        G("merge", "-q", "--no-ff", "-m", "merge release/1.0", "release/1.0");
+
+        var history = Export(target: "main");
+        Assert.Contains(history.Versions, v => v.Version == "1.0.1");
+        Assert.Equal(["1.0.1"], history.Versions[0].Bases.Select(b => b.Version));
+        Assert.Equal("merge", Assert.Single(history.Versions[0].Changes).Category);
+    }
+
+    [Fact]
+    public void A_release_branch_as_target_is_listed_once_and_origin_stands_in_for_a_missing_local_branch()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "release/1.0");
+        var fix = Commit("fix: maintenance");
+        G("checkout", "-q", "main");
+
+        var history = Export(target: "release/1.0");
+        Assert.Equal(["release/1.0", "1.0.0"], history.Versions.Select(v => v.Version)); // not again as branch "1.0"
+        Assert.Equal([fix], history.Versions[0].Changes.Select(c => c.Sha));
+
+        G("update-ref", "refs/remotes/origin/develop", fix);
+        var remote = Export(target: "develop");
+        Assert.Equal(("refs/remotes/origin/develop", fix), (remote.Target!.Reference, remote.Target.Sha));
+        Assert.Equal(("HEAD", G("rev-parse", "HEAD")), (Export(target: "HEAD").Target!.Reference, Export(target: "HEAD").Target!.Sha));
+
+        var unknown = Assert.Throws<InvalidOperationException>(() => VersionHistory.Export(_git, target: "no-such-branch"));
+        Assert.StartsWith("unknown branch or ref", unknown.Message);
+    }
+
+    [Fact]
+    public void Cli_takes_a_target()
+    {
+        Assert.Equal("main", Cli.Parse(["-t", "main"], "version-history")["target"]);
+        Assert.Equal("main", Cli.Parse(["--target", "main"], "version-history")["target"]);
+
+        Commit("initial");
+        G("tag", "v1.0.0");
+        var head = Commit("feat: pending");
+        var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings
+        {
+            Out = new Spectre.Console.AnsiConsoleOutput(new StringWriter()), Ansi = Spectre.Console.AnsiSupport.No,
+        });
+        var md = Path.Combine(_dir, "versions.md");
+        Assert.Equal(0, Cli.VersionHistoryCommand("export", new() { ["repo"] = _dir, ["output"] = md, ["target"] = "main" }, console));
+        Assert.Contains($"## main (unreleased)\n\nBranch `main` at `{head[..8]}` · since 1.0.0 · 1 change", File.ReadAllText(md));
     }
 
     public void Dispose() => Directory.Delete(_dir, true);
