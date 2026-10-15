@@ -135,8 +135,9 @@ and `scope` are null and `description` is the subject.
 One `##` section per version: `## 2.0.0 (2026-09-01)` for a release (the annotated tag's date, else the commit's), `##
 1.0 (unreleased)` for a branch. Below it the reference, the commit, the bases and how many pull requests, direct commits
 and other merge commits it has, then its pull requests and direct commits in this order: **⚠ Breaking changes**,
-**Features**, **Fixes**, **Performance**, **Other changes**. Each pull request is one line, its commits are not listed
-again (`- **orders:** export orders as CSV (#7, 2 commits)`); merge commits that aren't a pull request's are counted,
+**Features**, **Fixes**, **Performance**, **Other changes**. Each pull request is one line starting with the day it was
+merged, its commits are not listed again (`- 2026-09-01 · **orders:** export orders as CSV (#7, 2 commits)`); a direct
+commit's line starts with its commit day; merge commits that aren't a pull request's are counted,
 not listed. Features, fixes and performance show `**scope:** description`; other changes keep their whole title or
 subject (`docs: ...`). When the repository's `origin` is an http(s) URL, pull requests link to
 `<origin without .git>/pull/<n>` (`/pullrequest/<n>` on Azure DevOps) and commits to `<origin without .git>/commit/<sha>`.

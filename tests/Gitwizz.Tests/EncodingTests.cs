@@ -72,7 +72,7 @@ public sealed class EncodingTests : IDisposable
         var json = VersionHistory.Json(export);
         Assert.Contains("Übersetzung für Änderungen an Maßeinheiten", json); // literal, not \u00FC
         Assert.DoesNotContain("\\u00", json);
-        Assert.Contains("- **größe:** Übersetzung für Änderungen an Maßeinheiten", VersionHistory.Markdown(export));
+        Assert.Contains("· **größe:** Übersetzung für Änderungen an Maßeinheiten", VersionHistory.Markdown(export));
         Assert.Contains("## 1.1-übergang (unreleased)", VersionHistory.Markdown(export));
         Assert.Contains(Subject, VersionHistory.Text(export));
     }

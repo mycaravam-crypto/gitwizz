@@ -8,7 +8,7 @@ Remote branch `origin/release/2.1` at [`2bbac987`](https://github.com/example/sh
 
 ### Features
 
-- **ui:** dark mode ([`2bbac987`](https://github.com/example/shop/commit/2bbac98734ff5a5aa2875876d43409b6cf2a606f))
+- 2026-09-02 · **ui:** dark mode ([`2bbac987`](https://github.com/example/shop/commit/2bbac98734ff5a5aa2875876d43409b6cf2a606f))
 
 ## 1.0 (unreleased)
 
@@ -16,7 +16,7 @@ Branch `release/1.0` at [`af6edc60`](https://github.com/example/shop/commit/af6e
 
 ### Fixes
 
-- **api:** reject negative quantities ([`af6edc60`](https://github.com/example/shop/commit/af6edc604f9cae1bdb7528e636de7cf7547a12c8))
+- 2026-09-01 · **api:** reject negative quantities ([`af6edc60`](https://github.com/example/shop/commit/af6edc604f9cae1bdb7528e636de7cf7547a12c8))
 
 ## 2.0.0 (2026-09-01)
 
@@ -24,11 +24,11 @@ Tag `v2.0.0` at [`690647f7`](https://github.com/example/shop/commit/690647f74b69
 
 ### ⚠ Breaking changes
 
-- **api:** drop the v1 order endpoint ([`9098df66`](https://github.com/example/shop/commit/9098df66567b910a74924ce53d1cbbe913415663))
+- 2026-09-01 · **api:** drop the v1 order endpoint ([`9098df66`](https://github.com/example/shop/commit/9098df66567b910a74924ce53d1cbbe913415663))
 
 ### Fixes
 
-- correct the CSV column order ([#9](https://github.com/example/shop/pull/9))
+- 2026-09-01 · correct the CSV column order ([#9](https://github.com/example/shop/pull/9))
 
 ## 2.0.0-rc.1 (2026-09-01)
 
@@ -36,7 +36,7 @@ Tag `v2.0.0-rc.1` at [`9098df66`](https://github.com/example/shop/commit/9098df6
 
 ### ⚠ Breaking changes
 
-- **api:** drop the v1 order endpoint ([`9098df66`](https://github.com/example/shop/commit/9098df66567b910a74924ce53d1cbbe913415663))
+- 2026-09-01 · **api:** drop the v1 order endpoint ([`9098df66`](https://github.com/example/shop/commit/9098df66567b910a74924ce53d1cbbe913415663))
 
 ## 1.1.0 (2026-09-01)
 
@@ -44,11 +44,11 @@ Tag `v1.1.0` at [`cd28203a`](https://github.com/example/shop/commit/cd28203aea13
 
 ### Features
 
-- **orders:** export orders as CSV ([#7](https://github.com/example/shop/pull/7), 2 commits)
+- 2026-09-01 · **orders:** export orders as CSV ([#7](https://github.com/example/shop/pull/7), 2 commits)
 
 ### Performance
 
-- cache price lookups ([`cd28203a`](https://github.com/example/shop/commit/cd28203aea1354a698b2118f85f2967e485f889b))
+- 2026-09-01 · cache price lookups ([`cd28203a`](https://github.com/example/shop/commit/cd28203aea1354a698b2118f85f2967e485f889b))
 
 ## 1.0.1 (2026-09-01)
 
@@ -56,7 +56,7 @@ Tag `v1.0.1` at [`d9dfaa90`](https://github.com/example/shop/commit/d9dfaa90f80f
 
 ### Fixes
 
-- **api:** handle empty orders ([`d9dfaa90`](https://github.com/example/shop/commit/d9dfaa90f80fbc8b39caf00e29f184a069999b6c))
+- 2026-09-01 · **api:** handle empty orders ([`d9dfaa90`](https://github.com/example/shop/commit/d9dfaa90f80fbc8b39caf00e29f184a069999b6c))
 
 ## 1.0.0 (2026-09-01)
 
@@ -64,4 +64,4 @@ Tag `v1.0.0` at [`37ed9971`](https://github.com/example/shop/commit/37ed9971956c
 
 ### Other changes
 
-- chore: initial import ([`37ed9971`](https://github.com/example/shop/commit/37ed9971956cd8fa64eb43382d6d6790d115ef9f))
+- 2026-09-01 · chore: initial import ([`37ed9971`](https://github.com/example/shop/commit/37ed9971956cd8fa64eb43382d6d6790d115ef9f))

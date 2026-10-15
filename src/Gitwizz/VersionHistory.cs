@@ -523,8 +523,8 @@ public static class VersionHistory
             lines.Add($"{v.Version} [{v.Status}] {v.Reference} ({Short(v.CommitSha)})");
             lines.Add($"  since: {(v.Bases.Count == 0 ? "(initial)" : string.Join(", ", v.Bases.Select(b => b.Version)))} | " +
                       $"pull requests: {v.PullRequests.Count} | commits: {v.Changes.Count}" + (v.Truncated ? " (truncated)" : ""));
-            foreach (var pr in v.PullRequests) lines.Add($"    {pr.Id} {pr.Title}");
-            foreach (var c in v.Changes.Where(c => c.PullRequest == null)) lines.Add($"    {Short(c.Sha)} {c.Subject}");
+            foreach (var pr in v.PullRequests) lines.Add($"    {Day(pr.CommittedAt)} {pr.Id} {pr.Title}");
+            foreach (var c in v.Changes.Where(c => c.PullRequest == null)) lines.Add($"    {Day(c.CommittedAt)} {Short(c.Sha)} {c.Subject}");
             foreach (var warning in v.Warnings) lines.Add($"  warning: {warning}");
         }
         foreach (var warning in result.Warnings) lines.Add("warning: " + warning);
@@ -536,7 +536,7 @@ public static class VersionHistory
 
     /// <summary>
     /// A changelog page: per version a heading, its reference and bases, then its pull requests, and the commits that
-    /// came without one, grouped as breaking changes, features, fixes, performance and other changes. Other merge
+    /// came without one, each with its day, grouped as breaking changes, features, fixes, performance and other changes. Other merge
     /// commits are counted, not listed. Pull requests and commits link to the repository when its URL is http(s).
     /// Deterministic: no generation time, so the page only changes with the history.
     /// </summary>
@@ -607,11 +607,12 @@ public static class VersionHistory
             foreach (var pr in p)
             {
                 var own = pr.Commits.Count - (pr.Strategy == "merge" ? 1 : 0);
-                md.Append("- ").Append(Line(pr.Category, pr.Scope, pr.Description, pr.Title))
+                md.Append($"- {Day(pr.CommittedAt)} · ").Append(Line(pr.Category, pr.Scope, pr.Description, pr.Title))
                   .Append($" ({Pr(pr.Id)}{(pr.Strategy == "merge" ? $", {Plural(own, "commit")}" : "")})\n");
             }
             foreach (var change in c)
-                md.Append("- ").Append(Line(change.Category, change.Scope, change.Description, change.Subject)).Append($" ({Commit(change.Sha)})\n");
+                md.Append($"- {Day(change.CommittedAt)} · ").Append(Line(change.Category, change.Scope, change.Description, change.Subject))
+                  .Append($" ({Commit(change.Sha)})\n");
         }
     }
 
@@ -640,6 +641,9 @@ public static class VersionHistory
     }
 
     static string Short(string sha) => sha[..Math.Min(8, sha.Length)];
+
+    /// <summary>The day of an ISO date as written (2026-09-01): a pull request's is its merge or squash commit's.</summary>
+    static string Day(string date) => date[..Math.Min(10, date.Length)];
 
     static string Plural(int n, string word) => $"{n} {word}{(n == 1 ? "" : "s")}";
 }

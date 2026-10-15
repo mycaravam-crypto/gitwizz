@@ -285,9 +285,9 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.Contains("## 1.1.0 (", md);
         Assert.Contains("Tag `v1.1.0` at [`", md);
         Assert.Contains("· since 1.0.0 · 3 direct commits\n", md);
-        Assert.Contains($"### Features\n\n- **orders:** export \\*all\\* orders ([`{feature[..8]}`](https://github.com/example/shop/commit/{feature}))", md);
-        Assert.Contains($"### ⚠ Breaking changes\n\n- refactor\\!: rename \\<Order\\> to \\[Sale\\] ([`{breaking[..8]}`]", md);
-        Assert.Contains("### Other changes\n\n- \\- leading dash (", md);
+        Assert.Contains($"· **orders:** export \\*all\\* orders ([`{feature[..8]}`](https://github.com/example/shop/commit/{feature}))", md);
+        Assert.Contains($"· refactor\\!: rename \\<Order\\> to \\[Sale\\] ([`{breaking[..8]}`]", md);
+        Assert.Contains("· \\- leading dash (", md);
         Assert.Contains("· first release · 1 direct commit", md);
         Assert.True(md.IndexOf("### ⚠ Breaking changes", StringComparison.Ordinal) < md.IndexOf("### Features", StringComparison.Ordinal));
     }
@@ -499,12 +499,14 @@ public sealed class VersionHistoryTests : IDisposable
         G("remote", "add", "origin", "https://github.com/example/shop.git");
         var md = VersionHistory.Markdown(Export(target: "main"));
         Assert.Contains("· 4 pull requests and 1 direct commit\n", md);
-        Assert.Contains("### Features\n\n- **orders:** CSV export ([#12](https://github.com/example/shop/pull/12), 2 commits)\n", md);
-        Assert.Contains("### Fixes\n\n- round prices ([#13](https://github.com/example/shop/pull/13))\n", md);
-        Assert.Contains("- Tidy up ([#15](https://github.com/example/shop/pull/15), 1 commit)\n", md);
-        Assert.Contains("- docs: readme ([`", md);
+        var day = main.PullRequests[3].CommittedAt[..10]; // the merge commit's day
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}$", day);
+        Assert.Contains($"### Features\n\n- {day} · **orders:** CSV export ([#12](https://github.com/example/shop/pull/12), 2 commits)\n", md);
+        Assert.Contains("· round prices ([#13](https://github.com/example/shop/pull/13))\n", md);
+        Assert.Contains("· Tidy up ([#15](https://github.com/example/shop/pull/15), 1 commit)\n", md);
+        Assert.Contains("· docs: readme ([`", md);
         Assert.DoesNotContain("export as CSV", md); // a pull request's commits are not listed again
-        Assert.Contains("#12 feat(orders): CSV export", VersionHistory.Text(Export(target: "main")));
+        Assert.Contains($"{day} #12 feat(orders): CSV export", VersionHistory.Text(Export(target: "main")));
     }
 
     [Fact]
