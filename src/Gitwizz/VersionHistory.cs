@@ -678,16 +678,25 @@ public static partial class VersionHistory
             .Where(g => g.Item2.Count > 0)];
     }
 
-    /// <summary>A description without pull request wording, the first letter upper case.</summary>
+    /// <summary>
+    /// A description without pull request wording, the first letter upper case. Of "PR 12 (Text) gemergt ..." only the text
+    /// in the brackets is kept.
+    /// </summary>
     public static string CleanText(string description)
     {
-        var text = CleanWording().Replace(description, " ").Trim();
+        var text = MergedInBrackets().Match(description) is { Success: true } merged
+            ? merged.Groups["text"].Value.Trim()
+            : CleanWording().Replace(description, " ").Trim();
         text = Conventional.Match(text) is { Success: true } m ? m.Groups["desc"].Value.Trim() : text;
         return text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
     }
 
     [GeneratedRegex(@"^Merged PR \d+:|^Merge pull request #\d+( from \S+)?|\(#\d+\)\s*$|^PR \d+:?", RegexOptions.IgnoreCase)]
     private static partial Regex CleanWording();
+
+    // Greedy: brackets inside the text stay, up to the last ")" before "gemergt".
+    [GeneratedRegex(@"^PR\s*\d+\s*\((?<text>.+)\)\s*gemergt\b", RegexOptions.IgnoreCase)]
+    private static partial Regex MergedInBrackets();
 
     /// <summary>The repository's web address for commit links: an http(s) URL without .git, else null.</summary>
     static string? WebUrl(string? repository)
