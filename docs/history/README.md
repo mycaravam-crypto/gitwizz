@@ -124,6 +124,13 @@ commits (default 500, newest first), 4 at a time, one minute each. When `ado` is
 remaining commits are `unavailable` with that reason, without asking again. The answers are never cached, so links
 changed on the server show up in the next export.
 
+GitHub closing-issue links retain the issue URL in `workItems[].uri`. The repository in that URL is part of the
+identity: `#123` in two repositories must not be treated as the same issue. This is additive within
+`gitwizz.history/v2`; links without a URL (including existing ADO exports) retain their previous representation.
+GitHub export requires a `gh` version exposing `gh pr view --json closingIssuesReferences` (validated with 2.102.0).
+Older versions report unavailable PR metadata rather than a verified empty list. Issue detail exports are a separate
+step, for example `gh issue view 123 --repo owner/repo --json number,url,title,body,labels,state,updatedAt`.
+
 #### `pullRequest` (per commit)
 
 | `resolution` | `id` | Meaning |

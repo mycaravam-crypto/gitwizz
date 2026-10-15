@@ -346,6 +346,19 @@ public class HistoryTests : IDisposable
     }
 
     [Fact]
+    public void Github_closing_issue_urls_preserve_repository_identity()
+    {
+        var pr = GitHubHistory.Parse(JsonDocument.Parse("""
+            {"number": 12, "state": "MERGED", "closingIssuesReferences": [
+                {"number": 4, "url": "https://github.com/acme/one/issues/4"},
+                {"number": 4, "url": "https://github.com/acme/two/issues/4"}]}
+            """).RootElement);
+        Assert.Equal(["#4", "#4"], pr.WorkItems!.Select(w => w.WorkItem));
+        Assert.Equal(["https://github.com/acme/one/issues/4", "https://github.com/acme/two/issues/4"],
+            pr.WorkItems!.Select(w => w.Uri));
+    }
+
+    [Fact]
     public void Cli_takes_history_options()
     {
         var o = Cli.Parse(["--since", "v1.0", "--until", "main", "--limit", "50", "-o", "h.json", "--no-cache"], "history");
