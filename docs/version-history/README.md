@@ -26,6 +26,7 @@ gitwizz version-history export -o versions.json                    # JSON: the f
 gitwizz version-history export -o docs/architecture/versions.md    # Markdown changelog page
 gitwizz version-history export -f markdown > CHANGELOG.md
 gitwizz version-history export --target main -o docs/architecture/versions.md   # main's history: unreleased first
+gitwizz version-history export --branch-pattern "release/cxm/*" --from 1.0.6 --to 1.9.0 -o versionhistory.md   # one app's releases
 gitwizz version-history list --branch-pattern "maint/*" --limit 500
 gitwizz version-history list --repo /path/to/repository
 ```
@@ -36,6 +37,8 @@ gitwizz version-history list --repo /path/to/repository
 | `-o, --output` | stdout | the file to write |
 | `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the release branches cut from it and the releases it or they contain |
 | `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version. With `--target`, only those cut from the target |
+| `--from` | none | list only releases after this version (`1.0.6` for `release/cxm/1.0.6`); it is still the base of the next one |
+| `--to` | none | list only releases up to this version; must be higher than `--from` |
 | `--limit` | 200 (max 10000) | at most this many commits per version |
 | `-r, --repo` | `.` | the repository |
 
@@ -86,6 +89,11 @@ newest first in topological order. So:
   1.x releases, including what `v2.0.0-rc.1` already had. A prerelease builds on any tag.
 - **Same commit**: a tag never builds on tags on its own commit. A release branch counts every tag, its own head's
   too: a branch whose head is tagged has no unreleased changes.
+- **Release branches build on the one before**: `release/cxm/1.9.0` builds on `release/cxm/1.8.0`, the next lower
+  version in the same folder, so its changes are `git log release/cxm/1.8.0..release/cxm/1.9.0`: a repository that
+  marks releases with branches instead of tags gets one range per release. Folders are separate lines:
+  `release/cxm/1.8.0` never builds on `release/bfm/2.0.0`, even with `--branch-pattern "release/*"`. Tags the previous
+  branch contains are behind it and aren't listed as bases too.
 - **First release**: no bases, so it lists the history up to `--limit`.
 
 ## Pull requests
@@ -165,7 +173,7 @@ everything the page shows, with SHAs, dates and categories as data.
 | `versions[].reference` | the full ref: `refs/tags/v2.0.0`, `refs/heads/release/1.0`, `refs/remotes/origin/release/2.1`; a `--target` given as another ref or commit (`HEAD`) as given |
 | `versions[].commitSha`, `committedAt` | the commit the ref points at, and its committer date |
 | `versions[].taggedAt` | an annotated tag's tagger date; `null` for lightweight tags and branches |
-| `versions[].bases[]` | `version`, `reference`, `sha` of each base, highest version first; empty for a first release |
+| `versions[].bases[]` | `version`, `reference`, `sha` of each base: for a release branch the release branch before it first (`refs/heads/...` or `refs/remotes/...`), then tags, highest version first; empty for a first release |
 | `versions[].changes[]` | `sha`, `subject`, `committedAt`, `kind` (`commit`/`merge`), `category`, `type`, `scope`, `description`, `breaking`, `pullRequest` (`#12`, or `null` for a direct commit) |
 | `versions[].pullRequests[]` | `id` (`#12`), `title`, `strategy` (`merge`/`squash`), `mergeCommit`, `committedAt`, `category`, `type`, `scope`, `description`, `breaking`, `commits` (its merge or squash commit and the commits the merge brought in), newest first |
 | `versions[].truncated` | more than `--limit` commits: `changes` is incomplete |
@@ -177,7 +185,7 @@ empty only when there is nothing in it, and `truncated` or `shallow` say when th
 ## Compatibility
 
 The schema version changes when a field is removed, renamed, retyped or changes meaning; adding an optional field
-does not: `target`, `target` as a `source`, `pullRequests` and `changes[].pullRequest` came that way, and documents without them stay valid. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
+does not: `target`, `target` as a `source`, `pullRequests` and `changes[].pullRequest` came that way, and so did a release branch as a base (`bases[].reference` under `refs/heads/` or `refs/remotes/`, not only `refs/tags/`), and documents without them stay valid. v2 replaced v1 (`baseVersion`/`baseSha`: a single base, so merged-back backports were listed twice; local
 branches only; no categories) and is not read as v1.
 
 ## Limits

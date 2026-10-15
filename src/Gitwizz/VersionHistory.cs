@@ -69,16 +69,26 @@ public static class VersionHistory
     /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): its
     /// unreleased entry first (its commits since the releases it contains), then only the release branches cut from it
     /// and the tags it or those branches contain, so apps kept on separate branches never show up in each other's
-    /// history. Each version groups its commits into the pull requests they came with.
-    /// Throws ArgumentException for a limit outside 1..MaxLimit or an unusable prefix, InvalidOperationException for an
-    /// unknown target.
+    /// history. A release branch also builds on the release branch before it on its line (release/cxm/1.9.0 on
+    /// release/cxm/1.8.0), so a repository without tags still gets one range per release. Each version groups its
+    /// commits into the pull requests they came with. from (exclusive) and to (inclusive) limit the listed release
+    /// branches and tags by version; the release at from is still the base of the one after it.
+    /// Throws ArgumentException for a limit outside 1..MaxLimit, an unusable prefix or a to not above from,
+    /// InvalidOperationException for an unknown target.
     /// </summary>
-    public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/", string? target = null)
+    public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/", string? target = null,
+        string? from = null, string? to = null)
     {
         if (limit is < 1 or > MaxLimit) throw new ArgumentException($"--limit must be a number from 1 to {MaxLimit}");
         if (string.IsNullOrWhiteSpace(branchPrefix) || branchPrefix.StartsWith('-') || branchPrefix.Contains(' ') ||
             branchPrefix.Contains("..", StringComparison.Ordinal))
             throw new ArgumentException("invalid --branch-pattern: expected a literal prefix such as release/*");
+        (from, to) = (from?.Trim().TrimStart('v'), to?.Trim().TrimStart('v'));
+        if (from is "" || to is "") throw new ArgumentException("--from and --to need a version, such as 1.0.6");
+        if (from != null && to != null && CompareNatural(Number(to), Number(from)) <= 0)
+            throw new ArgumentException($"--to must be a higher version than --from: {from} -> {to}");
+        bool InRange(string version) => (from == null || CompareNatural(Number(version), Number(from)) > 0) &&
+                                        (to == null || CompareNatural(Number(version), Number(to)) <= 0);
 
         var warnings = new List<string>();
         var tags = ReadTags(git, warnings);
@@ -104,14 +114,29 @@ public static class VersionHistory
             foreach (var line in lines) contained.UnionWith(Ancestors(graph, line.Sha));
             tags = [.. tags.Where(t => contained.Contains(t.Sha))];
             entries.Add(Build(git, scope.Name, "unreleased", "target", scope.Reference, scope.Sha, dates[scope.Sha], null,
-                Bases(graph, scope.Sha, false, false, tagsBySha), limit, shallow));
+                TagBases(Bases(graph, scope.Sha, false, false, tagsBySha)), limit, shallow));
         }
-        foreach (var line in lines)
-            entries.Add(Build(git, line.Name[branchPrefix.Length..], "unreleased", line.Source, line.Reference,
-                line.Sha, dates[line.Sha], null, Bases(graph, line.Sha, false, false, tagsBySha), limit, shallow));
-        foreach (var tag in tags)
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            var version = line.Name[branchPrefix.Length..];
+            if (!InRange(version)) continue;
+            var tagBases = Bases(graph, line.Sha, false, false, tagsBySha);
+            // The release branch before it on its line: the next older version in the same folder (cxm/ apart from bfm/).
+            var previous = lines.Skip(i + 1).FirstOrDefault(l => Folder(l.Name[branchPrefix.Length..]) == Folder(version));
+            var bases = TagBases(tagBases);
+            if (previous != null)
+            {
+                // Tags the previous release branch contains are behind it: it stands for them.
+                var behind = Ancestors(graph, previous.Sha);
+                bases = [new VersionBase(previous.Name[branchPrefix.Length..], previous.Reference, previous.Sha),
+                    .. TagBases(tagBases.Where(t => !behind.Contains(t.Sha)).ToList())];
+            }
+            entries.Add(Build(git, version, "unreleased", line.Source, line.Reference, line.Sha, dates[line.Sha], null, bases, limit, shallow));
+        }
+        foreach (var tag in tags.Where(t => InRange(t.Name.TrimStart('v'))))
             entries.Add(Build(git, tag.Name.TrimStart('v'), "released", "tag", "refs/tags/" + tag.Name, tag.Sha,
-                dates[tag.Sha], tag.TaggedAt, Bases(graph, tag.Sha, true, tag.Pre == null, tagsBySha), limit, shallow));
+                dates[tag.Sha], tag.TaggedAt, TagBases(Bases(graph, tag.Sha, true, tag.Pre == null, tagsBySha)), limit, shallow));
 
         if (entries.Count == 0) warnings.Add("no SemVer tags or matching release branches found");
         if (shallow) warnings.Add("shallow clone: commits beyond the shallow boundary are missing; fetch more history for complete versions");
@@ -320,8 +345,16 @@ public static class VersionHistory
         return bases;
     }
 
+    static List<VersionBase> TagBases(List<Tag> tags) => [.. tags.Select(t => new VersionBase(t.Name.TrimStart('v'), "refs/tags/" + t.Name, t.Sha))];
+
+    /// <summary>The folder of a release branch's version ("cxm" for cxm/1.9.0, "" for 1.9.0): release lines are per folder.</summary>
+    static string Folder(string version) => version.LastIndexOf('/') is var i and >= 0 ? version[..i] : "";
+
+    /// <summary>The version number of a release branch's version (1.9.0 for cxm/1.9.0), what --from and --to compare.</summary>
+    static string Number(string version) => version[(version.LastIndexOf('/') + 1)..];
+
     static VersionEntry Build(Git git, string version, string status, string source,
-        string reference, string sha, string committedAt, string? taggedAt, List<Tag> bases, int limit, bool shallow)
+        string reference, string sha, string committedAt, string? taggedAt, List<VersionBase> bases, int limit, bool shallow)
     {
         // Newest first in topological order, at most limit (one more to know whether there are more).
         var range = Git.Exec(git.RepoDir, "git", ["rev-list", "--topo-order", $"--max-count={limit + 1}", "--stdin"],
@@ -338,9 +371,7 @@ public static class VersionHistory
         if (bases.Count == 0 && shallow)
             warnings.Add("no earlier release reachable in this shallow clone: the commits listed may include released ones");
         var (changes, prs) = PullRequests(ReadChanges(git, shas, out var commits), commits, warnings);
-        return new VersionEntry(version, status, source, reference, sha, committedAt, taggedAt,
-            [.. bases.Select(b => new VersionBase(b.Name.TrimStart('v'), "refs/tags/" + b.Name, b.Sha))],
-            changes, truncated, warnings, prs);
+        return new VersionEntry(version, status, source, reference, sha, committedAt, taggedAt, bases, changes, truncated, warnings, prs);
     }
 
     /// <summary>

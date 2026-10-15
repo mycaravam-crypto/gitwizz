@@ -93,7 +93,7 @@ public static partial class Cli
         ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
-        ["version-history"] = ["target", "limit", "branch-pattern", "format", "output", "repo"],
+        ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "format", "output", "repo"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree"];
@@ -594,7 +594,8 @@ public static partial class Cli
         var pattern = opt.GetValueOrDefault("branch-pattern", "release/*");
         if (!pattern.EndsWith('*') || pattern[..^1].Contains('*'))
             throw new ArgumentException("--branch-pattern must be a prefix ending in * (for example release/*)");
-        var export = VersionHistory.Export(git, limit, pattern[..^1], opt.GetValueOrDefault("target"));
+        var export = VersionHistory.Export(git, limit, pattern[..^1], opt.GetValueOrDefault("target"), opt.GetValueOrDefault("from"),
+            opt.GetValueOrDefault("to"));
         foreach (var warning in export.Warnings) err.MarkupLine($"[yellow]![/] {Markup.Escape(warning)}");
         Write(format switch
         {
@@ -905,6 +906,8 @@ public static partial class Cli
             [bold]Version history[/]
                   -t, --target <branch> the branch the history is about: its unreleased changes, then only its release branches and releases
                   --branch-pattern <prefix*> branches that are release lines, local or on a remote [grey](default: release/*; with --target: those cut from it)[/]
+                  --from <version>      list releases after this one [grey](it stays the base of the next: release/cxm/1.0.6 → --from 1.0.6)[/]
+                  --to <version>        list releases up to this one
                   --limit <n>           at most n commits per version [grey](default: 200)[/]
                   -f, --format <name>   json | text | markdown [grey](default: from the -o extension, else text for list, json for export)[/]
                   -o, --output <file>   write the report to a file instead of stdout [grey](versions.md: a changelog page)[/]

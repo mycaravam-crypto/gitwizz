@@ -4,7 +4,7 @@ Versions still in progress (branches matching `release/*`) come first, then rele
 
 ## 2.1 (unreleased)
 
-Remote branch `origin/release/2.1` at [`2bbac987`](https://github.com/example/shop/commit/2bbac98734ff5a5aa2875876d43409b6cf2a606f) · since 2.0.0 · 1 direct commit
+Remote branch `origin/release/2.1` at [`2bbac987`](https://github.com/example/shop/commit/2bbac98734ff5a5aa2875876d43409b6cf2a606f) · since 1.0, 2.0.0 · 1 direct commit
 
 ### Features
 

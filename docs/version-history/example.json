@@ -15,6 +15,11 @@
       "taggedAt": null,
       "bases": [
         {
+          "version": "1.0",
+          "reference": "refs/heads/release/1.0",
+          "sha": "af6edc604f9cae1bdb7528e636de7cf7547a12c8"
+        },
+        {
           "version": "2.0.0",
           "reference": "refs/tags/v2.0.0",
           "sha": "690647f74b699965acaab49c109a32a8dc3998c9"

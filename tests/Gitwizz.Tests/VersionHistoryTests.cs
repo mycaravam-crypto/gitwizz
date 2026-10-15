@@ -423,6 +423,47 @@ public sealed class VersionHistoryTests : IDisposable
     }
 
     [Fact]
+    public void Release_branches_without_tags_each_list_what_they_add_to_the_one_before()
+    {
+        // Two apps, no tags: release/cxm/* and release/bfm/* cut from develop one after the other.
+        Commit("chore: start");
+        G("checkout", "-q", "-b", "develop");
+        var base106 = Commit("feat: cxm before 1.0.6");
+        G("branch", "release/cxm/1.0.6");
+        var bfm = Commit("feat: bfm work");
+        G("branch", "release/bfm/2.0.0");
+        var a = Commit("feat(cart): cxm for 1.8.0");
+        G("branch", "release/cxm/1.8.0");
+        var b1 = Commit("fix: cxm for 1.9.0");
+        G("branch", "release/cxm/1.9.0");
+        G("checkout", "-q", "release/cxm/1.8.0");
+        var hotfix = Commit("fix: hotfix only on 1.8.0");
+        G("checkout", "-q", "develop");
+
+        var cxm = Export(prefix: "release/cxm/");
+        Assert.Equal(["1.9.0", "1.8.0", "1.0.6"], cxm.Versions.Select(v => v.Version));
+        Assert.Equal(["1.8.0"], cxm.Versions[0].Bases.Select(x => x.Version));
+        Assert.Equal("refs/heads/release/cxm/1.8.0", cxm.Versions[0].Bases[0].Reference);
+        Assert.Equal([b1], cxm.Versions[0].Changes.Select(c => c.Sha));                 // 1.8.0..1.9.0, as git log does
+        Assert.Equal([hotfix, a, bfm], cxm.Versions[1].Changes.Select(c => c.Sha));     // 1.0.6..1.8.0
+        Assert.Empty(cxm.Versions[2].Bases);                                             // the first release
+        Assert.Contains(base106, cxm.Versions[2].Changes.Select(c => c.Sha));
+
+        // One pattern for both apps: each folder is its own line, so cxm/1.8.0 builds on cxm/1.0.6, not on bfm/2.0.0.
+        var all = Export(prefix: "release/").Versions.ToDictionary(v => v.Version);
+        Assert.Equal(["cxm/1.0.6"], all["cxm/1.8.0"].Bases.Select(x => x.Version));
+        Assert.Empty(all["bfm/2.0.0"].Bases);
+
+        // --from 1.0.6 --to 1.8.0: 1.8.0 alone, still since 1.0.6.
+        var range = VersionHistory.Export(_git, branchPrefix: "release/cxm/", from: "1.0.6", to: "1.8.0");
+        Assert.Equal(["1.8.0"], range.Versions.Select(v => v.Version));
+        Assert.Equal(["1.0.6"], range.Versions[0].Bases.Select(x => x.Version));
+        Assert.Contains("· since 1.0.6 · 3 direct commits", VersionHistory.Markdown(range));
+        Assert.Throws<ArgumentException>(() => VersionHistory.Export(_git, from: "1.9.0", to: "1.8.0"));
+        Assert.Equal("1.0.6", Cli.Parse(["--from", "1.0.6", "--to", "1.9.0"], "version-history")["from"]);
+    }
+
+    [Fact]
     public void Pull_requests_group_the_commits_they_came_with()
     {
         Commit("chore: initial");
