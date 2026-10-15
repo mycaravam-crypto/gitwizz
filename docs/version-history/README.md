@@ -1,8 +1,8 @@
 # `gitwizz.version-history/v2` — the version history contract
 
 `gitwizz version-history` lists every released version (SemVer tags) and every version still in progress (release
-branches, local or only on a remote), each with the commits it adds to the releases it builds on. It writes the same
-history three ways:
+branches, local or only on a remote), each with the commits it adds to the releases it builds on; with `--target`, only
+the history of that one branch. It writes the same history three ways:
 
 | Format | For | Command |
 |---|---|---|
@@ -33,8 +33,8 @@ gitwizz version-history list --repo /path/to/repository
 |---|---|---|
 | `-f, --format` | from the `-o` extension (`.md`/`.markdown`, `.json`, `.txt`), else `text` for `list` and `json` for `export` | `text`, `json` or `markdown` (`md`) |
 | `-o, --output` | stdout | the file to write |
-| `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the releases it contains |
-| `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version |
+| `-t, --target` | none | the branch the history is about: its unreleased changes first, then only the releases it contains; no release branches |
+| `--branch-pattern` | `release/*` | a literal prefix ending in `*`; the branch name after it is the version. With `--target` no release branches are listed |
 | `--limit` | 200 (max 10000) | at most this many commits per version |
 | `-r, --repo` | `.` | the repository |
 
@@ -58,8 +58,12 @@ gitwizz version-history list --repo /path/to/repository
   with the commits it has since the releases it contains, the same bases rule as below.
 - **Only its releases**: tags the branch contains. A patch released only on `release/1.0` (`v1.0.1`) is not a
   release of main until `release/1.0` is merged back; then it is.
-- **Release branches stay listed**, as versions in progress next to it; a target that is a release branch itself is
-  listed once, as the target.
+- **Nothing it doesn't contain**: no release branches (they are versions in progress, not part of the branch yet) and
+  no tags of other branches. A repository that keeps several apps on their own branches gets one history per app:
+  `--target app-a` and `--target app-b` never list each other's tags or release branches. Tags made before an app's
+  branch was cut from another one are part of its history too, since the branch contains them.
+- **A release branch as the target** is its own history: its changes since the releases it contains, then those
+  releases.
 - The branch is the local one, else `origin/<name>` (a CI checkout often has no local branch), else any ref or commit
   git resolves (`HEAD`, a tag); an unknown name stops with "unknown branch or ref".
 - The document names it in `target` (`name`, `reference`, `sha`); without `--target`, `target` is null and nothing
@@ -135,7 +139,7 @@ everything the page shows, with SHAs, dates and categories as data.
 | `versions[]` | one entry per version, in the order above |
 | `versions[].version` | the tag without a leading `v`, or the branch name after the prefix |
 | `versions[].status` | `released` (tag) or `unreleased` (branch) |
-| `versions[].source` | `tag`, `branch`, `remote-branch`, or `target` for the `--target` branch's own entry |
+| `versions[].source` | `tag`, `branch`, `remote-branch`, or `target` for the `--target` branch's own entry; with `--target` only `target` and `tag` |
 | `versions[].reference` | the full ref: `refs/tags/v2.0.0`, `refs/heads/release/1.0`, `refs/remotes/origin/release/2.1`; a `--target` given as another ref or commit (`HEAD`) as given |
 | `versions[].commitSha`, `committedAt` | the commit the ref points at, and its committer date |
 | `versions[].taggedAt` | an annotated tag's tagger date; `null` for lightweight tags and branches |

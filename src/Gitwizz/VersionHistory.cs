@@ -56,8 +56,9 @@ public static class VersionHistory
 
     /// <summary>
     /// Unreleased lines first (branches under branchPrefix, newest version first; a local branch wins over the same
-    /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): its
-    /// unreleased entry (its commits since the releases it contains) comes first, and only tags it contains are listed.
+    /// branch on a remote), then released SemVer tags, highest version first. target (a branch, else any ref): only what
+    /// it contains, its unreleased entry (its commits since the releases it contains), then the tags it contains; no
+    /// release branches, so apps kept on separate branches never show up in each other's history.
     /// Throws ArgumentException for a limit outside 1..MaxLimit or an unusable prefix, InvalidOperationException for an
     /// unknown target.
     /// </summary>
@@ -72,8 +73,8 @@ public static class VersionHistory
         var tags = ReadTags(git, warnings);
         var tagsBySha = tags.ToLookup(t => t.Sha, StringComparer.Ordinal);
         var scope = target == null ? null : ResolveTarget(git, target);
-        // The target is listed once, as the target, even when it is a release branch itself.
-        var lines = ReadLines(git, branchPrefix).Where(l => l.Reference != scope?.Reference).ToList();
+        // A target's history is what it contains: release branches are work in progress, not part of it yet.
+        var lines = scope == null ? ReadLines(git, branchPrefix) : [];
         var shallow = git.Try("rev-parse", "--is-shallow-repository").Stdout.Trim() == "true";
 
         var heads = tags.Select(t => t.Sha).Concat(lines.Select(l => l.Sha)).Concat(scope == null ? Array.Empty<string>() : new[] { scope.Sha })
@@ -385,8 +386,8 @@ public static class VersionHistory
         var md = new StringBuilder();
         md.Append("# Version history\n\n");
         if (result.Target != null)
-            md.Append($"The history of `{result.Target.Name}`: its unreleased changes first, then versions still in progress (branches " +
-                      $"matching `{result.BranchPattern}`), then the releases `{result.Target.Name}` contains, newest first. ");
+            md.Append($"The history of `{result.Target.Name}`: its unreleased changes first, then the releases `{result.Target.Name}` " +
+                      "contains, newest first. ");
         else
             md.Append($"Versions still in progress (branches matching `{result.BranchPattern}`) come first, then released SemVer tags, " +
                       "newest first. ");

@@ -1048,8 +1048,9 @@ commits that none of the releases it builds on contain: `v1.1.0` on main builds 
 on `release/1.0`, and after `release/1.0` is merged back, `v2.0.0` builds on both, so the backport is listed once. A
 release builds on releases only, so `v2.0.0` spans its release candidates. Commits are grouped by their Conventional
 Commits type: breaking changes, features, fixes, performance, other. With `--target main` it is the history of one
-branch: main's unreleased changes come first, and only the releases main contains are listed (a patch released only on
-`release/1.0` counts once that branch is merged back).
+branch: main's unreleased changes come first, then only the releases main contains (a patch released only on
+`release/1.0` counts once that branch is merged back); release branches and other branches' tags are left out, so
+apps kept on separate branches each get their own history.
 
 The Markdown page has one section per version (`## 2.0.0 (2026-09-01)`, `## 1.0 (unreleased)`) with the grouped
 changes linked to their commits, and no generation time, so it only changes with the history: commit it next to the
