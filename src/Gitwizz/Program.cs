@@ -494,16 +494,19 @@ public static partial class Cli
 
     /// <summary>
     /// prints the provider-neutral context of one pull request as JSON (schema gitwizz.context/v1): refs, reviewers,
-    /// checks, policy state, linked work items with acceptance criteria, changed files and commits. --system prints the
-    /// system context docwizz gives for the change instead (schema gitwizz.system-context/v1).
+    /// checks, policy state, linked work items with acceptance criteria, changed files and commits. Open, merged or
+    /// closed: a merged one is measured against the target it was merged into. --system prints the system context
+    /// docwizz gives for the change instead (schema gitwizz.system-context/v1).
     /// </summary>
     public static int Context(string subject, Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
         var json = ProgressBars.Show(err, progress =>
         {
-            using var wf = OpenWorkflow(git, opt, subject, null, progress);
+            using var wf = OpenWorkflow(git, opt, subject, null, progress, allowClosed: true);
             if (!opt.ContainsKey("system")) return Report.Context(git, wf.Pr, wf.Provider, wf.Target, wf.TargetSha);
+            if (!HasCommit(git, wf.Pr.HeadSha))
+                throw new InvalidOperationException($"pull request {wf.Pr.Id}: no system context without its source commit ({string.Join("; ", wf.Pr.Warnings)})");
             progress.Start("Reading the system context (docwizz)");
             return SystemContexts.Json(wf.SystemContext(), wf.Pr);
         });
@@ -672,33 +675,63 @@ public static partial class Cli
 
     /// <summary>
     /// Loads one pull request (its linked work items too) and analyzes it: the start of every single-PR command.
-    /// Without --target, the PR is judged against the branch it targets.
+    /// Without --target, the PR is judged against the branch it targets. allowClosed: also a merged or closed one
+    /// (gitwizz context), measured against the target as it was at its merge (Providers.ClosedBase); without its source
+    /// commit it isn't analyzed.
     /// </summary>
-    static PullRequestWorkflow OpenWorkflow(Git git, Dictionary<string, string> opt, string subject, string? evidenceDir, ProgressBars? progress)
+    static PullRequestWorkflow OpenWorkflow(Git git, Dictionary<string, string> opt, string subject, string? evidenceDir, ProgressBars? progress,
+        bool allowClosed = false)
     {
         var id = subject.TrimStart('#');
         var provider = ProviderFor(git, opt, [id]);
         var target = opt.GetValueOrDefault("target") ?? DefaultBranch(git);
         progress?.Start($"Loading pull request {subject} ({provider})");
-        var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"));
+        var (policy, targetSha, prs) = LoadOne(git, provider, ref target, id, opt.ContainsKey("target"), allowClosed);
         var pr = prs.Single();
         progress?.Start($"Analyzing {pr.Id}");
         var store = StoreFor(git, opt);
-        var analysis = store.Analyze(git, targetSha, pr, provider);
-        Analyzer.ResolveDependencies(git, targetSha, prs);
+        var analysis = ArtifactState.Off;
+        if (HasCommit(git, pr.HeadSha))
+        {
+            analysis = store.Analyze(git, targetSha, pr, provider);
+            Analyzer.ResolveDependencies(git, targetSha, prs);
+        }
         return new PullRequestWorkflow(git, provider, target, targetSha, pr, policy, RepoConfig.Load(git, targetSha), StrategyOption(opt), evidenceDir, store)
             { Analysis = analysis };
     }
 
     /// <summary>One pull request with its linked work items; without an explicit target, against the branch it targets.</summary>
-    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadOne(Git git, string provider, ref string target, string id, bool targetGiven)
+    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadOne(Git git, string provider, ref string target, string id, bool targetGiven,
+        bool allowClosed = false)
     {
-        var loaded = LoadPrs(git, provider, target, [id], details: true);
+        var loaded = LoadPrs(git, provider, target, [id], details: true, allowEmpty: provider != "local");
+        if (loaded.Prs.Count == 0) return LoadClosed(git, provider, ref target, int.Parse(id), targetGiven, allowClosed);
         var pr = loaded.Prs.Single();
         if (targetGiven || pr.BaseRef == "" || pr.BaseRef == target) return loaded;
         target = pr.BaseRef;
         return LoadPrs(git, provider, target, [id], details: true);
     }
+
+    /// <summary>
+    /// A pull request the open list doesn't have: merged or closed, looked up on its own (gh pr view, ado pr context).
+    /// Only commands that read history take one (allowClosed); the others are told its state. Its target is the branch it
+    /// targeted, unless one was given; its target commit the one its changes are measured against (Providers.ClosedBase).
+    /// </summary>
+    static (BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadClosed(Git git, string provider, ref string target, int number,
+        bool targetGiven, bool allowClosed)
+    {
+        var policy = provider == "github" ? Providers.GitHubPolicy(git, target) : new BranchPolicy([]);
+        var pr = provider == "github" ? Providers.GitHubOne(git, number, policy) : AzureDevOps.LoadOne(git, number, new AdoCli(git.RepoDir));
+        if (pr == null) throw new InvalidOperationException($"no pull request #{number} found");
+        if (pr.State != "open" && !allowClosed)
+            throw new InvalidOperationException($"pull request {pr.Id} is {pr.State}: this command needs an open pull request (gitwizz context {number} reads closed ones)");
+        if (!targetGiven && pr.BaseRef != "") target = pr.BaseRef;
+        var current = git.Try("rev-parse", "--verify", "--quiet", $"origin/{target}^{{commit}}") is { ExitCode: 0 } r ? r.Stdout.Trim() : git.RevParse(target);
+        return (policy, Providers.ClosedBase(git, pr, current), [pr]);
+    }
+
+    /// <summary>Whether sha names a commit this clone has.</summary>
+    static bool HasCommit(Git git, string sha) => sha.Length > 0 && git.Try("cat-file", "-e", sha + "^{commit}").ExitCode == 0;
 
     static MergeStrategy? StrategyOption(Dictionary<string, string> opt) => opt.GetValueOrDefault("strategy") switch
     {
@@ -785,9 +818,9 @@ public static partial class Cli
         msg.Contains("not a git repository") ? "run inside a repository or pass --repo <dir>"
         : msg.Contains("docker compose is not available") ? "install Docker with the compose plugin and start the daemon"
         : msg.Contains("not logged in to Azure DevOps") ? "run 'ado auth login <server-url>', or set ADO_SERVER and ADO_PAT"
-        : msg.Contains("gh pr list") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
+        : msg.Contains("gh pr list") || msg.Contains("gh pr view") ? "install the GitHub CLI and run 'gh auth login', or use --provider local"
         : msg.StartsWith("unknown branch") ? "check the name; list branches with 'git branch -a'"
-        : msg.Contains("no open pull request ") ? "check the number, or pass a branch name with --provider local"
+        : msg.Contains("no open pull request ") || msg.StartsWith("no pull request #") ? "check the number, or pass a branch name with --provider local"
         : msg.Contains("no open pull requests") ? "use --prs to pick branches/PRs explicitly, or --target for another branch"
         : msg.StartsWith("invalid .gitwizz.yml") ? "fix the file or remove it to use the defaults; see the README section 'Configuration'"
         : msg.StartsWith("unknown option") || msg.StartsWith("need") ? "see 'gitwizz help'"
@@ -808,7 +841,7 @@ public static partial class Cli
               gitwizz cache status | clear      where the workspace is and what it holds; remove it
               gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
               gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
-              gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
+              gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items); also merged or closed
                                                 --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
               gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)

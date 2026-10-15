@@ -71,7 +71,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`) |
 | `explain <pr>` | Why (not)? Blocking decisions, evidence, the criteria matrix (`-f text\|json`) |
 | `trace <pr> [--run]` | Which tests does the change need, and which acceptance criteria do they cover? |
-| `context <pr> [--system]` | The PR's normalized context from any provider, as JSON; `--system`: the system context docwizz gives for the change |
+| `context <pr> [--system]` | The PR's normalized context from any provider, as JSON, open, merged or closed; `--system`: the system context docwizz gives for the change |
 | `evidence <pr>` | The bounded package an AI review would see, as JSON, without contacting a model |
 | `history export` | Which commits changed which lines, which PR each came with, which work items they name, as JSON with provenance |
 | `version-history list\|export` | Which versions were released (SemVer tags), which are still open (`release/*` branches), and what each changed: a changelog page, JSON or text (`-f markdown\|json\|text`) |
@@ -965,6 +965,17 @@ description, author, URL, draft, labels), source and target refs with commits, r
 state (review decision, checks, problems, open dependencies), linked work items with their individual acceptance
 criteria (GitHub: from the closed issues' "Acceptance criteria" section), changed files, changed C# members and
 commits. Lists are sorted, so the same state gives the same document.
+
+It works for merged and closed pull requests too: one the open list doesn't have is looked up on its own (`gh pr view
+N`, `ado pr context N`), and `pr.state` says `open`, `merged` or `closed` (GitHub closed, Azure DevOps abandoned),
+with `pr.closedAt` and `pr.mergeCommit`. A merged PR is measured against the target as it was when it was merged (Azure
+DevOps' `lastMergeTargetCommit`, else the merge commit's first parent), not today's target, which already contains it:
+its files, members and commits are what it brought, for merge, squash and rebase merges alike, and `target.sha` is
+that commit. When its source commit is gone (the branch was deleted and the server no longer serves it), a merged PR is
+read from its merge commit and `warnings` says so; without either, the lists are empty and `warnings` says why. Reviews,
+votes and checks are their final state; work items are their current state, not the state at the merge.
+`--system` works for a merged PR as well (docwizz on the merged state). The commands that merge-simulate or gate a PR
+(`evaluate`, `explain`, `trace`, `evidence`, `guide <pr>`) keep needing an open one and say which state it is in.
 
 ## Historical evidence: `history export`
 

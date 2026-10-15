@@ -75,12 +75,15 @@ public static class Report
     static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>
-    /// Provider-neutral context of an analyzed pull request (schema gitwizz.context/v1). Lists are sorted, so the same
-    /// state always gives the same document.
+    /// Provider-neutral context of an analyzed pull request (schema gitwizz.context/v1), open, merged or closed (state,
+    /// closedAt, mergeCommit; warnings when its source commit is gone). Lists are sorted, so the same state always gives
+    /// the same document.
     /// </summary>
     public static string Context(Git git, PullRequest pr, string provider, string target, string targetSha)
     {
-        var commits = git.Run("log", "--format=%H%x09%s", "--reverse", $"{targetSha}..{pr.HeadSha}")
+        // Without its source commit (a closed PR whose branch is gone) there are no commits to list: the warnings say why.
+        var source = pr.HeadSha.Length > 0 && git.Try("cat-file", "-e", pr.HeadSha + "^{commit}").ExitCode == 0;
+        var commits = (source ? git.Run("log", "--format=%H%x09%s", "--reverse", $"{targetSha}..{pr.HeadSha}") : "")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Split('\t', 2)).Select(c => new { sha = c[0], subject = c.ElementAtOrDefault(1) ?? "" });
         return JsonSerializer.Serialize(new
         {
@@ -89,6 +92,7 @@ public static class Report
             pr = new
             {
                 id = pr.Id, title = pr.Title, description = pr.Body, author = pr.Author, url = pr.Url, draft = pr.IsDraft, labels = pr.Labels.Order(),
+                state = pr.State, closedAt = pr.ClosedAt, mergeCommit = pr.MergeCommit,
                 source = new { @ref = pr.HeadRef, sha = pr.HeadSha },
                 target = new { @ref = target, sha = targetSha },
                 mergeBase = pr.BaseSha,
@@ -104,6 +108,7 @@ public static class Report
             files = pr.Files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, change = f.Kind.ToString().ToLowerInvariant(), oldPath = f.OldPath }),
             members = pr.Members.Order(StringComparer.Ordinal),
             commits,
+            warnings = pr.Warnings,
         }, Indented);
     }
 

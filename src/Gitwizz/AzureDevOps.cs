@@ -118,7 +118,36 @@ public static class AzureDevOps
             ReviewDecision = ReviewDecision(reviewers),
             Checks = checks,
             CiStatus = CiStatus(checks),
+            State = Str(e, "status") switch { "completed" => "merged", "abandoned" => "closed", _ => "open" },
+            ClosedAt = Str(e, "closedDate") is { Length: > 0 } closed ? History.IsoDate(closed) : null,
+            MergeCommit = e.TryGetProperty("lastMergeCommit", out var mc) && mc.ValueKind == JsonValueKind.Object ? NonEmpty(Str(mc, "commitId")) : null,
+            TargetAtMerge = e.TryGetProperty("lastMergeTargetCommit", out var tc) && tc.ValueKind == JsonValueKind.Object ? NonEmpty(Str(tc, "commitId")) : null,
         };
+    }
+
+    static string? NonEmpty(string s) => s.Length > 0 ? s : null;
+
+    /// <summary>
+    /// One pull request in any state, from ado pr context (the whole PR and its work items in one call); null when ado
+    /// has no such pull request (exit 5). Fetches its target, then its source: the branch while it exists, else the
+    /// commits by id (source, merge and target-at-merge commit), which works where the server serves them.
+    /// </summary>
+    public static PullRequest? LoadOne(Git git, int number, IAdoClient ado)
+    {
+        JsonElement context;
+        try { context = JsonDocument.Parse(ado.Run("pr", "context", number.ToString())).RootElement.Clone(); }
+        catch (AdoCommandException e) when (e.ExitCode == 5) { return null; }
+        List<JsonElement> builds;
+        try { builds = JsonDocument.Parse(ado.Run("build", "list", "--json", "--limit", "500")).RootElement.EnumerateArray().Select(b => b.Clone()).ToList(); }
+        catch (InvalidOperationException) { builds = []; }
+        var pr = Parse(context.GetProperty("pullRequest"), Checks(builds, number));
+        pr.WorkItems = WorkItems(ado, context);
+
+        git.Try("fetch", "--quiet", "origin", pr.BaseRef);
+        if (pr.HeadRef != "") git.Try("fetch", "--quiet", "origin", "refs/heads/" + pr.HeadRef);
+        foreach (var sha in new[] { pr.HeadSha, pr.MergeCommit, pr.TargetAtMerge }.OfType<string>().Where(s => s.Length > 0))
+            if (git.Try("cat-file", "-e", sha + "^{commit}").ExitCode != 0) git.Try("fetch", "--quiet", "origin", sha);
+        return pr;
     }
 
     /// <summary>Azure DevOps vote: 10 approved, 5 approved with suggestions, 0 none, -5 waiting for author, -10 rejected.</summary>
@@ -158,9 +187,12 @@ public static class AzureDevOps
     /// state, so each is read again with ado workitem show, which returns every field (acceptance criteria and
     /// description included). One that can't be read in full keeps its summary, without criteria.
     /// </summary>
-    public static List<WorkItem> LinkedWorkItems(IAdoClient ado, string pr)
+    public static List<WorkItem> LinkedWorkItems(IAdoClient ado, string pr) =>
+        WorkItems(ado, JsonDocument.Parse(ado.Run("pr", "context", pr)).RootElement);
+
+    /// <summary>The work items an ado pr context names, each read in full (see LinkedWorkItems).</summary>
+    static List<WorkItem> WorkItems(IAdoClient ado, JsonElement context)
     {
-        var context = JsonDocument.Parse(ado.Run("pr", "context", pr)).RootElement;
         if (!context.TryGetProperty("workItems", out var items) || items.ValueKind != JsonValueKind.Array) return [];
         return items.EnumerateArray().Select(summary =>
         {
