@@ -18,37 +18,97 @@ public static class Providers
     /// </summary>
     public static (string TargetSha, List<PullRequest> Prs) GitHub(Git git, string target, HashSet<int>? only, BranchPolicy policy, bool details = false)
     {
-        var json = Git.Exec(git.RepoDir, "gh", ["pr", "list", "--state", "open", "--limit", "500", "--json",
-            "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels,mergeStateStatus,autoMergeRequest,author,url,latestReviews"]);
+        var json = Git.Exec(git.RepoDir, "gh", ["pr", "list", "--state", "open", "--limit", "500", "--json", GitHubFields]);
         if (json.ExitCode != 0) throw new InvalidOperationException("gh pr list failed: " + json.Stderr.Trim());
 
-        var all = JsonDocument.Parse(json.Stdout).RootElement.EnumerateArray().Select(e => (
-            Number: e.GetProperty("number").GetInt32(),
-            Pr: new PullRequest
-            {
-                Id = "#" + e.GetProperty("number").GetInt32(),
-                Title = e.GetProperty("title").GetString() ?? "",
-                Body = e.GetProperty("body").GetString() ?? "",
-                HeadRef = e.GetProperty("headRefName").GetString() ?? "",
-                BaseRef = e.GetProperty("baseRefName").GetString() ?? "",
-                HeadSha = e.GetProperty("headRefOid").GetString()!,
-                IsDraft = e.GetProperty("isDraft").GetBoolean(),
-                ReviewDecision = e.GetProperty("reviewDecision").GetString() is { Length: > 0 } rd ? rd : null,
-                CiStatus = CiStatus(e.GetProperty("statusCheckRollup"), policy.RequiredChecks),
-                MergeStateStatus = e.TryGetProperty("mergeStateStatus", out var ms) ? ms.GetString() : null,
-                AutoMerge = e.TryGetProperty("autoMergeRequest", out var am) && am.ValueKind == JsonValueKind.Object,
-                Labels = e.GetProperty("labels").EnumerateArray().Select(l => l.GetProperty("name").GetString()!).ToList(),
-                Author = e.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "",
-                Url = e.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "",
-                Reviewers = e.TryGetProperty("latestReviews", out var rv) && rv.ValueKind == JsonValueKind.Array ? Reviews(rv) : [],
-                Checks = Checks(e.GetProperty("statusCheckRollup")),
-            })).ToList();
+        var all = JsonDocument.Parse(json.Stdout).RootElement.EnumerateArray()
+            .Select(e => (Number: e.GetProperty("number").GetInt32(), Pr: GitHubPr(e, policy))).ToList();
 
         var prs = Select(all, target, only);
         if (details)
             foreach (var p in prs) p.WorkItems = LinkedIssues(git, int.Parse(p.Id[1..]));
         git.Run([.. new[] { "fetch", "--quiet", "origin", target }, .. prs.Select(p => $"refs/pull/{p.Id[1..]}/head")]);
         return (git.RevParse($"origin/{target}"), prs);
+    }
+
+    const string GitHubFields =
+        "number,title,body,headRefName,baseRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,labels,mergeStateStatus,autoMergeRequest,author,url,latestReviews";
+
+    /// <summary>A PR from gh's JSON (pr list / pr view --json GitHubFields, plus state, closedAt and mergeCommit when asked).</summary>
+    public static PullRequest GitHubPr(JsonElement e, BranchPolicy policy) => new()
+    {
+        Id = "#" + e.GetProperty("number").GetInt32(),
+        Title = e.GetProperty("title").GetString() ?? "",
+        Body = e.GetProperty("body").GetString() ?? "",
+        HeadRef = e.GetProperty("headRefName").GetString() ?? "",
+        BaseRef = e.GetProperty("baseRefName").GetString() ?? "",
+        HeadSha = e.GetProperty("headRefOid").GetString()!,
+        IsDraft = e.GetProperty("isDraft").GetBoolean(),
+        ReviewDecision = e.GetProperty("reviewDecision").GetString() is { Length: > 0 } rd ? rd : null,
+        CiStatus = CiStatus(e.GetProperty("statusCheckRollup"), policy.RequiredChecks),
+        MergeStateStatus = e.TryGetProperty("mergeStateStatus", out var ms) ? ms.GetString() : null,
+        AutoMerge = e.TryGetProperty("autoMergeRequest", out var am) && am.ValueKind == JsonValueKind.Object,
+        Labels = e.GetProperty("labels").EnumerateArray().Select(l => l.GetProperty("name").GetString()!).ToList(),
+        Author = e.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "",
+        Url = e.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "",
+        Reviewers = e.TryGetProperty("latestReviews", out var rv) && rv.ValueKind == JsonValueKind.Array ? Reviews(rv) : [],
+        Checks = Checks(e.GetProperty("statusCheckRollup")),
+        State = (e.TryGetProperty("state", out var st) ? st.GetString() : null) switch { "MERGED" => "merged", "CLOSED" => "closed", _ => "open" },
+        ClosedAt = e.TryGetProperty("closedAt", out var ca) && ca.ValueKind == JsonValueKind.String && ca.GetString() is { Length: > 0 } c
+            ? History.IsoDate(c) : null,
+        MergeCommit = e.TryGetProperty("mergeCommit", out var mc) && mc.ValueKind == JsonValueKind.Object && mc.TryGetProperty("oid", out var oid)
+            ? oid.GetString() : null,
+    };
+
+    /// <summary>
+    /// One pull request in any state (gh pr view), with the issues it closes; null when gh has no such pull request.
+    /// Fetches its target and refs/pull/N/head, which GitHub keeps after a PR is closed or merged.
+    /// </summary>
+    public static PullRequest? GitHubOne(Git git, int number, BranchPolicy policy)
+    {
+        var r = Git.Exec(git.RepoDir, "gh", ["pr", "view", number.ToString(), "--json", GitHubFields + ",state,closedAt,mergeCommit"]);
+        if (r.ExitCode != 0)
+            return r.Stderr.Contains("Could not resolve to a PullRequest", StringComparison.OrdinalIgnoreCase) ? null
+                : throw new InvalidOperationException($"gh pr view {number} failed: {r.Stderr.Trim()}");
+        var pr = GitHubPr(JsonDocument.Parse(r.Stdout).RootElement, policy);
+        pr.WorkItems = LinkedIssues(git, number);
+        git.Try("fetch", "--quiet", "origin", pr.BaseRef, $"refs/pull/{number}/head");
+        return pr;
+    }
+
+    /// <summary>
+    /// The target commit a closed pull request's changes are measured against, where a merged one's are the changes it
+    /// brought: the target as it was when the PR was merged (Azure DevOps names it; else the merge commit's first parent),
+    /// so merge-base and diff see the PR as it was, for merge, squash and rebase merges alike. When the source commit is
+    /// gone (its branch deleted and never kept by the server), a merged PR is read from its merge commit, and the reason
+    /// is a warning. Open and closed (unmerged) pull requests use the current target.
+    /// </summary>
+    public static string ClosedBase(Git git, PullRequest pr, string currentTargetSha)
+    {
+        bool Has(string? sha) => sha is { Length: > 0 } && git.Try("cat-file", "-e", sha + "^{commit}").ExitCode == 0;
+        string Short(string sha) => sha[..Math.Min(8, sha.Length)];
+        var headGone = !Has(pr.HeadSha);
+        if (pr.State != "merged")
+        {
+            if (headGone) pr.Warnings.Add($"source commit {Short(pr.HeadSha)} is not available (its branch is gone): no files, members or commits");
+            return currentTargetSha;
+        }
+        if (headGone && Has(pr.MergeCommit) && Has(pr.MergeCommit + "^1"))
+        {
+            pr.Warnings.Add($"source commit {Short(pr.HeadSha)} is not available (its branch is gone): files, members and commits are those of " +
+                            $"the merge commit {Short(pr.MergeCommit!)}");
+            pr.HeadSha = pr.MergeCommit!;
+            return git.RevParse(pr.MergeCommit + "^1");
+        }
+        if (headGone)
+        {
+            pr.Warnings.Add($"source commit {Short(pr.HeadSha)} and merge commit are not available: no files, members or commits");
+            return currentTargetSha;
+        }
+        if (Has(pr.TargetAtMerge)) return pr.TargetAtMerge!;
+        if (Has(pr.MergeCommit) && Has(pr.MergeCommit + "^1")) return git.RevParse(pr.MergeCommit + "^1");
+        pr.Warnings.Add("the target as it was at the merge is unknown: changes are measured against the current target, where they are already merged");
+        return currentTargetSha;
     }
 
     /// <summary>

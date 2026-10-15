@@ -21,7 +21,7 @@ public class PullRequest
     public required string Id { get; init; }
     public string Title { get; init; } = "";
     public string Body { get; init; } = "";
-    public required string HeadSha { get; init; }
+    public required string HeadSha { get; set; } // set: a merged PR whose source commit is gone is read from its merge commit
     public string HeadRef { get; init; } = "";
     public string BaseRef { get; init; } = "";
     public List<string> Labels { get; init; } = [];
@@ -32,6 +32,13 @@ public class PullRequest
     public List<Reviewer> Reviewers { get; init; } = [];
     public List<Check> Checks { get; init; } = [];
     public List<WorkItem> WorkItems { get; set; } = []; // linked requirements: filled for a single PR (evaluate, context)
+
+    // A closed pull request (gitwizz context reads those too): open, merged or closed (GitHub CLOSED, Azure DevOps abandoned).
+    public string State { get; init; } = "open";
+    public string? ClosedAt { get; init; }
+    public string? MergeCommit { get; init; } // the commit the merge put on the target
+    public string? TargetAtMerge { get; init; } // the target commit it was merged into (Azure DevOps lastMergeTargetCommit)
+    public List<string> Warnings { get; } = []; // what limits its context, e.g. a source commit that is gone
 
     // Filled by the analyzer.
     public string BaseSha { get; set; } = "";

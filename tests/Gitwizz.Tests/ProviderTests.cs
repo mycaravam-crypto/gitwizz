@@ -202,4 +202,157 @@ public class ProviderTests : IDisposable
     [Fact]
     public void No_acceptance_section_means_no_criteria() =>
         Assert.Empty(Requirements.CriteriaSection("Just a description\n- with a list"));
+
+    // --- Closed pull requests (gitwizz context 42 after the merge) ----------------------------------------------------
+
+    /// <summary>ado pr context for a closed PR: the whole pull request, as the server returns it, and its work items.</summary>
+    static string ClosedContext(int id, string status, string source, string head, string? merge, string? targetAtMerge)
+    {
+        var mergeCommit = merge == null ? "" : "\"lastMergeCommit\": { \"commitId\": \"" + merge + "\" },";
+        var targetCommit = targetAtMerge == null ? "" : "\"lastMergeTargetCommit\": { \"commitId\": \"" + targetAtMerge + "\" },";
+        return $$"""
+            { "pullRequest": { "pullRequestId": {{id}}, "title": "Reduced tax rate", "description": "Implements AB#4711", "status": "{{status}}",
+                "closedDate": "2026-10-01T12:30:00.123Z", "createdBy": { "displayName": "Jane" },
+                "sourceRefName": "refs/heads/{{source}}", "targetRefName": "refs/heads/main",
+                "lastMergeSourceCommit": { "commitId": "{{head}}" }, {{mergeCommit}} {{targetCommit}}
+                "reviewers": [ { "displayName": "Bob", "vote": 10 } ] },
+              "commits": [], "workItems": [ { "id": 4711, "fields": { "System.Title": "Reduced VAT" } } ] }
+            """;
+    }
+
+    static Dictionary<string, string> AdoClosed(int id, string context) => new()
+    {
+        [$"pr context {id}"] = context, ["build list --json --limit 500"] = Builds, ["workitem show 4711 --json"] = Story,
+    };
+
+    JsonElement ClosedContextJson(PullRequest pr)
+    {
+        var current = _git.RevParse("origin/main");
+        var baseSha = Providers.ClosedBase(_git, pr, current);
+        if (_git.Try("cat-file", "-e", pr.HeadSha + "^{commit}").ExitCode == 0) Analyzer.Analyze(_git, baseSha, pr);
+        return JsonDocument.Parse(Report.Context(_git, pr, "azure-devops", "main", baseSha)).RootElement;
+    }
+
+    [Fact]
+    public void Merged_pull_request_is_read_against_the_target_it_was_merged_into()
+    {
+        var before = _server.RevParse("main");
+        _server.Run("merge", "-q", "--no-ff", "-m", "Merged PR 42: tax", "feature/tax");
+        var merge = _server.RevParse("main");
+        File.WriteAllText(Path.Combine(_server.RepoDir, "later.txt"), "after the merge\n");
+        _server.Run("add", "-A"); _server.Run("commit", "-q", "-m", "later work on main");
+
+        var ado = new FakeAdo(AdoClosed(42, ClosedContext(42, "completed", "feature/tax", _featureSha, merge, before)));
+        var pr = AzureDevOps.LoadOne(_git, 42, ado)!;
+        Assert.Equal(("merged", merge, before), (pr.State, pr.MergeCommit, pr.TargetAtMerge));
+        Assert.Equal("2026-10-01T12:30:00+00:00", pr.ClosedAt);
+        Assert.Equal(["AB#4711"], pr.WorkItems.Select(w => w.Id));
+        Assert.Equal(before, Providers.ClosedBase(_git, pr, _git.RevParse("origin/main")));
+
+        // Against today's main the PR would show nothing: its commits are already there. Against main at the merge it
+        // shows what it changed, and not what main got since.
+        var doc = ClosedContextJson(pr);
+        Assert.Equal(("merged", merge), (doc.GetProperty("pr").GetProperty("state").GetString(), doc.GetProperty("pr").GetProperty("mergeCommit").GetString()));
+        Assert.Equal(["tax.cs"], doc.GetProperty("files").EnumerateArray().Select(f => f.GetProperty("path").GetString()));
+        Assert.Equal(["tax"], doc.GetProperty("commits").EnumerateArray().Select(c => c.GetProperty("subject").GetString()));
+        Assert.Equal(0, doc.GetProperty("warnings").GetArrayLength());
+        Assert.Equal("approved", doc.GetProperty("reviewers")[0].GetProperty("vote").GetString());
+    }
+
+    [Fact]
+    public void Merged_pull_request_without_the_target_at_merge_uses_the_merge_commits_first_parent()
+    {
+        var before = _server.RevParse("main");
+        _server.Run("merge", "-q", "--no-ff", "-m", "Merged PR 42: tax", "feature/tax");
+        var merge = _server.RevParse("main");
+
+        var pr = AzureDevOps.LoadOne(_git, 42, new FakeAdo(AdoClosed(42, ClosedContext(42, "completed", "feature/tax", _featureSha, merge, null))))!;
+        Assert.Equal(before, Providers.ClosedBase(_git, pr, _git.RevParse("origin/main")));
+    }
+
+    [Fact]
+    public void Squash_merged_pull_request_whose_branch_is_gone_is_read_from_its_merge_commit()
+    {
+        _server.Run("checkout", "-q", "-b", "feature/rate");
+        File.WriteAllText(Path.Combine(_server.RepoDir, "rate.cs"), "class Rate { }\n");
+        _server.Run("add", "-A"); _server.Run("commit", "-q", "-m", "rate");
+        var head = _server.RevParse("HEAD");
+        _server.Run("checkout", "-q", "main");
+        var before = _server.RevParse("main");
+        _server.Run("merge", "-q", "--squash", "feature/rate");
+        _server.Run("commit", "-q", "-m", "Merged PR 44: rate");
+        var squash = _server.RevParse("main");
+        // The server drops the deleted branch's commits: the source commit can't be fetched any more.
+        _server.Run("branch", "-q", "-D", "feature/rate");
+        _server.Run("reflog", "expire", "--expire=now", "--all");
+        _server.Run("gc", "-q", "--prune=now");
+
+        var pr = AzureDevOps.LoadOne(_git, 44, new FakeAdo(AdoClosed(44, ClosedContext(44, "completed", "feature/rate", head, squash, before))))!;
+        Assert.NotEqual(0, _git.Try("cat-file", "-e", head + "^{commit}").ExitCode);
+        var doc = ClosedContextJson(pr);
+        Assert.Equal(squash, doc.GetProperty("pr").GetProperty("source").GetProperty("sha").GetString());
+        Assert.Equal(["rate.cs"], doc.GetProperty("files").EnumerateArray().Select(f => f.GetProperty("path").GetString()));
+        Assert.Equal(["Merged PR 44: rate"], doc.GetProperty("commits").EnumerateArray().Select(c => c.GetProperty("subject").GetString()));
+        Assert.Contains("is not available", doc.GetProperty("warnings")[0].GetString());
+    }
+
+    [Fact]
+    public void Abandoned_pull_request_is_closed_and_read_against_the_current_target()
+    {
+        var pr = AzureDevOps.LoadOne(_git, 42, new FakeAdo(AdoClosed(42, ClosedContext(42, "abandoned", "feature/tax", _featureSha, null, null))))!;
+        Assert.Equal(("closed", (string?)null), (pr.State, pr.MergeCommit));
+        var doc = ClosedContextJson(pr);
+        Assert.Equal("closed", doc.GetProperty("pr").GetProperty("state").GetString());
+        Assert.Equal(["tax.cs"], doc.GetProperty("files").EnumerateArray().Select(f => f.GetProperty("path").GetString()));
+    }
+
+    [Fact]
+    public void Closed_pull_request_without_any_commit_left_has_an_empty_context_that_says_why()
+    {
+        var gone = new string('e', 40);
+        var pr = AzureDevOps.LoadOne(_git, 45, new FakeAdo(AdoClosed(45, ClosedContext(45, "abandoned", "feature/gone", gone, null, null))))!;
+        var doc = ClosedContextJson(pr);
+        Assert.Equal(0, doc.GetProperty("files").GetArrayLength());
+        Assert.Equal(0, doc.GetProperty("commits").GetArrayLength());
+        Assert.Contains("is not available", doc.GetProperty("warnings")[0].GetString());
+    }
+
+    [Fact]
+    public void Unknown_pull_request_is_null_and_other_ado_errors_still_throw()
+    {
+        var notFound = new ThrowingAdo(new AdoCommandException(5, "ado pr context 99 failed: not found (exit 5)"));
+        Assert.Null(AzureDevOps.LoadOne(_git, 99, notFound));
+        var denied = new ThrowingAdo(new AdoCommandException(4, "ado pr context 99 failed: permission denied (exit 4)"));
+        Assert.Throws<AdoCommandException>(() => AzureDevOps.LoadOne(_git, 99, denied));
+        Assert.Equal("check the number, or pass a branch name with --provider local", Cli.Hint("no pull request #99 found"));
+    }
+
+    sealed class ThrowingAdo(Exception error) : IAdoClient
+    {
+        public string Run(params string[] args) => throw error;
+    }
+
+    [Fact]
+    public void Open_pull_requests_keep_the_open_state_and_no_warnings()
+    {
+        var (_, prs) = AzureDevOps.Load(_git, "main", [42], new FakeAdo(Ado(PrList())));
+        Assert.Equal(("open", (string?)null), (prs.Single().State, prs.Single().ClosedAt));
+        Assert.Empty(prs.Single().Warnings);
+    }
+
+    [Fact]
+    public void GitHub_pull_request_view_carries_state_close_time_and_merge_commit()
+    {
+        var json = JsonDocument.Parse("""
+            { "number": 7, "title": "Rounding", "body": "Closes #3", "headRefName": "f", "baseRefName": "main", "headRefOid": "abc",
+              "isDraft": false, "reviewDecision": "APPROVED", "statusCheckRollup": [], "labels": [], "author": { "login": "jane" },
+              "url": "https://github.com/o/r/pull/7", "latestReviews": [],
+              "state": "MERGED", "closedAt": "2026-10-01T12:30:00Z", "mergeCommit": { "oid": "def" } }
+            """).RootElement;
+        var pr = Providers.GitHubPr(json, new BranchPolicy([]));
+        Assert.Equal(("#7", "merged", "2026-10-01T12:30:00+00:00", "def"), (pr.Id, pr.State, pr.ClosedAt, pr.MergeCommit));
+        var open = JsonDocument.Parse(json.GetRawText().Replace("\"MERGED\"", "\"OPEN\"").Replace("{ \"oid\": \"def\" }", "null")).RootElement;
+        Assert.Equal(("open", (string?)null), (Providers.GitHubPr(open, new BranchPolicy([])).State, Providers.GitHubPr(open, new BranchPolicy([])).MergeCommit));
+        Assert.Equal("closed", Providers.GitHubPr(JsonDocument.Parse(json.GetRawText().Replace("\"MERGED\"", "\"CLOSED\"")).RootElement, new BranchPolicy([])).State);
+    }
 }
