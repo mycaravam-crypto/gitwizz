@@ -198,7 +198,17 @@ public class Git(string repoDir)
     public static GitResult Shell(string dir, string command, IDictionary<string, string>? env = null, TimeSpan? timeout = null) =>
         Exec(dir, "sh", ["-c", command], env, timeout: timeout);
 
-    static Process Start(string dir, string file, string[] args, IDictionary<string, string>? env, bool stdin)
+    static Process Start(string dir, string file, string[] args, IDictionary<string, string>? env, bool stdin) =>
+        Process.Start(StartInfo(dir, file, args, env, stdin))!;
+
+    static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
+
+    /// <summary>
+    /// How Exec starts file. git and gh write UTF-8 whatever the console code page, so their pipes are read and
+    /// written as UTF-8: .NET's default on Windows is the console code page, which turns "für" into "fÃ¼r". Other
+    /// programs (ado, build tools) write in the console code page, .NET's default, so they keep it.
+    /// </summary>
+    public static ProcessStartInfo StartInfo(string dir, string file, string[] args, IDictionary<string, string>? env, bool stdin)
     {
         var psi = new ProcessStartInfo(file)
         {
@@ -210,11 +220,16 @@ public class Git(string repoDir)
             // switch off ANSI processing under Git Bash, which garbles the live spinner into raw escape codes.
             CreateNoWindow = true,
         };
+        if (Path.GetFileNameWithoutExtension(file) is "git" or "gh")
+        {
+            psi.StandardOutputEncoding = psi.StandardErrorEncoding = Utf8;
+            if (stdin) psi.StandardInputEncoding = Utf8;
+        }
         foreach (var a in args) psi.ArgumentList.Add(a);
         // No console to prompt on: a credential prompt must fail fast instead of waiting unseen.
         psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
-        return Process.Start(psi)!;
+        return psi;
     }
 }
 
