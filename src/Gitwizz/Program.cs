@@ -746,9 +746,21 @@ public static partial class Cli
 
     static void Write(string text, string format, string? output, IAnsiConsole err)
     {
-        if (output == null) { Console.Write(text); return; }
+        if (output == null) { WriteStdout(text); return; }
         File.WriteAllText(output, text);
         err.MarkupLine($"[springgreen3]✔[/] wrote {format} report to [bold]{Markup.Escape(output)}[/]");
+    }
+
+    /// <summary>
+    /// Report text on stdout. Redirected (gitwizz ... > report.md) as UTF-8 bytes, like the files -o writes: Console.Out
+    /// would encode in the Windows console code page and lose ä, ö, ü and ß. On a terminal Console.Write is Unicode.
+    /// </summary>
+    public static void WriteStdout(string text)
+    {
+        if (!Console.IsOutputRedirected) { Console.Write(text); return; }
+        Console.Out.Flush();
+        using var stdout = Console.OpenStandardOutput();
+        stdout.Write(new System.Text.UTF8Encoding(false).GetBytes(text));
     }
 
     /// <summary>origin/HEAD, else main or master, else the current branch.</summary>
