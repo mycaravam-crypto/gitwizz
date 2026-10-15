@@ -25,7 +25,7 @@ public static class VersionHistory
     static readonly Regex TagPattern = new(@"^v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    readonly record struct Tag(string Name, string Sha, int Major, int Minor, int Patch, string? Pre);
+    sealed record Tag(string Name, string Sha, int Major, int Minor, int Patch, string? Pre);
 
     public static VersionHistoryExport Export(Git git, int limit = DefaultLimit, string branchPrefix = "release/")
     {
@@ -52,7 +52,7 @@ public static class VersionHistory
         var entries = new List<VersionEntry>();
         foreach (var tag in tags)
             entries.Add(Build(git, tag.Name.TrimStart('v'), "released", "tag", "refs/tags/" + tag.Name,
-                tag.Sha, tags.Where(t => t.Name != tag.Name && git.IsAncestor(t.Sha, tag.Sha)).ToList(), limit));
+                tag.Sha, tags.Where(t => t.Name != tag.Name && t.Sha != tag.Sha && git.IsAncestor(t.Sha, tag.Sha)).ToList(), limit));
         foreach (var branch in branches)
         {
             var sha = git.RevParse("refs/heads/" + branch);
