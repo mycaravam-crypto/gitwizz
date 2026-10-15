@@ -74,6 +74,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | `context <pr> [--system]` | The PR's normalized context from any provider, as JSON; `--system`: the system context docwizz gives for the change |
 | `evidence <pr>` | The bounded package an AI review would see, as JSON, without contacting a model |
 | `history export` | Which commits changed which lines, which PR each came with, which work items they name, as JSON with provenance |
+| `version-history list\|export` | Which versions were released (SemVer tags), which are still open (`release/*` branches), and which commits each brought (`-f text\|json`) |
 | `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline |
 | `env down <pr>` | Removes a PR's test environment (idempotent) |
 | `plan` (default) | In which order should these PRs merge? |
@@ -1020,6 +1021,26 @@ both commit ids, the limit and whether the clone is shallow; `--no-cache` skips 
 commit links) are never stored, as they change without a commit. The repository is identified by its `origin` URL without user, password or query, so
 no credential is exported; author names and e-mail addresses aren't exported either.
 
+## Version history: `version-history`
+
+```bash
+gitwizz version-history list                                  # text: each version, its baseline and its commits
+gitwizz version-history export -o versions.json               # the same as JSON (gitwizz.version-history/v1)
+gitwizz version-history list --branch-pattern "maint/*" --limit 500
+```
+
+Lists every release and every version still in progress from local refs alone: SemVer tags (`v1.2.3`, `1.2.3`,
+prereleases such as `v2.0.0-rc.1`) are **released**, local branches under `--branch-pattern` (default `release/*`) are
+**unreleased**, and the branch name after the prefix is its version. Each entry carries the commits since its baseline,
+the nearest earlier tag by `git describe`'s rule, not the highest version: on diverged maintenance lines `v1.1.0` on
+main counts from `v1.0.0` even when `v1.0.1` exists on `release/1.0`. Tags come first, highest version first, then
+branches; a branch whose head is tagged has no unreleased changes. `list` defaults to text, `export` to JSON.
+
+Read-only and offline: no provider, no checkout, no fetch, so fetch tags and branches first in a fresh or partial
+clone. Each entry holds at most `--limit` commits (default 200, max 10000); more sets `truncated`, a shallow clone sets
+`shallow`, both with a warning. A tag's commit date is not when a GitHub release was published.
+[docs/version-history](docs/version-history/README.md) has the fields and the exact rules.
+
 ## Configuration reference
 
 Everything is optional: without `.gitwizz.yml`, the built-in defaults apply. The file is read from the target branch's
@@ -1075,6 +1096,9 @@ gates or profiles are errors.
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
   conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
   links issues to pull requests, not to commits), and only for the newest `--commit-lookups` commits.
+- `version-history` measures each version from one baseline tag, so commits merged in from another tagged line (a
+  backport already shipped in `v1.0.1`) appear again in the next mainline release. It reads local refs only: release
+  branches that exist only on the remote aren't listed, and pull requests and work items aren't attached.
 - Requirement evidence needs a resolver that answers `gitwizz.requirement-input/v1`; gitwizz doesn't build one. Until
   docwizz ships it ([docwizz#166](https://github.com/mycaravam-crypto/docwizz/issues/166)), leave
   `context.requirements` off or point it at your own read-only command.
@@ -1092,7 +1116,8 @@ PR workflow `guide` (#69), per-phase progress bars on every long-running command
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
 docwizz system context for guided and AI-assisted review (#73), the dependency preflight `doctor` and its checks in
 `guide` (#75), the historical evidence export `history export` for code-to-requirement tracing (#84), and optional
-requirement evidence in the PR system context (#85).
+requirement evidence in the PR system context (#85), and the version history of released tags and open release
+branches `version-history` (#95).
 
 Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
 score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR
