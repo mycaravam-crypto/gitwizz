@@ -121,8 +121,8 @@ public sealed class GitHubHistory(string dir) : IHistoryProvider
         var id = "#" + e.GetProperty("number").GetInt32();
         var merge = e.TryGetProperty("mergeCommit", out var m) && m.ValueKind == JsonValueKind.Object ? Str(m, "oid") : null;
         var issues = e.TryGetProperty("closingIssuesReferences", out var c) && c.ValueKind == JsonValueKind.Array
-            ? c.EnumerateArray().Select(i => "#" + i.GetProperty("number").GetInt32())
-                .Select(w => new HistoryLink(w, "provider", "pr-link", "closingIssuesReferences")).ToList()
+            ? c.EnumerateArray().Select(i => new HistoryLink("#" + i.GetProperty("number").GetInt32(),
+                "provider", "pr-link", "closingIssuesReferences", Str(i, "url"))).ToList()
             : null;
         return new ProviderPr(id, Str(e, "title"), Str(e, "url"), Str(e, "baseRefName"), Str(e, "state") == "MERGED", merge, [], issues,
             issues == null ? "gh returned no closingIssuesReferences" : null);
