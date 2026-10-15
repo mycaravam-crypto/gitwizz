@@ -101,5 +101,99 @@ public sealed class VersionHistoryTests : IDisposable
         Assert.Throws<ArgumentException>(() => VersionHistory.Export(_git, 0));
     }
 
+    [Fact]
+    public void Diverged_maintenance_line_takes_the_nearest_tag_not_the_highest_version()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        G("checkout", "-q", "-b", "release/1.0");
+        var patch = Commit("fix: backport");
+        G("tag", "v1.0.1");
+        var pending = Commit("fix: second backport");
+        G("checkout", "-q", "main");
+        var feature = Commit("feat: mainline");
+        G("tag", "v1.1.0");
+
+        var versions = VersionHistory.Export(_git).Versions;
+        Assert.Equal(["1.1.0", "1.0.1", "1.0.0", "1.0"], versions.Select(v => v.Version));
+        Assert.Equal("1.0.0", versions[0].BaseVersion);
+        Assert.Equal([feature], versions[0].Changes.Select(c => c.Sha));
+        Assert.Equal([patch], versions[1].Changes.Select(c => c.Sha));
+        Assert.Equal("1.0.1", versions[3].BaseVersion);
+        Assert.Equal([pending], versions[3].Changes.Select(c => c.Sha));
+    }
+
+    [Fact]
+    public void Tagged_branch_head_has_no_unreleased_changes()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        Commit("fix");
+        G("tag", "v1.0.1");
+        G("branch", "release/1.0");
+
+        var branch = Assert.Single(VersionHistory.Export(_git).Versions.Where(v => v.Source == "branch"));
+        Assert.Equal("1.0.1", branch.BaseVersion);
+        Assert.Empty(branch.Changes);
+    }
+
+    [Fact]
+    public void Annotated_tags_resolve_and_survive_a_branch_of_the_same_name()
+    {
+        var first = Commit("initial");
+        G("tag", "-a", "v1.0.0", "-m", "release 1.0.0");
+        G("branch", "v1.0.0");
+        G("tag", "not-a-version");
+
+        var version = Assert.Single(VersionHistory.Export(_git).Versions);
+        Assert.Equal("1.0.0", version.Version);
+        Assert.Equal(first, version.CommitSha);
+        Assert.Equal("refs/tags/v1.0.0", version.Reference);
+    }
+
+    [Fact]
+    public void Prereleases_order_below_their_release_and_numerically()
+    {
+        Commit("initial");
+        foreach (var tag in new[] { "v1.0.0-rc.2", "v1.0.0", "v1.0.0-rc.10", "v1.0.0-beta" }) G("tag", tag);
+
+        Assert.Equal(["1.0.0", "1.0.0-rc.10", "1.0.0-rc.2", "1.0.0-beta"], VersionHistory.Export(_git).Versions.Select(v => v.Version));
+    }
+
+    [Fact]
+    public void Text_lists_versions_with_their_baseline_and_commits()
+    {
+        Commit("initial");
+        G("tag", "v1.0.0");
+        var fix = Commit("fix: patch");
+        G("tag", "v1.0.1");
+
+        var text = VersionHistory.Text(VersionHistory.Export(_git));
+        Assert.Contains("1.0.1 [released] refs/tags/v1.0.1", text);
+        Assert.Contains("since: 1.0.0 | commits: 1", text);
+        Assert.Contains($"{fix[..8]} fix: patch", text);
+        Assert.Contains("since: (initial)", text);
+    }
+
+    [Fact]
+    public void Cli_takes_version_history_options_and_writes_the_report()
+    {
+        var o = Cli.Parse(["--limit", "5", "--branch-pattern", "maint/*", "-f", "text", "-o", "v.txt"], "version-history");
+        Assert.Equal(("5", "maint/*", "text", "v.txt"), (o["limit"], o["branch-pattern"], o["format"], o["output"]));
+        Assert.Throws<ArgumentException>(() => Cli.Parse(["--since", "v1.0.0"], "version-history"));
+
+        Commit("initial");
+        G("tag", "v1.0.0");
+        var output = Path.Combine(_dir, "versions.json");
+        var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings
+        {
+            Out = new Spectre.Console.AnsiConsoleOutput(new StringWriter()), Ansi = Spectre.Console.AnsiSupport.No,
+        });
+        Assert.Equal(0, Cli.VersionHistoryCommand("export", new() { ["repo"] = _dir, ["output"] = output }, console));
+        Assert.Contains("\"version\": \"1.0.0\"", File.ReadAllText(output));
+        Assert.Throws<ArgumentException>(() => Cli.VersionHistoryCommand("list", new() { ["repo"] = _dir, ["branch-pattern"] = "release" }, console));
+        Assert.Throws<ArgumentException>(() => Cli.VersionHistoryCommand("list", new() { ["repo"] = _dir, ["limit"] = "0" }, console));
+    }
+
     public void Dispose() => Directory.Delete(_dir, true);
 }

@@ -782,7 +782,9 @@ public static partial class Cli
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items)
                                                 --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
-              gitwizz version-history list | export [[options]] released tags and active release branches\n              gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
+              gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
+              gitwizz version-history list | export [[options]]
+                                                released SemVer tags and local release branches, with the commits of each
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
               gitwizz benchmark [[options]]      measure AI review quality on labelled cases
               gitwizz trace <pr> [[options]]     which tests the change needs and why; acceptance criteria -> tests -> results
@@ -835,7 +837,7 @@ public static partial class Cli
                   --provider, -o, --no-cache as above; JSON only (schema gitwizz.history/v2, docs/history/README.md)
 
             [bold]Version history[/]
-                  --branch-pattern <glob> matching local release branches [grey](default: release/*)[/]
+                  --branch-pattern <prefix*> local branches that are release lines [grey](default: release/*)[/]
                   --limit <n>           at most n commits per version [grey](default: 200)[/]
                   -f, --format <name>   json | text [grey](list defaults to text; export to json)[/]
                   -o, --output <file>   write the report to a file instead of stdout
