@@ -84,6 +84,7 @@ gates:
     type: command
     run: ./scripts/e2e.sh
     paths: ["web/*"]             # only when the PR changes a matching file
+    cache_inputs: [~/.tool-versions, /opt/ci/e2e.env]  # files outside the commit the result depends on (see below)
 profiles:                        # which gates each profile runs, in order
   fast: [build]
   default: [build, test, docs]
@@ -99,6 +100,13 @@ The profile is `--profile`, else the one for the PR's **risk** (`high`: a `high_
 files; `medium`: an API signature, migration or configuration change; else `low`), else `default`, else every gate.
 Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes the built-in. Values of `secrets` and of
 `GITHUB_TOKEN`, `GH_TOKEN`, `ADO_PAT`, `SYSTEM_ACCESSTOKEN` are masked as `***` everywhere.
+
+A build, test, command or docwizz gate's result is [reused](workflow.md#repository-workspace-status-refresh-cache)
+while its merged state, definition, command, environment and tools are unchanged. Files in the commit are part of the
+merged state; `cache_inputs` names files outside it that the command also reads (a shared script, a machine config, a
+tool-version file). Their path, mode and content become part of the gate's cache inputs, so a change reruns that gate
+only. Relative paths resolve against the repository root, `~/` against the home directory. A missing or unreadable
+entry (a directory included) means the result can't be proven reusable: the gate runs every time and nothing is kept.
 
 `--evidence <dir>` keeps each command gate's full log (`<gate>.log`) and the result (`evaluation.json`), which
 references the logs: an audit trail for every verdict.

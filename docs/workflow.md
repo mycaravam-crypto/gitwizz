@@ -124,10 +124,10 @@ worktrees), never in tracked files. `GITWIZZ_WORKSPACE=<dir>` moves it, e.g. to 
 | PR analysis (changed files, hunks, members, API changes) | target commit, PR head, gitwizz build |
 | Conflict history (`plan`) | target commit, depth, gitwizz build |
 | Policy and test topology | `.gitwizz.yml` at the target, gitwizz build |
-| Build, test and command gate results | merged-state commit, gate definition, command, environment, the command's tools |
+| Build, test and command gate results | merged-state commit, gate definition, command, environment, the command's tools, the gate's `cache_inputs` files |
 | Test suite runs (`traceability`) | merged-state commit, suite definition, environment, the suite's tools |
 | AI review results | evidence-package hash, model, prompt version and hash, endpoint, review settings |
-| Latest verdict per PR (`status`, `guide`) | commits, `.gitwizz.yml`, provider state (reviews, checks, description, work items), strategy, profile, the tools of the commands it ran |
+| Latest verdict per PR (`status`, `guide`) | commits, `.gitwizz.yml`, provider state (reviews, checks, description, work items), strategy, profile, the tools of the commands it ran, the `cache_inputs` files of its gates |
 | docwizz system model of the target (`repo/docwizz/`), shared by every PR | the target's tree, docwizz version, gitwizz build |
 | docwizz diff per PR (`docwizz-diff.json`) | the target's tree, the merged state's tree, docwizz version, gitwizz build |
 

@@ -47,9 +47,9 @@ public class WorkspaceTests : IDisposable
     /// build: logs and fails when src/Tax.cs says BROKEN, through a tool outside the repository (an absolute path);
     /// lint: a command whose tool can't be found, so it errors; tests: one suite logging its runs.
     /// </summary>
-    void Policy(string buildTool = "build.sh", string suite = "suite.log", bool lint = false) => Write(".gitwizz.yml", $$"""
+    void Policy(string buildTool = "build.sh", string suite = "suite.log", bool lint = false, string? cacheInput = null) => Write(".gitwizz.yml", $$"""
         gates:
-          - { id: build, run: "{{Tool(buildTool)}}" }
+          - { id: build, run: "{{Tool(buildTool)}}"{{(cacheInput != null ? $", cache_inputs: [\"{cacheInput}\"]" : "")}} }
           - id: traceability
         {{(lint ? "  - { id: lint, run: gitwizz-no-such-linter }" : "")}}
         tests:
@@ -67,9 +67,9 @@ public class WorkspaceTests : IDisposable
         return path;
     }
 
-    void MainPolicy(string buildTool = "build.sh", string suite = "suite.log", bool lint = false)
+    void MainPolicy(string buildTool = "build.sh", string suite = "suite.log", bool lint = false, string? cacheInput = null)
     {
-        Policy(buildTool, suite, lint);
+        Policy(buildTool, suite, lint, cacheInput);
         Commit("policy");
     }
 
@@ -141,6 +141,58 @@ public class WorkspaceTests : IDisposable
         // Another PR never reuses this one's results.
         Evaluate("nobuild");
         Assert.Equal(4, Runs("build.sh.log"));
+    }
+
+    ArtifactState Verdict(string branch)
+    {
+        var (sha, prs) = Load(branch);
+        return _store.EvaluationState(_git, "local", prs.Single(), sha, MergeStrategy.Merge).State;
+    }
+
+    [Fact]
+    public void A_changed_cache_input_reruns_only_its_gate()
+    {
+        var input = Path.Combine(_tools, "build.conf");
+        File.WriteAllText(input, "v1");
+        MainPolicy(cacheInput: input);
+        Evaluate("feature");
+        var same = Evaluate("feature");
+        Assert.NotNull(same.Gates.Single(g => g.Id == "build").CachedAt); // unchanged: reused
+        Assert.Equal(1, Runs("build.sh.log"));
+        Assert.True(Verdict("feature").Current);
+
+        File.WriteAllText(input, "v2");
+        Assert.Equal("a cache_inputs file changed", Verdict("feature").Reason);
+        var changed = Evaluate("feature");
+        Assert.Null(changed.Gates.Single(g => g.Id == "build").CachedAt);
+        Assert.Equal(2, Runs("build.sh.log"));
+        Assert.Equal(1, Runs("suite.log"));                    // the test suite declares no cache_inputs: reused
+        Assert.NotNull(changed.Trace!.Runs.Single().CachedAt);
+
+        File.SetUnixFileMode(input, UnixFileMode.UserRead);    // file state, not just content
+        Evaluate("feature");
+        Assert.Equal(3, Runs("build.sh.log"));
+    }
+
+    [Fact]
+    public void A_missing_cache_input_never_reuses_a_result()
+    {
+        MainPolicy(cacheInput: Path.Combine(_tools, "absent.conf"));
+        Assert.True(Evaluate("feature").Ready);                // the gate itself doesn't read it: it still runs and passes
+        var again = Evaluate("feature");
+        Assert.Null(again.Gates.Single(g => g.Id == "build").CachedAt);
+        Assert.Equal(2, Runs("build.sh.log"));
+        Assert.Equal(1, Runs("suite.log"));
+        Assert.Equal("stale", Verdict("feature").Status);
+        Assert.Null(Fingerprint.Files([_tools]));              // a directory is unreadable as a file, too
+    }
+
+    [Fact]
+    public void Cache_inputs_resolve_against_the_repository_root()
+    {
+        var paths = CommandGate.CacheInputPaths(_git, new GateSpec { Id = "b", CacheInputs = ["ci/local.conf", "/etc/tool.conf", "~/.tool-versions"] });
+        Assert.Equal([Path.Combine(_git.RepoDir, "ci", "local.conf"), "/etc/tool.conf",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".tool-versions")], paths);
     }
 
     [Fact]

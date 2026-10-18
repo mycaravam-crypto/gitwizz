@@ -179,6 +179,8 @@ public class GateTests : IDisposable
     [InlineData("profiles:\n  p: [nope]", "unknown gate 'nope'")]
     [InlineData("risk:\n  profiles: { high: p }", "unknown profile 'p'")]
     [InlineData("gates:\n  - { id: a, run: x, timeout: 0 }", "timeout")]
+    [InlineData("gates:\n  - { id: a, run: x, cache_inputs: [\"\"] }", "empty path in cache_inputs")]
+    [InlineData("gates:\n  - { id: r, type: ai-review, cache_inputs: [x] }", "cache_inputs applies to")]
     public void Invalid_policies_are_rejected(string yaml, string message)
     {
         var e = Assert.Throws<InvalidOperationException>(() => RepoConfig.Parse(yaml));

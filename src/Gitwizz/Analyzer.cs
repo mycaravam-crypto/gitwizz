@@ -111,6 +111,9 @@ public record RepoConfig
             return $"gate '{bad.Id}' has unknown type '{bad.Kind}' ({string.Join(", ", Gitwizz.Gates.Types)})";
         if (c.Gates.FirstOrDefault(g => g.Kind == "command" && string.IsNullOrWhiteSpace(g.Run)) is { } cmd) return $"gate '{cmd.Id}' needs a run: command";
         if (c.Gates.FirstOrDefault(g => g.Timeout <= 0) is { } t) return $"gate '{t.Id}': timeout must be a positive number of seconds";
+        if (c.Gates.FirstOrDefault(g => g.CacheInputs is null || g.CacheInputs.Any(string.IsNullOrWhiteSpace)) is { } ci) return $"gate '{ci.Id}': empty path in cache_inputs";
+        if (c.Gates.FirstOrDefault(g => g.CacheInputs.Count > 0 && g.Kind is not ("build" or "test" or "command" or "docwizz")) is { } nc)
+            return $"gate '{nc.Id}': cache_inputs applies to build, test, command and docwizz gates only";
         var ids = c.GateSpecs().Select(g => g.Id).ToHashSet();
         if (c.Gates.SelectMany(g => (g.Needs ?? []).Select(n => (g.Id, n))).FirstOrDefault(x => !ids.Contains(x.n)) is { Id: not null } need)
             return $"gate '{need.Id}' needs unknown gate '{need.n}'";
