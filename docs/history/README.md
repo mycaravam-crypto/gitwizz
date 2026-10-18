@@ -15,6 +15,30 @@ repository on every test run and must match byte for byte, and every export (all
 validate against the schema. After an intended change, run the tests with `GITWIZZ_UPDATE_GOLDEN=1` and review the diff
 of `example.json`.
 
+## Usage
+
+```bash
+gitwizz history export --since v1.4.0                  # commits after v1.4.0 up to the default branch
+gitwizz history export --since v1.4.0 --until release/1.5 --limit 1000 -o history.json
+gitwizz history export --since v1.4.0 --provider azure-devops --commit-lookups 100 -o history.json
+```
+
+**Bounded.** The range is `--since` (exclusive) to `--until` (default: the default branch), newest first, at most
+`--limit` commits (default 200, max 10000). There is no unbounded default: without `--since`, the limit bounds it. When
+the range holds more, `range.truncated` is true and a warning says so; a shallow clone sets `range.shallow` and gets a
+warning too. With Azure DevOps, the newest `--commit-lookups` commits (default 500, 0 = none) are asked for their links
+with `ado commit context`, 4 at a time with a one-minute timeout each; the rest are `unknown`. When `ado` is missing or
+not logged in, the remaining commits are `unavailable` without asking again.
+
+How pull requests are found: a merge commit `Merge pull request #12 …` (GitHub) or `Merged PR 12: …` (Azure DevOps)
+owns itself and the commits its merge brought in (first parent..second parent); a commit on the first-parent line whose
+subject ends in `(#12)` (GitHub squash) or starts with `Merged PR 12:` (Azure DevOps squash) owns itself. Inside a merged
+branch, `(#75)` names an issue, not a PR. Each PR is then confirmed with the provider: GitHub through
+`gh pr view N --json number,title,state,url,baseRefName,mergeCommit,closingIssuesReferences` (merged, same merge commit;
+linked work items are the issues it closes), Azure DevOps through `ado pr context N` (completed; for a merge, the merged
+head is one of the PR's commits; linked work items). A PR that can't be confirmed stays `inferred`, never `exact`, and
+its work items are `unavailable`, never an empty list.
+
 ## Versioning and compatibility
 
 - The `schema` field names the contract: `gitwizz.history/v2`. A consumer reads only the versions it knows and fails

@@ -33,8 +33,8 @@ if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
 Add-Content $PROFILE 'function gitwizz { dotnet "$HOME\tools\gitwizz\gitwizz.dll" @args }'
 ```
 
-Re-run `dotnet publish` after pulling. For the fastest start-up, publish a single-file binary:
-`dotnet publish src/Gitwizz -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true`.
+Re-run `dotnet publish` after pulling. A `gitwizz.cmd` for cmd and a faster single-file binary:
+[docs/install.md](docs/install.md).
 
 ## Quick start
 
@@ -79,6 +79,11 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 `--no-cache`. Every report ends with the next step as a ready-to-run command; gitwizz proposes merges, it never runs
 them.
 
+The full reference is in [docs/](docs/README.md): [guide, doctor and the workspace](docs/workflow.md),
+[gates and tests](docs/gates.md), [system context](docs/system-context.md), [AI review](docs/ai-review.md),
+[merge planning](docs/planning.md), [providers](docs/providers.md), and the
+[history](docs/history/README.md) and [version history](docs/version-history/README.md) contracts.
+
 ## Configuration
 
 Everything is optional: without `.gitwizz.yml`, `plan` works as is and the built-in `merge` and `policy` gates run.
@@ -106,10 +111,17 @@ risk:
 secrets: [DEPLOY_TOKEN]          # masked in every output, log and JSON
 ```
 
-Other top-level keys: `tests` and `traceability` (test suites and the acceptance criteria they verify), `environment`
-(a per-PR Docker Compose deployment), `review` (the self-hosted AI endpoint), `benchmark`, `context` (docwizz system
-context and requirement evidence), and `regenerators`, `generated`, `ignored`, `costs` (merge planning). Unknown keys
-are errors; `gitwizz doctor --working-tree` validates a local edit before you commit it.
+| Keys | Reference |
+|---|---|
+| `gates`, `profiles`, `risk`, `secrets` | [Policy as code](docs/gates.md#policy-as-code) |
+| `tests`, `traceability` | [Test selection and traceability](docs/gates.md#test-selection-and-traceability-trace) |
+| `environment` | [Ephemeral PR test environments](docs/gates.md#ephemeral-pr-test-environments) |
+| `review`, `benchmark` | [AI review](docs/ai-review.md) |
+| `context` | [System context from docwizz](docs/system-context.md) |
+| `regenerators`, `generated`, `ignored`, `costs` | [Planning configuration](docs/planning.md#planning-configuration) |
+
+Patterns use `*` and `?` and match the file name, or the whole path when they contain a `/`. Unknown keys, unknown
+gate types and duplicate ids are errors; `gitwizz doctor --working-tree` validates a local edit before you commit it.
 
 In CI, use the exit code as the merge check and keep the evidence:
 
@@ -138,10 +150,10 @@ A rendered merge plan: [docs/sample-plan.html](docs/sample-plan.html).
 ```bash
 dotnet build
 dotnet test
+docwizz check . --since origin/main      # the documentation gaps your branch introduces, as CI runs it
 ```
 
-Both run on every pull request; [docwizz](https://github.com/mycaravam-crypto/docwizz) checks the `///` docs
-([docwizz.yaml](docwizz.yaml)) and fails on gaps a change introduces. Every merge to `main` is released as the next
+All three run on every pull request; [docwizz](https://github.com/mycaravam-crypto/docwizz) checks the `///` docs
+against [docwizz.yaml](docwizz.yaml). Every merge to `main` is released as the next
 SemVer tag; a PR label picks the bump: `release:patch` (default), `release:minor`, `release:major` or `release:none`.
-Structural analysis (members, API changes, test selection by changed symbol) covers C# only; other languages use file
-and hunk overlap.
+Principles, known limitations and the roadmap: [docs/README.md](docs/README.md).
