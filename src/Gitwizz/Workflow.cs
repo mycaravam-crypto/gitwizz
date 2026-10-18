@@ -82,7 +82,9 @@ public sealed class PullRequestWorkflow : IDisposable
     public Evaluation Evaluate(string? profile = null, ProgressBars? progress = null)
     {
         var e = Evaluator.Run(Context, profile, progress);
-        Store.KeepEvaluation(Git, Provider, e, profile);
+        var ran = e.Gates.Select(g => g.Id).ToHashSet();
+        Store.KeepEvaluation(Git, Provider, e, profile,
+            Context.Config.GateSpecs().Where(g => ran.Contains(g.Id)).SelectMany(g => CommandGate.CacheInputPaths(Git, g)));
         return e;
     }
 

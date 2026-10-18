@@ -26,6 +26,24 @@ public static class Fingerprint
     /// <summary>sha256 of one text.</summary>
     public static string Of(string text) => Of([new("", text)]);
 
+    /// <summary>
+    /// Files a result depends on beyond the commit (cache_inputs): each one's path, mode and content. Null when one is
+    /// missing or unreadable (a directory included), so nothing depending on it is ever reused.
+    /// </summary>
+    public static string? Files(IEnumerable<string> paths)
+    {
+        try
+        {
+            return Of(string.Join('\n', paths.Distinct().Order(StringComparer.Ordinal).Select(p =>
+            {
+                using var file = File.OpenRead(p);
+                var mode = OperatingSystem.IsWindows() ? "" : File.GetUnixFileMode(p).ToString();
+                return $"{p} {mode} {Convert.ToHexStringLower(SHA256.HashData(file))}";
+            })));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     static readonly string[] Builtins = ["echo", "true", "false", "exit", "test", "[", "printf", ":", "cd", "set", "export", "unset", "read", "eval", "exec", "!"];
     static readonly ConcurrentDictionary<string, string?> Versions = new(); // by location, size and time: the file is re-checked every time
 
@@ -156,6 +174,8 @@ public sealed class WorkspaceStore
         "strategy" => "other merge strategy",
         "profile" => "other gate profile",
         "commands" => "other commands",
+        "cache_inputs" => "other cache_inputs",
+        "files" => "a cache_inputs file changed",
         "tree" => "the target's code changed",
         "commit" => "the change's code changed",
         "docwizz" => "another docwizz version",
@@ -311,26 +331,33 @@ public sealed class WorkspaceStore
 
     /// <summary>
     /// What an evaluation's verdict depends on: commits, policy, provider state, strategy, profile and the tools of the
-    /// commands it ran. commands: the commands as stored (re-fingerprinted now), or those of a fresh evaluation.
+    /// commands it ran and the cache_inputs files of its gates. commands, files: as stored (re-fingerprinted now), or
+    /// those of a fresh evaluation.
     /// </summary>
     public static SortedDictionary<string, string> EvaluationInputs(Git git, PullRequest pr, string targetSha, MergeStrategy strategy, string? profile,
-        IEnumerable<string> commands)
+        IEnumerable<string> commands, IEnumerable<string> files)
     {
         var list = commands.Distinct().Order(StringComparer.Ordinal).ToList();
-        return new()
+        var paths = files.Distinct().Order(StringComparer.Ordinal).ToList();
+        var inputs = new SortedDictionary<string, string>
         {
             ["gitwizz"] = Fingerprint.Build, ["target"] = targetSha, ["head"] = pr.HeadSha, ["config"] = ConfigHash(git, targetSha),
             ["provider"] = ProviderSnapshot(pr), ["strategy"] = strategy.ToString().ToLowerInvariant(), ["profile"] = profile ?? "(by risk)",
             ["commands"] = string.Join('\n', list), ["tools"] = Fingerprint.Of(string.Join('\n', list.Select(Fingerprint.Tools))),
         };
+        if (paths.Count == 0) return inputs;
+        // An unreadable file can't be proven unchanged: a value no later check reproduces keeps the verdict stale.
+        inputs["cache_inputs"] = string.Join('\n', paths);
+        inputs["files"] = Fingerprint.Files(paths) ?? $"unreadable {Guid.NewGuid()}";
+        return inputs;
     }
 
-    /// <summary>Records an evaluation as the PR's latest.</summary>
-    public void KeepEvaluation(Git git, string provider, Evaluation e, string? profile)
+    /// <summary>Records an evaluation as the PR's latest. files: the cache_inputs of the gates it ran.</summary>
+    public void KeepEvaluation(Git git, string provider, Evaluation e, string? profile, IEnumerable<string> files)
     {
         if (!Enabled) return;
         var commands = e.Gates.Select(g => g.Command).OfType<string>().Concat(e.Trace?.Selected.Select(s => s.Suite.Run) ?? []);
-        Write(PrPath(provider, e.Pr.Id, "evaluation.json"), EvaluationInputs(git, e.Pr, e.TargetSha, e.Strategy, profile, commands),
+        Write(PrPath(provider, e.Pr.Id, "evaluation.json"), EvaluationInputs(git, e.Pr, e.TargetSha, e.Strategy, profile, commands, files),
             new EvaluationData(e.Verdict, e.Profile, [.. e.Gates.Select(g => new GateData(g.Id, Evaluator.Name(g.Status), g.Summary, g.BlocksMerge))]));
     }
 
@@ -342,7 +369,8 @@ public sealed class WorkspaceStore
         if (stored == null) return (ArtifactState.Missing, null);
         var profile = stored.Inputs.GetValueOrDefault("profile") is { } p && p != "(by risk)" ? p : null;
         var commands = stored.Inputs.GetValueOrDefault("commands", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        return (Check(stored, EvaluationInputs(git, pr, targetSha, strategy, profile, commands)), stored.Value);
+        var files = stored.Inputs.GetValueOrDefault("cache_inputs", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        return (Check(stored, EvaluationInputs(git, pr, targetSha, strategy, profile, commands, files)), stored.Value);
     }
 
     /// <summary>The analysis state of a PR without computing anything.</summary>

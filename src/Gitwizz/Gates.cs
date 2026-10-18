@@ -50,6 +50,7 @@ public record GateSpec
     public int Timeout { get; init; } = 1800;       // seconds
     public List<string>? Needs { get; init; }       // gates that must pass first; workspace gates need merge by default
     public List<string> Paths { get; init; } = [];  // run only when a changed file matches; else skipped
+    public List<string> CacheInputs { get; init; } = []; // files outside the merged state the result depends on
 
     [YamlIgnore] public string Kind => Type ?? (Gates.Types.Contains(Id) ? Id : "command");
     [YamlIgnore] public bool IsBlocking => Blocking ?? Kind is not ("ai-review" or "system-context");
@@ -341,8 +342,17 @@ public sealed class CommandGate : IQualityGate
     {
         if (!ctx.Store.Enabled || ctx.MergedState is not { } state || spec.Kind is not ("build" or "test" or "command" or "docwizz")) return null;
         var command = CommandFor(spec, () => Gates.Detect(ctx.Git.Run("ls-tree", "--name-only", state).Split('\n'), spec.Kind));
-        return command == null ? null : ctx.Store.CommandInputs("gate", state, command, spec, ctx.Env);
+        if (command == null || ctx.Store.CommandInputs("gate", state, command, spec, ctx.Env) is not { } inputs) return null;
+        if (spec.CacheInputs.Count == 0) return inputs;
+        // A declared file that can't be read can't be proven unchanged: run the gate and keep nothing.
+        if (Fingerprint.Files(CacheInputPaths(ctx.Git, spec)) is not { } files) return null;
+        inputs["files"] = files;
+        return inputs;
     }
+
+    /// <summary>The gate's cache_inputs as absolute paths: relative to the repository root, ~/ to the home directory.</summary>
+    public static List<string> CacheInputPaths(Git git, GateSpec spec) => [.. spec.CacheInputs.Select(p => Path.GetFullPath(
+        p.StartsWith("~/") ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), p[2..]) : p, git.RepoDir))];
 
     /// <summary>Runs the command with the gate's timeout and turns its exit code and output into a result.</summary>
     public GateResult Run(GateContext ctx, GateSpec spec)
