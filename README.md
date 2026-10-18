@@ -1,61 +1,54 @@
-# gitwizz — PR quality & merge orchestrator
+# gitwizz
 
-`gitwizz` answers two questions about pull requests, with evidence you can reproduce:
+A PR quality and merge orchestrator. It answers two questions about pull requests, with evidence you can reproduce:
 
-1. **Is this PR ready to merge, and if not, why?** `evaluate` runs the repository's quality gates (mergeability,
+1. **Is this PR ready to merge, and if not, why?** `evaluate` runs the repository's quality gates (merge simulation,
    review policy, build, tests, traced acceptance criteria, a per-PR test environment, docs, AI review, any command)
-   and returns one verdict. `explain` lists every blocking decision with its evidence.
-2. **In which order should a set of PRs merge?** `plan` simulates the merges with real git and searches for the
-   order with the fewest conflicts.
+   and returns one verdict: *ready*, *blocked* or *undetermined* (a gate couldn't run, so nothing is known).
+2. **In which order should a set of PRs merge?** `plan` simulates the merges with real git and searches for the order
+   with the fewest conflicts.
 
-gitwizz owns orchestration, policy and the merge-readiness decision. It works with GitHub, Azure DevOps Server and
-plain local branches. `plan` still works on its own, with no gates configured.
+It works with GitHub, Azure DevOps Server and plain local branches, and never touches your working tree: merges are
+simulated with `git merge-tree`, commands run in temporary worktrees. Policy is read from the target branch, so a PR
+can't relax the gates it is judged by. AI review only talks to self-hosted models and stays advisory until a
+benchmark validates it. Design rationale: [PLAN.md](PLAN.md) (German).
 
-### Principles
+## Install
 
-- **Deterministic evidence before AI judgement.** Builds, tests and merge simulation decide. A gate that can't run is
-  an `error` (verdict *undetermined*), never mistaken for a broken change.
-- **AI is advisory** until a [benchmark](#ai-quality-benchmark-when-ai-review-may-block) has validated the model and
-  prompt for blocking. It only talks to **self-hosted** models and sees a bounded evidence package, never the
-  repository.
-- **One result shape for every gate**: status, blocking, findings, evidence, duration, command, tool version.
-- **Risk-based checks for PRs.** The PR's risk picks the gate profile and the test suites; full regression belongs
-  to release gates.
-- **Providers behind adapters.** GitHub (`gh`), Azure DevOps Server (`ado`) and local branches fill one
-  provider-neutral model.
-- **Reuse, don't reimplement.** Documentation gaps and the system context of a change (callers, data, endpoints,
-  external systems, documentation freshness) come from docwizz, tests from your test runner, security findings from
-  your scanners (as `command` gates). gitwizz runs them and reads their results.
-- **Traceable and auditable.** Policy is read from the target branch's commit, so a PR can't relax the gates it is
-  judged by. Every result names its policy source; `--evidence` keeps full logs and the result; AI reviews record
-  the hash of their input. Your working tree, index and branches are never touched: merges are simulated with
-  `git merge-tree`, commands run in temporary worktrees.
-- **Stable output.** Human-readable text and versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
-  `gitwizz.context/v1`, `gitwizz.system-context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`,
-  `gitwizz.health/v1`, [`gitwizz.history/v2`](docs/history/README.md)), plus documented
-  [exit codes](#exit-codes).
+Needs the .NET 10 SDK and git ≥ 2.38 (≥ 2.40 for `--strategy rebase`). Providers need an authenticated
+[`gh`](https://cli.github.com) (GitHub) or [`ado`](https://github.com/mycaravam-crypto/ado-devops) (Azure DevOps
+Server, `ado auth login`). Gates need the tools they run, e.g. Docker for test environments; `gitwizz doctor` checks
+all of it.
 
-Design rationale: [PLAN.md](PLAN.md) (German).
+```bash
+# Linux, macOS, Git Bash
+dotnet publish src/Gitwizz -c Release -o ~/tools/gitwizz
+echo "alias gitwizz='dotnet ~/tools/gitwizz/gitwizz.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
+```
+
+```powershell
+# Windows PowerShell
+dotnet publish src/Gitwizz -c Release -o "$HOME\tools\gitwizz"
+if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
+Add-Content $PROFILE 'function gitwizz { dotnet "$HOME\tools\gitwizz\gitwizz.dll" @args }'
+```
+
+Re-run `dotnet publish` after pulling. A `gitwizz.cmd` for cmd and a faster single-file binary:
+[docs/install.md](docs/install.md).
 
 ## Quick start
 
 ```bash
-dotnet run --project src/Gitwizz -- example   # builds a demo repository and plans it
+dotnet run --project src/Gitwizz -- example   # builds a demo repository with seven branches and plans it
 ```
 
-The demo has seven branches covering every planning outcome: independent PRs that can merge in parallel, a lockfile
-conflict that only needs a regenerate, a stacked dependency, a member-level overlap in `BillingService.CalculateTax`,
-and a PR blocked by a real conflict. It ends with commands to try on the demo yourself.
-
-In your own repository ([install](#install) first):
+In your own repository:
 
 ```bash
-gitwizz guide                    # the repository: which PRs are ready, blocked or stale, and what to do next
-gitwizz guide 57                 # step by step: context, system context, test impact, tests, verdict, what to do next
-gitwizz status                   # the same overview, non-interactive (-f json for scripts)
+gitwizz guide                    # which PRs are ready, blocked or stale, and what to do next
+gitwizz guide 57                 # step by step: context, system context, test impact, tests, verdict, next step
 gitwizz evaluate 57              # is PR 57 ready? (exit 0 ready, 3 blocked, 4 undetermined)
 gitwizz explain 57               # every blocking decision, with evidence
-gitwizz trace 57 --run           # the tests the change needs, checked against its acceptance criteria
 gitwizz --all-open               # merge order for all open PRs (plan is the default command)
 ```
 
@@ -64,1026 +57,80 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | Command | Answers |
 |---|---|
 | `guide [<pr>] [--yes]` | What do I do next? The repository overview, or one PR walked from context to verdict |
-| `doctor` | Is the environment ready? git, provider login, docwizz, the AI endpoint, Docker and gate tools, and which gates they affect (`-f text\|json`) |
-| `status` | Which open PRs are ready, blocked, undetermined, stale or never evaluated? (`-f text\|json`) |
-| `refresh [--all-open]` | Re-evaluates what is stale (with `--all-open` also what was never evaluated), reusing the rest |
-| `cache status\|clear` | Where the workspace is and what it holds; removes it |
-| `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`) |
-| `explain <pr>` | Why (not)? Blocking decisions, evidence, the criteria matrix (`-f text\|json`) |
+| `doctor` | Is the environment ready? git, provider login, docwizz, AI endpoint, Docker, gate tools, and which gates they affect |
+| `status` | Which open PRs are ready, blocked, undetermined, stale or never evaluated? |
+| `refresh [--all-open]` | Re-evaluates what is stale, reusing the rest |
+| `cache status\|clear` | The workspace of stored results (under `.git/gitwizz/`) |
+| `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`, `--evidence <dir>` keeps logs) |
+| `explain <pr>` | Why (not)? Blocking decisions, evidence, the acceptance criteria matrix |
 | `trace <pr> [--run]` | Which tests does the change need, and which acceptance criteria do they cover? |
-| `context <pr> [--system]` | The PR's normalized context from any provider, as JSON, open, merged or closed; `--system`: the system context docwizz gives for the change |
-| `evidence <pr>` | The bounded package an AI review would see, as JSON, without contacting a model |
-| `history export` | Which commits changed which lines, which PR each came with, which work items they name, as JSON with provenance |
-| `version-history list\|export` | Which versions were released (SemVer tags), which are still open (`release/*` branches), and which pull requests each shipped: a changelog page, JSON or text (`-f markdown\|json\|text`) |
-| `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline |
-| `env down <pr>` | Removes a PR's test environment (idempotent) |
-| `plan` (default) | In which order should these PRs merge? |
+| `context <pr> [--system]` | The PR's normalized context as JSON (open, merged or closed); `--system`: the system context from docwizz |
+| `evidence <pr>` | The bounded package an AI review would see, without contacting a model |
+| `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline that lets it block |
+| `history export` | Which commits changed which lines, with their PRs and work items ([`gitwizz.history/v2`](docs/history/README.md)) |
+| `version-history list\|export` | Released tags and open `release/*` branches with the PRs each shipped, as a changelog ([`gitwizz.version-history/v2`](docs/version-history/README.md)) |
+| `env down <pr>` | Removes a PR's test environment |
+| `plan` (default) | In which order should these PRs merge? (`-a` all open, `-p 101,102`, `-s squash`, `--verify "cmd"`, `-o plan.html`) |
 | `example` | Builds a demo repository and plans it |
 | `help`, `version` | All options with examples; the version |
 
-`<pr>` is a GitHub or Azure DevOps PR number, or a local branch name. Common options, where a command takes them:
-`-t/--target` (default: `origin/HEAD`, else `main`/`master`, else the current branch; `evaluate` uses the branch the PR
-targets), `--provider`, `-s/--strategy`, `-f/--format`, `-o/--output` (format from the extension) and `-r/--repo`.
-Typos get suggestions (`--strat` → "did you mean --strategy?"), and common errors come with a hint.
+`<pr>` is a GitHub or Azure DevOps PR number, or a local branch name. Common options: `-t/--target`, `--provider`
+(`local`, `github`, `azure-devops`; detected from `origin`), `--profile`, `-f/--format`, `-o/--output`, `-r/--repo`,
+`--no-cache`. Every report ends with the next step as a ready-to-run command; gitwizz proposes merges, it never runs
+them.
 
-## Install
+The full reference is in [docs/](docs/README.md): [guide, doctor and the workspace](docs/workflow.md),
+[gates and tests](docs/gates.md), [system context](docs/system-context.md), [AI review](docs/ai-review.md),
+[merge planning](docs/planning.md), [providers](docs/providers.md), and the
+[history](docs/history/README.md) and [version history](docs/version-history/README.md) contracts.
 
-Requires the .NET 10 SDK and git ≥ 2.38 (`merge-tree --write-tree`; ≥ 2.40 for `--strategy rebase`). Providers need
-an authenticated [`gh`](https://cli.github.com) (GitHub) or [`ado`](https://github.com/mycaravam-crypto/ado-devops)
-logged in with `ado auth login` (Azure DevOps Server). Gates need the tools they run, e.g. Docker for environments.
+## Configuration
 
-Publish to a fixed folder and point a `gitwizz` command at it. Re-run `dotnet publish` after pulling changes.
-
-```bash
-# Linux, macOS, Git Bash
-dotnet publish src/Gitwizz -c Release -o ~/tools/gitwizz
-echo "alias gitwizz='dotnet ~/tools/gitwizz/gitwizz.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
-```
-
-<details>
-<summary>Windows (PowerShell or cmd), and a faster single-file binary</summary>
-
-PowerShell: `Set-Alias` can't pass arguments, so add a function to `$PROFILE`. If the profile won't load, run
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
-
-```powershell
-dotnet publish src/Gitwizz -c Release -o "$HOME\tools\gitwizz"
-if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
-Add-Content $PROFILE 'function gitwizz { dotnet "$HOME\tools\gitwizz\gitwizz.dll" @args }'
-```
-
-cmd (also works from PowerShell): put a `gitwizz.cmd` on your `PATH`. Run this once in PowerShell, then open a new
-terminal.
-
-```powershell
-dotnet publish src/Gitwizz -c Release -o "$HOME\tools\gitwizz"
-New-Item -Type Directory -Force "$HOME\bin" | Out-Null
-Set-Content "$HOME\bin\gitwizz.cmd" "@dotnet `"$HOME\tools\gitwizz\gitwizz.dll`" %*" -Encoding ASCII
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if (";$userPath;" -notlike "*;$HOME\bin;*") { [Environment]::SetEnvironmentVariable('Path', "$userPath;$HOME\bin", 'User') }
-```
-
-Fastest start-up: a precompiled (ReadyToRun) single-file binary in `src/Gitwizz/bin/Release/net10.0/<rid>/publish/`.
-ReadyToRun compiles for the target platform, so build the Windows binary on Windows (or drop
-`-p:PublishReadyToRun=true`).
-
-```bash
-dotnet publish src/Gitwizz -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true
-# also: -r win-x64, -r osx-arm64
-```
-
-</details>
-
-## Guided workflow: `guide`
-
-```bash
-gitwizz guide 57                         # interactive on a terminal
-gitwizz guide 57 --yes                   # no questions: run the selected tests and the gates, print the verdict
-gitwizz guide 57 --evidence .gitwizz-evidence --profile full
-```
-
-`guide` takes a developer from "I have a PR" to an evidence-based verdict without knowing which command comes next.
-It shows six steps:
-
-1. **PR context**: the PR, source → target, provider, risk, linked work items and how many acceptance criteria they have.
-2. **System context**: what docwizz knows about the system around the change: changed symbols and their modules and
-   layers, callers and callees, API endpoints, data entities, external systems, the freshness of the relevant
-   documentation, linked tests, which acceptance criteria name which parts of the system, and how much of it an AI
-   review would get. It ends with the context quality (GOOD, PARTIAL, MISSING or STALE) and its reasons. Unless it is
-   GOOD, you choose: continue, show the affected system graph, show what is missing or stale (with the commands that
-   fix it), or run docwizz again. See [System context](#system-context-from-docwizz).
-3. **Test impact**: whether it merges, the selected test suites, and acceptance criteria without a verifying test, all
-   before anything expensive runs.
-4. **Tests**: run the selected suites on the merged state, show the traceability details first, or skip.
-5. **Merge readiness**: the same gate evaluation as `evaluate`. Suites the guide already ran on the same merged state
-   are not run again, and the verdict is READY, BLOCKED or UNDETERMINED.
-6. **What next?**: for BLOCKED, the blocking reasons and a concrete next action ("Add or link a test for AB#8234.3",
-   "Fix the failing test suite contract", "Bring main into feature/x and resolve the conflicts in …"). For
-   UNDETERMINED, which gate could not run, kept apart from quality failures. For READY, the merge plan for the target
-   with this PR's position and the next merge command.
-
-The menus also offer the full explanation, a summary of the AI evidence package, and saving `evaluation.json` and
-`evidence.json` as an evidence bundle.
-
-Before it loads anything, the guide checks its environment with the first checks [`doctor`](#environment-check-doctor)
-makes: git, the repository and the provider it will use (`ado auth status` or `gh auth status`, read-only). It prints
-them as an *Environment* section. When one of them is unusable, it shows the fix (for example `ado auth login
-<server-url>`) and stops with exit code 7 before any PR is loaded. On a terminal it offers *Retry* (after you fixed it
-in another shell) or *Exit*; with `--yes` or without a terminal it stops at once. The same applies to `gitwizz guide`
-without a PR.
-
-After the PR context, once the policy is read from the target, the guide checks what the gates selected for this PR
-rely on: docwizz, the AI endpoint (its model list only, never repository content, never a host the self-hosting policy
-refuses), Docker for an `environment` gate, and the version of well-known gate tools (scripts are never run). Under
-*Gate dependencies* it lists them, the gates that can't run and what that means: an advisory gate (AI review) leaves
-the verdict alone (`DEGRADED`), a blocking one means the verdict can be no better than UNDETERMINED
-(`VERDICT_AT_RISK`), with the same rule as `evaluate`. When a gate is affected, it asks: *Continue without …* (or
-*Continue anyway*), *Retry the checks*, *Show configuration* (the `.gitwizz.yml` keys involved, hosts only, and the
-fixes) or *Exit*. With `--yes` or without a terminal it says what it found and continues. A missing docwizz that only
-the system context needs is left to step 2. Nothing is checked twice in one run except on *Retry*, and no result is
-stored: every run checks again. An unavailable tool never makes a PR BLOCKED.
-
-It only orchestrates the other commands' logic (one implementation of loading, analysis, traceability, gates, evidence
-and planning). It never merges, never changes the PR and never writes tests. It asks only when stdin and stdout are
-terminals: with `--yes`, or when piped, it runs the recommended steps and never waits for input. It keeps no state.
-After fixing code or tests, rerun `gitwizz guide 57` and it recomputes everything. The exit code matches `evaluate`'s,
-and is 4 when you exit before a verdict, 7 when the environment check stops it. Options: `--target`, `--provider`,
-`--profile`, `--evidence`, `--yes`, `--repo`, `--no-cache`.
-
-Without a PR, `gitwizz guide` starts from the repository. It shows the target, the workspace and every open PR as
-ready, blocked, undetermined, stale (with the reason) or never evaluated, then recommends the next action. A stale
-verdict comes first, then unevaluated PRs, stale repository facts, blockers, and finally the merge plan for what is
-ready. Choosing a PR continues in the PR guide above, and that PR's new verdict is stored. Without a terminal it prints
-the summary and the recommended command, and runs nothing.
-
-## Environment check: `doctor`
-
-```bash
-gitwizz doctor                 # dependency health and what it means for the verdict
-gitwizz doctor -f json         # schema gitwizz.health/v1, for scripts and CI
-gitwizz doctor --profile full  # only the gates of one profile
-gitwizz doctor --working-tree # validate local .gitwizz.yml before committing
-```
-
-`doctor` checks what gitwizz relies on before anything expensive runs, and says what a missing piece means:
-
-| Dependency | Check | Never |
-|---|---|---|
-| git, repository | `git --version` (2.38 or later), `rev-parse` | |
-| Azure DevOps | `ado --version`, `ado auth status` (asks the server: reachability and token) | prints the token or the user |
-| GitHub | `gh --version`, `gh auth status` | |
-| `.gitwizz.yml` | read at the target as `evaluate` would; with `--working-tree`, read the local file | |
-| docwizz | `docwizz --version`; `docwizz.yaml` is valid YAML | runs an analysis |
-| AI endpoint | the self-hosting policy, then `GET {endpoint}/models` and that `review.model` is served | contacts a refused host; sends repository content |
-| Docker | `docker info`, `docker compose version` (for an `environment` gate) | |
-| gate and suite tools | `--version` of well-known tools (dotnet, npm, make, docwizz, powerwizz-cli, ...) | runs a configured command or script: those are `UNKNOWN` |
-
-Each dependency is `AVAILABLE`, `UNAVAILABLE`, `MISCONFIGURED` or `UNKNOWN`, with the gates that use it and the exact
-fix. The gates it affects, and the best verdict an evaluation can still reach, follow from the same rules as
-`evaluate`: with every affected gate erroring and the rest passing. Overall:
-
-| Overall | Meaning | Exit |
-|---|---|---|
-| `OK` | everything is available | `0` |
-| `DEGRADED` | only advisory gates or the system context are affected; a PR can still become READY | `5` |
-| `VERDICT_AT_RISK` | a blocking gate cannot run: the verdict can be no better than UNDETERMINED | `6` |
-| `CANNOT_START` | git, the repository, the provider or `.gitwizz.yml` is unusable | `7` |
-
-An unavailable dependency is never a quality failure: it can make a verdict UNDETERMINED, never BLOCKED. Without a PR
-the risk level is unknown, so every profile the risk levels map to is considered (or only `--profile`). Results are
-never stored: each run checks again. By default `doctor` uses the policy committed on the target branch, even if a local `.gitwizz.yml` exists.
-Use `--working-tree` to validate new or uncommitted policy edits (including `context.docwizz.command`) without changing PR evaluation policy.
-When `.gitwizz.yml` has uncommitted changes, text output highlights which policy `doctor` is checking and suggests `doctor --working-tree` if needed.
-Options: `--target`, `--provider`, `--profile`, `--working-tree`, `-f`, `-o`, `--repo`.
-
-`guide` runs the same checks: the first three rows (git, the repository, the provider) before it loads a PR, stopping
-with the fix when one of them is unusable, and the rest for the gates selected for that PR after its context; see
-[Guided workflow](#guided-workflow-guide).
-
-## Repository workspace: `status`, `refresh`, `cache`
-
-```bash
-gitwizz status                # open PRs as the workspace sees them, and the next suggested action
-gitwizz refresh               # re-evaluate PRs whose verdict is stale; bring repository facts up to date
-gitwizz refresh --all-open    # also evaluate open PRs never evaluated
-gitwizz cache status          # where the workspace is and what it holds
-gitwizz cache clear           # remove it (only a directory gitwizz created)
-```
-
-gitwizz keeps what it computed in a workspace under the repository's git directory (`.git/gitwizz/`, shared by
-worktrees), never in tracked files. `GITWIZZ_WORKSPACE=<dir>` moves it, e.g. to a CI cache. It holds:
-
-| Artifact | Reused while these are unchanged |
-|---|---|
-| PR analysis (changed files, hunks, members, API changes) | target commit, PR head, gitwizz build |
-| Conflict history (`plan`) | target commit, depth, gitwizz build |
-| Policy and test topology | `.gitwizz.yml` at the target, gitwizz build |
-| Build, test and command gate results | merged-state commit, gate definition, command, environment, the command's tools |
-| Test suite runs (`traceability`) | merged-state commit, suite definition, environment, the suite's tools |
-| AI review results | evidence-package hash, model, prompt version and hash, endpoint, review settings |
-| Latest verdict per PR (`status`, `guide`) | commits, `.gitwizz.yml`, provider state (reviews, checks, description, work items), strategy, profile, the tools of the commands it ran |
-| docwizz system model of the target (`repo/docwizz/`), shared by every PR | the target's tree, docwizz version, gitwizz build |
-| docwizz diff per PR (`docwizz-diff.json`) | the target's tree, the merged state's tree, docwizz version, gitwizz build |
-
-Every entry stores its inputs, the time it was computed and a fingerprint of those inputs. It is reused only when the
-fingerprint of the current inputs matches, never because it is recent. When it doesn't match, `status` and `guide` say
-it is stale and why ("new commits on the PR", "the target branch moved", "`.gitwizz.yml` changed", "a tool
-changed"…), and nothing stale is shown as current. A tool counts as the program each command segment starts: shell
-builtins are fixed; a relative path is part of the commit; well-known tools (dotnet, npm, go, …) by their `--version`;
-anything else by its location, size and modification time.
-
-Some results are never stored:
-- a gate that errored (a missing tool or a timeout says nothing about the change);
-- results that depend on a provisioned test environment (variables beyond `GITWIZZ_*`);
-- merge and policy gates, which are cheap and read live provider state.
-
-With `--evidence`, gates run again so every log is written. A stored value also carries a digest, so a corrupt,
-truncated or edited entry reads as missing and is recomputed: it can never turn into a READY. Delete the workspace at
-any time; the next run recomputes it. `--no-cache` neither reads nor writes it, and CI works the same with an empty
-one.
-
-Incremental in practice:
-- A new commit on one PR invalidates that PR's analysis and verdict only.
-- A moved target invalidates baseline-dependent data, keeping gate results whose merged state is unchanged.
-- An edited test command reruns that suite only.
-- Another AI model or prompt reruns the AI review only.
-- Rerunning `guide` with nothing changed reuses every gate result.
-
-The one repository-wide index is docwizz's code model of the target, which gitwizz stores and reuses for every PR
-until the target's code or docwizz changes; `status` lists it as *docwizz system model* when docwizz is installed, and
-`refresh` brings it up to date.
-
-## Merge readiness: `evaluate` and `explain`
-
-```bash
-gitwizz evaluate 57                                               # run the gates, print the verdict
-gitwizz evaluate feature/x -f json                                # a local branch, schema gitwizz.evaluation/v1
-gitwizz evaluate 57 --profile fast --evidence .gitwizz-evidence   # pick a profile, keep full logs
-gitwizz explain 57                                                # why it is (not) ready
-```
-
-`evaluate` loads one PR and runs its **quality gates** in order. Every gate reports the same shape: a status, whether
-it blocks, findings (message, file, line, rule, evidence), evidence references, duration, command and tool version.
-
-| Status | Meaning | Blocks if the gate is blocking |
-|---|---|---|
-| `pass` | the check passed | no |
-| `warn` | passed with something to look at (e.g. a lockfile to regenerate) | no |
-| `fail` | a quality failure: the change needs work | yes |
-| `error` | the gate could not run (tool missing, timeout, crash): nothing is known | yes |
-| `skipped` | not applicable (no changed file matches its `paths`), or a gate it `needs` didn't pass | only in the second case |
-
-The verdict is `ready`, `blocked` (a blocking gate failed or was left unrun) or `undetermined` (only gate errors).
-Advisory gates (`blocking: false`; `ai-review` by default) are reported but never block.
-
-### From PR to verdict
-
-| Step | What gitwizz does |
-|---|---|
-| Collect context and linked requirements | the provider loads the PR, reviews, checks and linked work items with their acceptance criteria ([`context`](#pr-context-as-json)) |
-| Calculate change impact | changed files and C# members, API changes, and the PR's **risk** (`low`/`medium`/`high`, with reasons) |
-| Read the system context | what docwizz knows around the change, its documentation's freshness, and the context quality ([system context](#system-context-from-docwizz)) |
-| Select applicable gates | the profile from `--profile` or the risk; gates whose `paths` don't match are skipped |
-| Run deterministic checks and tests | merge simulation, policy, build, test, docwizz, commands, the test environment, and the test suites the change selects ([`trace`](#test-selection-and-traceability-trace)) |
-| Run AI-assisted review | an `ai-review` gate, if configured, on the [bounded evidence package](#ai-review), system context included |
-| Aggregate evidence | one result per gate; `--evidence` keeps logs, packages and `evaluation.json` |
-| Evaluate the readiness policy | blocking vs advisory gates → `ready`, `blocked` or `undetermined` |
-| Explain blockers | `explain`: every blocking decision with its evidence, and the criteria matrix |
-| Optimize the merge | [`plan`](#merge-order-plan): the merge order and the next merge command. gitwizz proposes the command; it doesn't run it |
-
-### Gates
-
-Two gates are built in and run without configuration:
-
-- **merge** simulates the merge into the target with the planned strategy. A conflict fails; a conflict only in
-  lockfiles or generated files warns (regenerate). It always runs first, and its merged state is the **workspace**
-  every other gate runs in.
-- **policy** checks draft state, the review decision, failing or pending required checks, branch protection, declared
-  dependencies on open PRs, and a PR that targets another branch. Skipped for local branches, which carry no such data.
-
-Gate types to configure:
-
-| Type | Runs |
-|---|---|
-| `build`, `test` | the command detected from the project (`dotnet`, `npm`, `go`, `cargo`, Maven, Gradle, Python, `make`), or `run:` |
-| `docwizz` | `docwizz check . --since $GITWIZZ_TARGET_SHA`: the documentation gaps the change introduces |
-| `command` | any command, e.g. a security scanner or linter |
-| `traceability` | the test suites the change needs ([trace](#test-selection-and-traceability-trace)) |
-| `environment` | a per-PR deployment ([environments](#ephemeral-pr-test-environments)) |
-| `ai-review` | a self-hosted model, advisory ([AI review](#ai-review)) |
-| `system-context` | the [system context](#system-context-from-docwizz) policy; advisory, added automatically when `context.docwizz` requires context |
-
-Commands run with `sh -c` in a temporary worktree of the merged state and get `GITWIZZ_PR`, `GITWIZZ_TARGET`,
-`GITWIZZ_TARGET_SHA`, `GITWIZZ_HEAD_SHA` and `GITWIZZ_RISK`. Exit 0 passes, anything else fails; 126/127 (not
-installed) and a timeout are errors. Compiler errors (`file(line,col): error CS1002: …`, `file:line: error …`) and
-failed tests (`dotnet test`, pytest, `go test`) become findings with file and line. gitwizz runs these tools; it
-doesn't reimplement them.
-
-### Policy as code
-
-Gates live in `.gitwizz.yml`, read **from the target branch's commit**. The report names the source
-(`.gitwizz.yml@<commit>`).
+Everything is optional: without `.gitwizz.yml`, `plan` works as is and the built-in `merge` and `policy` gates run.
+The file is read from the target branch's commit. A starting point:
 
 ```yaml
 gates:
-  - id: build                    # type defaults to the id when it names one
+  - id: build                    # build/test detect dotnet, npm, go, cargo, Maven, Gradle, Python, make; or set run:
   - id: test
-    needs: [build]               # skipped, and blocking, when build doesn't pass (command gates default to [merge])
-    timeout: 1800                # seconds (default 1800)
+    needs: [build]
   - id: docs
-    type: docwizz
+    type: docwizz                # the documentation gaps the change introduces
     blocking: false              # advisory
   - id: e2e
-    type: command
+    type: command                # any command; also traceability, environment, ai-review, system-context
     run: ./scripts/e2e.sh
-    paths: ["web/*"]             # only when the PR changes a matching file
-profiles:                        # which gates each profile runs, in order
+    paths: ["web/*"]
+profiles:
   fast: [build]
   default: [build, test, docs]
   full: [build, test, docs, e2e]
 risk:
-  high_paths: ["src/Billing/*"]  # touching one of these makes a PR high risk
-  max_files: 25                  # so does changing more files than this
+  high_paths: ["src/Billing/*"]
   profiles: { low: fast, medium: default, high: full }
-secrets: [DEPLOY_TOKEN]          # values never appear in output, logs or JSON
+secrets: [DEPLOY_TOKEN]          # masked in every output, log and JSON
 ```
 
-The profile is `--profile`, else the one for the PR's **risk** (`high`: a `high_paths` file or more than `max_files`
-files; `medium`: an API signature, migration or configuration change; else `low`), else `default`, else every gate.
-Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes the built-in. Values of `secrets` and of
-`GITHUB_TOKEN`, `GH_TOKEN`, `ADO_PAT`, `SYSTEM_ACCESSTOKEN` are masked as `***` everywhere.
+| Keys | Reference |
+|---|---|
+| `gates`, `profiles`, `risk`, `secrets` | [Policy as code](docs/gates.md#policy-as-code) |
+| `tests`, `traceability` | [Test selection and traceability](docs/gates.md#test-selection-and-traceability-trace) |
+| `environment` | [Ephemeral PR test environments](docs/gates.md#ephemeral-pr-test-environments) |
+| `review`, `benchmark` | [AI review](docs/ai-review.md) |
+| `context` | [System context from docwizz](docs/system-context.md) |
+| `regenerators`, `generated`, `ignored`, `costs` | [Planning configuration](docs/planning.md#planning-configuration) |
 
-`--evidence <dir>` keeps each command gate's full log (`<gate>.log`) and the result (`evaluation.json`), which
-references the logs: an audit trail for every verdict.
+Patterns use `*` and `?` and match the file name, or the whole path when they contain a `/`. Unknown keys, unknown
+gate types and duplicate ids are errors; `gitwizz doctor --working-tree` validates a local edit before you commit it.
 
-### In CI
-
-Use the exit code as the merge check and keep the evidence as a build artifact:
+In CI, use the exit code as the merge check and keep the evidence:
 
 ```bash
+gitwizz doctor -f json        # optional: fail fast on missing runner tools (exit 6 or 7)
 gitwizz evaluate "$PR" -f json -o evaluation.json --evidence gitwizz-evidence
-# 0 ready · 3 blocked (the change needs work) · 4 undetermined (fix the pipeline, not the PR)
 ```
 
-Run `gitwizz doctor -f json` as an earlier step to fail fast on the runner's tooling (exit 6 or 7) before evaluating.
-
-## Test selection and traceability: `trace`
-
-```bash
-gitwizz trace 42                                      # which tests the change needs and why; criteria and their tests
-gitwizz trace 42 --run -f json                        # also run them on the merged state (schema gitwizz.trace/v1)
-gitwizz trace 42 --run --evidence .gitwizz-evidence   # keep each suite's full log
-```
-
-A PR's linked work items (Azure DevOps work items, or the GitHub issues it closes) are split into individual
-**acceptance criteria**, with ids like `AB#4711.2` or `#57.1`. Test suites are declared in `.gitwizz.yml`:
-
-```yaml
-tests:
-  - id: billing
-    run: dotnet test --filter Category=Billing
-    files: ["tests/Billing*"]       # its test files: searched for changed names and requirement ids
-  - id: ui
-    kind: ui                        # unit, integration, contract, e2e, ui (informational) or manual (never run)
-    run: npm run test:ui
-    covers: ["src/Web/*"]           # a change to these selects it
-  - id: contract
-    run: ./scripts/contract-tests.sh
-    criteria: ["AB#4711.2"]         # verifies this criterion ("AB#4711" = all of its criteria)
-  - id: smoke
-    run: ./scripts/smoke.sh
-    always: true
-  - id: e2e
-    run: ./scripts/e2e.sh
-    high_risk: true                 # also for every high-risk change (see risk:)
-traceability:
-  require: false                    # true: an uncovered or failed criterion blocks the merge
-gates:
-  - id: traceability                # runs the selected suites in the merged workspace
-```
-
-A suite is **selected**, with the reason listed, when it always runs, a changed file matches `covers`, its own test
-files changed, its test files use a changed C# member or type (`tests/BillingTests.cs:12 uses CalculateTax
-(changed)`), it verifies one of the PR's criteria, or the change is high-risk and the suite is `high_risk`. The rest
-are reported as not affected. A PR runs what its impact and risk call for; full regression stays with release gates.
-
-A suite **verifies** a criterion when `criteria:` lists it or its test files mention the id (`// AB#4711.1`,
-`[Trait("Requirement", "AB#4711.1")]`). Each criterion ends up as:
-
-| Status | Meaning |
-|---|---|
-| `covered` | a linked suite ran here and passed |
-| `failed` | a linked suite ran and failed |
-| `unknown` | linked, but not run in this evaluation (e.g. `trace` without `--run`) |
-| `uncovered` | no test is linked to it |
-| `manual` | only manual suites verify it, or the criterion is marked `[manual]` |
-
-A link alone, including a generated test proposal, is never evidence: only a suite that ran and passed covers a
-criterion. The `traceability` gate fails when a selected suite fails; uncovered criteria only warn unless
-`traceability.require` is set. `evaluate` includes the whole trace in its JSON, and `explain` prints the criteria
-matrix. `trace` exits `3` when a suite it ran didn't pass.
-
-## Ephemeral PR test environments
-
-An `environment` gate deploys the PR's merged state into its own isolated environment, so integration, contract, UI,
-smoke and E2E tests run against deployable software, not just a build. The provisioner is Docker Compose (behind an
-interface, so others can be added).
-
-```yaml
-environment:
-  file: docker-compose.test.yml        # in the merged tree (default docker-compose.yml)
-  env: { APP_MODE: test, SEED: demo }  # configuration and test data settings
-  secrets: [DB_PASSWORD]               # passed through from gitwizz's environment; never printed or stored
-  ready:
-    - url: http://localhost:${GITWIZZ_PORT_WEB_8080}/health   # must answer 2xx
-    - command: ./scripts/db-ready.sh                            # or exit 0
-  ready_timeout: 180                   # seconds, for all checks together
-  up_timeout: 900
-  smoke: ./scripts/smoke.sh            # once ready
-  keep: false                          # true: leave it running (remove with gitwizz env down)
-gates:
-  - id: environment
-  - id: e2e
-    run: npm run e2e                    # sees GITWIZZ_PORT_WEB_8080, GITWIZZ_ENV_PROJECT, ...
-    needs: [environment]
-profiles:
-  fast: [build, test]                  # no provisioning for fast PR profiles
-  full: [build, test, environment, e2e]
-```
-
-- **Isolation**: each PR gets its own compose project, `gitwizz-<repo>-<pr>`, so environments of several PRs coexist.
-  Publish container ports without a host port (`ports: ["8080"]`): Docker picks a free one, exposed to later gates and
-  readiness URLs as `GITWIZZ_PORT_<SERVICE>_<PORT>` (plus `GITWIZZ_ENV_PROJECT`, `GITWIZZ_ENV_HOST`).
-- **Lifecycle**: leftovers of an earlier run are removed first; afterwards the environment is always torn down
-  (`docker compose down -v --remove-orphans`), also when a gate failed. `gitwizz env down <pr>` does the same by hand.
-- **Root causes**: a failed build or start (`deployment failed`), a readiness check that misses its deadline (`not
-  ready after 180 s: <check>`) or a failing smoke check fails the gate, with output and service logs as evidence.
-  Gates that `need` it are skipped and block with that cause. Docker missing, the daemon unreachable or a secret not
-  set is an `error`, not a failure.
-- **Secrets** reach only the provisioner and the commands, and are masked in every log, report and JSON.
-
-## System context from docwizz
-
-A diff alone shows code. [docwizz](https://github.com/mycaravam-crypto/docwizz) knows the system around it: who calls a
-changed method, which endpoint reaches it, which data it writes and who else reads that data, which external systems
-are involved, which documentation describes it and whether that documentation is still current, and which tests use
-it. gitwizz reads this as data and puts the part that matters for the change into the [guide](#guided-workflow-guide),
-the [AI evidence package](#ai-review) and `gitwizz context <pr> --system`. You never run docwizz yourself for a
-review.
-
-docwizz does the analysis; gitwizz selects, keeps provenance and decides trust. docwizz never talks to the AI.
-
-**What gitwizz reads.** Two machine-readable docwizz outputs, never its console report:
-
-| docwizz command | Used for | Reused |
-|---|---|---|
-| `docwizz scan <target checkout> <file>` | the code model of the target: symbols with file, line and hash, and relations (`calls`, `creates`, `accesses`, `persists`, `implements`, `connects`, `publishes`, `subscribes`, `tests`, `contains`); external systems tagged `detected` or `inferred`. Architecture layers come from the target's `docwizz.yaml` (first matching glob, as docwizz assigns them) | across PRs, until the target's tree or docwizz changes |
-| `docwizz diff <target checkout> <target> <merged> --format json` | the changed, added and removed symbols; possibly stale docs (contract changed, doc comment didn't); new gaps, doc quality flags and architecture violations; affected doc pages; test code linked to each changed symbol | per PR, until the target or the merged state changes |
-
-Both run in a temporary checkout of the target, so docwizz uses the target's `docwizz.yaml`, the way gitwizz uses
-the target's `.gitwizz.yml`. A changed signature (docwizz: one id removed, one added under the same name) is one
-changed symbol whose relations are looked up by its old id; a type whose members are listed is represented by them.
-
-**Selection: the impacted subgraph.** Starting from the changed symbols, gitwizz takes, in this order: their module
-and layer; direct callers (also through an interface the type implements, marked `inferred`) and callees; endpoints
-that expose them or whose call chain reaches them within three levels (a `flow`, marked `inferred`); the data entities
-they read, write or create, who else accesses those entities and who persists them; the external systems of their
-types, of direct callees and of the stores behind their data; events they publish and who handles them; new
-architecture violations and the decisions docwizz says the change implies. One more dependency hop is taken only for
-a high-risk change, or for a neighbour an acceptance criterion or the PR title mentions. At most 8 relations of a kind
-per symbol. Nothing else from the model is used: unrelated code, its tests and its external systems stay out.
-
-**Provenance.** Every fact names its source (`docwizz`) and origin: `detected` (found in the code), `inferred`
-(derived; may be wrong), and for documents `human-authored`, `generated` or `none`. Facts have ids (`F3`), documents
-(`D1`) and tests (`T1`) too, so a finding can cite them.
-
-**Documentation freshness.** gitwizz uses docwizz's signals, not file dates:
-
-| Status | When |
-|---|---|
-| `current` | the changed symbol's doc comment passes docwizz's contract check (no change to parameters, return type, exceptions or route under an unchanged comment, no contradiction), or a docwizz-generated page this change regenerated |
-| `stale` | docwizz reports the doc comment possibly stale (the contract changed, the comment didn't) or contradicting the code; a committed docwizz-generated page (`docs/`, with `docs/.docwizz/`) the change affects but didn't regenerate |
-| `missing` | docwizz reports a new documentation gap for the symbol; a generated page that doesn't exist yet |
-| `unknown` | docwizz only infers an inconsistency, or its diff couldn't run |
-
-Each document keeps the reason, the affected symbol, the code or document fingerprint and the analyzed commit. A
-stale doc comment carries the conflict itself ("may still describe the previous parameters: the current code is
-authoritative"). gitwizz never rewrites documentation; the guide names the command (`docwizz generate .`) for you to run.
-
-**Context quality**, shown before any test or AI review runs, always with its reasons:
-
-| Quality | Means |
-|---|---|
-| `GOOD` | every changed symbol is mapped, owned by a layer (when layers are configured) and its documentation is current |
-| `PARTIAL` | something is missing: a symbol without an architecture owner, a source file docwizz doesn't analyze, stale, missing or unverified documentation, or no docwizz diff (symbols then come from the changed lines) |
-| `MISSING` | no docwizz analysis: docwizz isn't installed or is disabled, or it failed and nothing earlier is stored |
-| `STALE` | docwizz failed now, and the facts are from an earlier analysis of another target commit |
-
-These are different situations with different messages: docwizz found no relationship (context is available, the
-guide says it found none), docwizz is not available, docwizz failed, the facts are stale, and context was cut to fit
-the AI budget (reported under `budget.truncated`, not as a quality).
-
-**Policy.** Missing context is advisory by default: nothing blocks, and the review continues with what is there.
-
-```yaml
-context:
-  docwizz:
-    enabled: true                                   # false: never run docwizz
-    command: docwizz                                # or e.g. "dotnet tools/DocWizz.dll"
-    timeout: 600                                    # seconds per docwizz run
-    required: false                                 # true: MISSING or STALE context makes the verdict undetermined
-    require_architecture_for_changed_symbols: false # true: a changed symbol in no docwizz.yaml layer blocks
-```
-
-With either requirement, a blocking `system-context` gate runs in every profile (after `merge`). Without them you can
-still list `- id: system-context` under `gates` to see the context quality in every evaluation as an advisory result.
-
-### Requirement evidence (optional)
-
-The system context can also say which requirements the changed symbols are linked to, from docwizz's requirement
-resolver (fed by [`history export`](#historical-evidence-history-export) and your evidence files). gitwizz keeps no
-requirement index of its own: it asks one read-only command, validates and bounds the answer, and keeps each link's
-provenance. **Off by default, and advisory**: it never changes a gate, the context quality or the verdict.
-
-```yaml
-context:
-  requirements:
-    enabled: false                  # true: ask for requirement evidence of the changed symbols
-    command: docwizz requirements query   # the resolver; gets <repository dir> <query file>, prints JSON on stdout
-    timeout: 300                    # seconds
-    titles: true                    # false: work item titles stay out of the AI evidence package
-```
-
-With docwizz, export the history and import it once, then point the command at `docwizz requirements query`
-([docwizz#173](https://github.com/mycaravam-crypto/docwizz/issues/173)), which answers from that index without network
-access:
-
-```bash
-gitwizz history export --provider azure-devops -o history.json
-docwizz requirements import . history.json work-items/
-```
-
-The command gets a query file (`gitwizz.requirement-query/v1`: the target and PR commits and the changed symbols with
-their docwizz ids) and must print `gitwizz.requirement-input/v1`:
-
-```json
-{
-  "schema": "gitwizz.requirement-input/v1",
-  "tool": "docwizz 1.9.0",
-  "analyzedCommit": "<the target commit it answered for>",
-  "links": [
-    { "symbol": "<a queried symbol id>", "requirement": "AB#4711", "type": "verified", "title": "Cancel orders",
-      "revision": 12, "source": "azure-devops", "evidence": ["commit 1a2b3c names AB#4711"], "freshness": "current" },
-    { "symbol": "<a queried symbol id>", "requirement": "AB#4790", "type": "candidate", "confidence": 0.6, "source": "commit-history" }
-  ],
-  "unavailable": [{ "source": "azure-devops", "reason": "server not reachable" }]
-}
-```
-
-- **verified** links are independently traceable (the symbol's commits or an explicit evidence record name the
-  requirement); **candidate** links are inferred and may be wrong. Both keep their source, work item revision,
-  evidence and freshness. A link is never test coverage: traceability still needs executed tests.
-- **Status** is `available`; `partial` when a source couldn't be read (an Azure DevOps server offline is named, so an
-  empty list never reads as "no requirements"); `unavailable` (no command, not installed, or no system context to ask
-  about); or `failed` (non-zero exit, timeout, not JSON, another schema). **Freshness** is `stale` when the answer was
-  computed for another commit than the target.
-- **Untrusted input.** Links to symbols that weren't asked about, malformed requirement ids and unknown types are
-  dropped (counted in `dropped`); titles and evidence are cut to one line of at most 200 characters with control
-  characters removed. In the evidence package they are data under a note saying so, within their own share of the
-  budget (6 % of `max_context_chars`, at least 2000 characters, verified links first, two evidence entries per link);
-  what doesn't fit is listed under `budget.truncated`.
-- **Not stored.** Answers aren't kept in the workspace, as work items change without a commit. The answer's
-  fingerprint is part of the evidence package, so a stored AI review is reused only for the same requirement evidence.
-
-`gitwizz context <pr> --system` shows the full answer under `requirements` (only when enabled); `guide` shows it in the
-system context step; `doctor` reports the command as missing or unset (degraded, never a risk to the verdict).
-
-## AI review
-
-An `ai-review` gate asks a **self-hosted**, OpenAI-compatible model (vLLM, llama.cpp server, Ollama, TGI, LocalAI, …)
-to review the PR. It is independent of the deterministic gates and **advisory**: it never blocks, even with
-`blocking: true`, until a [benchmark](#ai-quality-benchmark-when-ai-review-may-block) has validated the model and
-prompt.
-
-```yaml
-gates:
-  - id: traceability                # optional; list it first so the package includes the selected tests
-  - id: review
-    type: ai-review
-review:
-  endpoint: http://llm.internal:8000/v1   # gitwizz calls {endpoint}/chat/completions
-  model: qwen2.5-coder-32b
-  api_key_env: LLM_KEY              # variable holding the key, if needed (never in the file)
-  allowed_hosts: []                 # self-hosted hosts whose names look public
-  timeout: 120                      # seconds
-  max_tokens: 2000                  # answer length
-  max_context_chars: 60000          # evidence package size
-  min_confidence: 0.5               # below: downgraded to info
-  rules: ["Money is decimal, never double", "Controllers never call repositories directly"]
-  rule_files: ["docs/CODING.md"]
-  docs: ["docs/adr/*.md"]
-```
-
-**No public inference.** Known public AI services (OpenAI, Azure OpenAI, Anthropic, Google, Mistral, Groq, Bedrock,
-OpenRouter, …) are refused, even when listed. Other endpoints must be loopback, a private IP, a single-label or
-internal host name (`.internal`, `.corp`, `.lan`, `.local`, …), or listed in `allowed_hosts`; anything else is a
-configuration error.
-
-**Bounded evidence, not the repository.** The model gets one JSON package (`gitwizz.evidence/v1`; see it with
-`gitwizz evidence 42 -o pkg.json`): PR title and description, linked requirements and acceptance criteria, changed
-files, changed C# members and API changes, the diff (without lockfiles, generated and binary files), where changed
-symbols are used outside the change (`git grep`), the configured rules, the paragraphs of `docs` that mention what
-changed, the selected tests, and the [system context](#system-context-from-docwizz) (`systemContext`: changed symbols,
-affected modules, callers, callees, API endpoints, data entities, external systems, architecture, flows, relevant
-documents with their freshness, linked tests and whether their suite ran, each with id, source and origin; criteria
-list the context they mention under `relatedContext`; with [requirement evidence](#requirement-evidence-optional)
-enabled, `systemContext.requirements`). Each section has a share of `max_context_chars` (system
-context: 12 %, at least 1500 characters, most relevant first); what doesn't fit is cut and listed under
-`budget.truncated`. The package's sha256 is part of the result, so every review traces back to its input.
-
-**Repository content is data, never instructions.** The system prompt is fixed in code and versioned (`review-v2`).
-The package goes in as JSON-encoded data inside `<evidence_package>` tags, with `<` and `>` escaped, so code or
-comments can't close the block or pose as the system. Injection attempts are reported as `prompt-injection` findings.
-The model never decides the outcome: gitwizz validates every finding and derives the status itself. The prompt tells
-the model to cite the system context a finding rests on, to never claim a relationship that no fact shows, to treat
-inferred facts and stale or unknown documents as unverified, and to trust current code over contradicting
-documentation and report the contradiction.
-
-| Finding | Result |
-|---|---|
-| names a file the PR doesn't change, quotes nothing, or quotes text that isn't in the diff | rejected (kept as evidence, not as a finding) |
-| points to a line outside the changed lines (±3), or confidence below `min_confidence` | downgraded to `info` |
-| cites system context (`"context": ["F3"]`) that isn't in the package | downgraded to `info` |
-| cites only inferred facts, or only stale, unknown or missing documents (or the whole context is stale) | downgraded to `info` |
-| otherwise | kept: `error` fails the gate, `warning` warns |
-
-The result records the model the endpoint reported, prompt version and hash, token usage and the package hash. With
-`--evidence <dir>`, the package is stored as `<gate>-package.json`. An unreachable endpoint, an HTTP error or an answer
-without a JSON `findings` array is an `error`, not a verdict.
-
-### AI quality benchmark: when AI review may block
-
-`gitwizz benchmark` runs the configured model over **labelled cases** and scores it. Only a committed, passing
-baseline for exactly this model and prompt lets an `ai-review` gate with `blocking: true` block.
-
-```bash
-gitwizz evidence 42 -o benchmark/rate-sign.json     # then add "expected": [...] by hand: a labelled case
-gitwizz benchmark                                   # score every case, compare with the accepted baseline
-gitwizz benchmark -f json -o bench.json             # schema gitwizz.benchmark/v1
-gitwizz benchmark --accept                          # write the baseline; commit it to promote the gate
-gitwizz benchmark --cases bench/ --baseline b.json  # override benchmark.cases / benchmark.baseline
-```
-
-A case is an evidence package plus `"expected"`: the findings a good review must report (`file`, new-side `line` ±3,
-optionally `rule`); `[]` marks a clean change, where any finding is a false positive. Build cases from past PRs with
-known outcomes: human review findings, defects found before or after merge, rule violations, and changes that drew
-false alarms. `expected`, `id` and `notes` are stripped before the model sees the package. Example:
-[docs/benchmark/negative-rate.json](docs/benchmark/negative-rate.json).
-
-| Metric | Meaning |
-|---|---|
-| precision | reported findings (kept, not `info`) that match an expected one |
-| recall | expected findings that were reported |
-| false-positive rate | clean cases with any reported finding |
-| evidence rejection rate | findings rejected for missing or invented evidence |
-| `generatedTestPassRate`, `acceptanceCriterionCoverage`, `mutationScore` | `null`: not measured yet, rather than made up |
-
-```yaml
-benchmark:
-  cases: benchmark                              # directory of *.json cases
-  baseline: .gitwizz/benchmark-baseline.json
-  thresholds:
-    min_precision: 0.8
-    min_recall: 0.5
-    max_false_positive_rate: 0.1
-    min_cases: 10
-    max_regression: 0.02                         # allowed drop per metric against the baseline
-```
-
-**Promotion rule.** A blocking `ai-review` gate blocks only when the **target branch's commit** holds a baseline whose
-fingerprint (model, prompt version, prompt hash) matches the current configuration and whose metrics meet the current
-thresholds. Otherwise it runs advisory and says why (`ai-promotion` finding). A new model or prompt needs a new
-benchmark, and a PR can't promote the gate that judges it.
-
-The benchmark uses only the configured endpoint (same self-hosting rules), at temperature 0 with a fixed seed. It exits
-`0` when thresholds are met without regressions, else `3`, and writes nothing but `-o` and, with `--accept`, the
-baseline.
-
-## Merge order: `plan`
-
-`plan` doesn't sort PRs by size or file overlap. It **simulates** the merges on synthetic commits and searches for the
-order with the lowest total cost.
-
-```bash
-gitwizz --all-open                      # all open PRs (or all unmerged local branches)
-gitwizz -a -s squash                    # same, planned for squash merges
-gitwizz -p 101,102,105 -f json          # specific PRs as JSON
-gitwizz -p feature/a,feature/b --verify "dotnet test"
-gitwizz -a -o plan.html                 # shareable HTML report
-```
-
-| Option | Default | Meaning |
-|---|---|---|
-| `-a`, `--all-open` | | All open PRs into the target and PRs stacked on them, or all unmerged local branches |
-| `-p`, `--prs` | | Comma-separated PR numbers or branch names |
-| `-s`, `--strategy` | auto | `merge`, `squash`, `rebase`, `ff-only`. Default: the merge queue's method, `squash` if the branch requires linear history, else `merge` |
-| `-b`, `--beam` | `8` | Beam search width; `1` = greedy |
-| `--history` | `200` | Learn per-file conflict rates from this many past merges into the target; `0` = off |
-| `--verify` | `none` | Shell command run in a temporary worktree on merged plan states |
-| `--verify-at` | `final` | `final`, `critical` (after each step with cost ≥ 1, plus the final one), or `step` |
-| `-f`, `--format` | `pretty` / `text` | `pretty` (terminal), `text` (piped), `json`, `html` |
-
-Every report ends with the **next step** as a ready-to-run command (`gh pr merge 105 --squash`, `ado pr merge 105
---yes`, `git merge --no-ff docs`). Re-run after each real merge so the plan reflects the new state.
-
-On a terminal, `pretty` shows a summary with a clean / regenerate / blocked bar, the merge order as a flow
-(`main ➜ docs ➜ billing ➜ …  ✘ clash`) with the PRs you can merge in parallel now, a plan table with cost bars and
-status (**CLEAN**, **REGENERATE**, **BLOCKED**, **POLICY BLOCKED**), the dependency tree, a conflict-risk heatmap (low /
-medium / high; heuristic weights are never shown as percentages, only measured history is; above 12 PRs a "riskiest
-pairs" chart), "why A before B?" panels, verification, and the next step. Every colour comes with an icon or label,
-the layout turns compact below 90 columns, and `NO_COLOR` is respected. Rendered example:
-[docs/sample-plan.html](docs/sample-plan.html).
-
-<details>
-<summary>Plain text output (<code>--format text</code>)</summary>
-
-```text
-PR MERGE PLAN
-Target: main
-Strategy: merge
-Note: local branches: only structural mergeability is checked (no reviews, checks or branch protection)
-
-1  docs  docs
-   CLEAN
-   Cost: 0
-   Reason: no overlapping changes with pending PRs
-
-2  billing  billing
-   CLEAN
-   Cost: 0.3
-   Reason: unlocks refactor; overlaps clash (medium)
-
-3  refactor  refactor
-   CLEAN
-   Cost: 0.4
-   Reason: dependency: billing; overlaps clash (medium)
-
-4  clash  clash
-   BLOCKED
-   Reason: conflict after refactor: billing.cs
-
-Currently independent candidates (parallelizable):
-    docs
-
-Next: git checkout main && git merge --no-ff docs
-Total cost: 0.7
-```
-
-</details>
-
-### Planning configuration
-
-```yaml
-regenerators:            # files to regenerate instead of resolving by hand, and the command that does it
-  - match: package-lock.json
-    command: npm install --package-lock-only
-  - match: "*.csproj"
-    command: dotnet restore
-generated:               # more generated files (regenerable, like *.Designer.cs)
-  - "*.pb.go"
-ignored:                 # left out of overlap scoring; real merge conflicts in them still block
-  - "*.snap"
-costs:
-  regeneration: 0.5      # per file that needs regenerating
-  conflict: 1.0          # a pending PR that would really conflict after this one
-  dependency_unblock: 0.1
-```
-
-A regenerator's command appears in the plan ("regenerate after merge: package-lock.json (npm install
---package-lock-only)").
-
-### How planning works
-
-```text
-provider ─▶ analyze (files, hunks) ─▶ dependencies ─▶ readiness ─▶ beam search over simulations ─▶ report ─▶ verify
-```
-
-1. **Providers** ([Providers.cs](src/Gitwizz/Providers.cs), [AzureDevOps.cs](src/Gitwizz/AzureDevOps.cs)) fill one
-   provider-neutral model, so the analysis never knows where a PR came from (see [Providers](#providers)).
-2. **Analysis** ([Analyzer.cs](src/Gitwizz/Analyzer.cs)): changed files (with renames and deletes) and `-U0` hunks
-   against the merge-base. For C#, Roslyn maps hunks to the **members** they touch (`Billing.Charge(decimal)`), so two
-   PRs editing different lines of one method are still flagged. It also records each PR's **API delta** (declared
-   names with the argument counts they accept, before vs after) and the names its new lines use. That gives **semantic
-   risks**: B calls `GetUser(id)` but A changes it to `GetUser(id, tenant)`, B calls an overload only A adds, or both
-   add migrations to the same folder. A pairwise **conflict weight** in [0,1] combines file overlap, hunk overlap,
-   shared members, lineage clashes, and 0.3 per semantic risk. A rename is one file **lineage**, found by its old and
-   new path; delete or rename against an edit, rename against delete, and renames to different names add 0.4 per file.
-   **History**: the target's last 200 merge commits are replayed with `git merge-tree` (batched) to see which files
-   really conflicted. Each file gets a rate `conflicts / (merges that brought it in + 1)`, and a shared file with rate
-   r weighs `(1 + 2r)`× more. Reasons name conflict-prone files ("billing.cs (33 %)").
-3. **File classes**: a merge that conflicts *only* in lockfiles or generated files (`package-lock.json`,
-   `*.Designer.cs`, …) is **REGENERATE REQUIRED** (cost 0.5 per file), never clean. The conflicted tree is never
-   committed; the next planning state takes the PR's version of those files, so later PRs never merge against
-   conflict markers.
-4. **Dependencies**: explicit (`depends on #N` / `blocked by #N` in the body or labels), structural (PR base is another
-   PR's head branch, or commit ancestry), and semantic: B uses a name that A introduces and that appears nowhere at
-   the base, e.g. a new `TenantId` type ("dependency: A (uses TenantId)"). Explicit or structural cycles are an error;
-   a semantic edge that would close a cycle is dropped.
-5. **Readiness** keeps three questions apart. *Structure*: does the tree merge? Only the simulation answers this.
-   *Policy*: drafts, `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, failing or pending checks, GitHub's `BLOCKED` merge state;
-   such PRs and everything depending on them are **POLICY BLOCKED** and not scored. *GitHub state*: for a
-   policy-ready PR, the merge state is added to the reason ("branch is behind its base, update it before merging").
-   Required checks come from branch protection and rulesets; when the target names some, only those gate a PR, and
-   one that hasn't reported counts as pending. With a **merge queue**, the next step is `gh pr merge N` (enqueue) and
-   the strategy defaults to the queue's method. A `merge` plan on a linear-history branch gets a warning.
-6. **Simulation** ([Simulator.cs](src/Gitwizz/Simulator.cs)): `State₀ = target HEAD`, then
-   `git merge-tree --write-tree State PR`. A clean merge becomes the next synthetic state (two parents for `merge`,
-   one for `squash`; `ff-only` requires ancestry). `rebase` **replays each commit** with
-   `merge-tree --merge-base=<parent>`, so a conflict in one commit blocks the PR even if the final tree would merge.
-   Results are cached by `(state, PR head)`, and commits are only created for states the search keeps.
-7. **Planner** ([Planner.cs](src/Gitwizz/Planner.cs)): beam search minimising `Σ marginalCost(PRᵢ | Stateᵢ)`, where
-
-   ```text
-   marginalCost = Σ risk(PR, pending PRs) + 0.5·regenerateFiles − 0.1·unblockedDependents
-   ```
-
-   `risk` is **state-aware**: each overlapping pending PR is judged by its simulated outcome after this PR (real
-   conflict 1, forced regenerate 0.5, clean merge half the static weight). Plans compare first by unmerged PRs, then
-   total cost, then cheaper PRs first, then name, so a plan that merges every PR always beats a cheaper one that leaves
-   one blocked. Finished plans are kept outside the beam. For overlapping pairs whose two orders simulate differently,
-   the report explains the choice:
-
-   ```text
-   Why flip before billing?
-     both modify: billing.cs
-     flip -> billing = clean
-     billing -> flip = conflict
-     reason: after flip, billing merges cleanly; after billing, flip conflicts
-   ```
-
-8. **Verification** ([Verify.cs](src/Gitwizz/Verify.cs)): `git worktree add --detach` on a plan state, run the
-   command, remove the worktree. Only the chosen plan's states are verified, so the test count stays linear. The first
-   failure stops verification and names the step ("FAILED after #108").
-
-### Performance
-
-| Benchmark | v0.1 | now (ReadyToRun) |
-|---|---|---|
-| 20 PRs | 8.6 s | 0.47 s |
-| 60 PRs | 10.2 s | 0.8 s |
-
-- **Result reuse:** if the PR merged last shares no files or history with a candidate, the candidate's result carries
-  over unchanged; the real merge runs only if that branch of the search survives.
-- **Batched merges:** each beam level's merges go through `git merge-tree --stdin`, one process per CPU core.
-- **In-process commits:** synthetic commits are written directly as loose objects (SHA-1 or SHA-256).
-- **One `rev-list` per PR** for dependency detection, instead of an ancestry check per pair.
-- **State-aware cost only where it matters:** pairwise outcomes are computed once; only pairs that conflict there are
-  simulated again per search state (about +35% on a dense 60-PR set: 2.5 s → 3.4 s, with identical plans).
-
-On a terminal, every command shows a progress bar per phase on stderr (analysis, learning from history, the beam
-search, verification, quality gates, test suites, benchmark cases), cleared when the result is printed; nothing is
-drawn when stderr is redirected. Set `GITWIZZ_TIMING=1` to print a timing for each phase on stderr.
-
-## Providers
-
-`--provider` is detected: `local` for branch names; for PR numbers and `--all-open`, `azure-devops` with an Azure
-DevOps `origin` and `github` with a GitHub one (`--all-open` also needs `gh`), else `local`.
-
-- **local** treats each branch or ref as a PR. Local branches carry no policy data, so reports say that only structural
-  mergeability was checked.
-- **github** reads PRs through `gh` (title, body, labels, draft, review decision, reviews, CI rollup, branch protection
-  and rulesets, merge queue) and fetches `refs/pull/N/head`. Linked work items are the issues the PR closes.
-- **azure-devops** (alias `ado`) reads an on-prem Azure DevOps Server through the `ado` CLI. Detected from an `origin`
-  like `https://tfs.company.local/tfs/Coll/Proj/_git/repo` or `dev.azure.com`.
-
-### Azure DevOps Server
-
-All REST work is delegated to [`ado`](https://github.com/mycaravam-crypto/ado-devops): server, project, PAT, API
-version (`ADO_API_VERSION`), TLS and proxy come from its configuration (`ado auth login`, `ADO_*` variables), so
-gitwizz never handles or logs a credential. Set `GITWIZZ_ADO` to use an `ado` executable that isn't on the `PATH`.
-
-| Data | From |
-|---|---|
-| PRs, refs, source commit, description, author | `ado pr list --json --status active` |
-| review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
-| checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
-| completed PRs for `history export` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
-| commit → work item links for `history export` | `ado commit context <full sha>` (`ado.commit-context/v1`): the work items the server links to each exported commit (`--commit-lookups`, default 500) |
-| linked work items, acceptance criteria | `ado pr context N` names them, then `ado workitem show <id> --json` reads each in full (for `evaluate`, `trace` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
-
-Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; reports say so.
-The next step is `ado pr merge N --yes` (`--squash` for squash plans). `ado` errors keep their meaning: not
-installed, not logged in (exit 3, with a hint), permission denied, not found.
-
-### PR context as JSON
-
-`gitwizz context 42 --system` returns the system context instead (`gitwizz.system-context/v1`): every selected fact,
-document and linked test, unbounded by the AI budget, with the quality and its reasons.
-
-`gitwizz context 42` returns one PR from any provider as one stable document (`gitwizz.context/v1`): the PR (title,
-description, author, URL, draft, labels), source and target refs with commits, reviewers and votes, checks, policy
-state (review decision, checks, problems, open dependencies), linked work items with their individual acceptance
-criteria (GitHub: from the closed issues' "Acceptance criteria" section), changed files, changed C# members and
-commits. Lists are sorted, so the same state gives the same document.
-
-It works for merged and closed pull requests too: one the open list doesn't have is looked up on its own (`gh pr view
-N`, `ado pr context N`), and `pr.state` says `open`, `merged` or `closed` (GitHub closed, Azure DevOps abandoned),
-with `pr.closedAt` and `pr.mergeCommit`. A merged PR is measured against the target as it was when it was merged (Azure
-DevOps' `lastMergeTargetCommit`, else the merge commit's first parent), not today's target, which already contains it:
-its files, members and commits are what it brought, for merge, squash and rebase merges alike, and `target.sha` is
-that commit. When its source commit is gone (the branch was deleted and the server no longer serves it), a merged PR is
-read from its merge commit and `warnings` says so; without either, the lists are empty and `warnings` says why. Reviews,
-votes and checks are their final state; work items are their current state, not the state at the merge.
-`--system` works for a merged PR as well (docwizz on the merged state). The commands that merge-simulate or gate a PR
-(`evaluate`, `explain`, `trace`, `evidence`, `guide <pr>`) keep needing an open one and say which state it is in.
-
-## Historical evidence: `history export`
-
-```bash
-gitwizz history export --since v1.4.0                  # commits after v1.4.0 up to the default branch
-gitwizz history export --since v1.4.0 --until release/1.5 --limit 1000 -o history.json
-gitwizz history export --since v1.4.0 --provider azure-devops --commit-lookups 100 -o history.json
-```
-
-Exports which commits changed which lines, which completed pull request each came in with, and which work items the
-commits name, the provider links to the commits, and the provider links to the pull requests, as one deterministic
-document (`gitwizz.history/v2`). It is the input for mapping code to requirements over time: docwizz maps the changed
-ranges to its code symbols; gitwizz only collects the evidence and says how certain each piece is. Read-only: it reads
-git and asks the provider, nothing else.
-
-The document format is a versioned contract that gitwizz owns: [docs/history](docs/history/README.md) has the field
-reference, the JSON Schema, a complete example, the ordering rules and the compatibility policy. To import it into
-docwizz (native v2 import since [docwizz#172](https://github.com/mycaravam-crypto/docwizz/issues/172); older
-versions stop with "unknown schema"):
-
-```bash
-gitwizz history export --since v1.4.0 --provider azure-devops -o history.json
-docwizz requirements import . history.json work-items/
-```
-
-**Bounded.** The range is `--since` (exclusive) to `--until` (default: the default branch), newest first, at most
-`--limit` commits (default 200, max 10000). There is no unbounded default: without `--since`, the limit bounds it. When
-the range holds more, `range.truncated` is true and a warning says so; a shallow clone sets `range.shallow` and gets a
-warning too. With Azure DevOps, the newest `--commit-lookups` commits (default 500, 0 = none) are asked for their links
-with `ado commit context`, 4 at a time with a one-minute timeout each; the rest are `unknown`. When `ado` is missing or
-not logged in, the remaining commits are `unavailable` without asking again.
-
-| Field | What it says |
-|---|---|
-| `commits[].files[]` | path, `oldPath` for renames and copies, status, `similarity`, and `ranges` (old and new start and count, from `git diff -U0` against the first parent). `granularity: file` means only the file is known to have changed (binary, a rename without content change, a mode change), so it must not be mapped to a symbol |
-| `commits[].workItems[]` | links the commit's own message names, `source: commit-message`: `AB#123` (kind `ab`), GitHub closing keywords such as `fixes #12` (kind `closes`), and with Azure DevOps plain `#123` mentions (kind `mention`). `evidence` is the matched text. These are mentions, not verified links |
-| `commits[].providerLinks` | the work items the provider links to the commit itself (`source: provider`, kind `commit-link`, with the work item's `uri`). `status`: `verified` (the list is complete; `[]` means verified "no links"), `unavailable` (failed, timed out, not on the server, or an answer for another commit or repository: `problem`), `denied`, or `unknown` (not asked: GitHub and local keep no commit links, or the commit is beyond `--commit-lookups`). Only `verified` says anything about links |
-| `commits[].pullRequest` | `exact` (the provider confirms it), `inferred` (only the messages say so), `ambiguous` (several PRs claim the commit, see `candidates`) or `unknown` (nothing says which: a rebase merge, a direct push). `basis`: `merge-message`, `squash-subject`, `merged-branch`, `provider` |
-| `pullRequests[]` | each completed PR found in the range: `strategy` (merge or squash), its merge commit and the commits it brought in, `status` (`confirmed`, `unconfirmed` with a `problem`, or `local`), and its own `workItems` (`source: provider`), kept apart from the commits' links: they are candidates for the PR's commits, not links of any one commit |
-| `pullRequests[].workItemsStatus` | `verified` (the provider answered; an empty list is a verified empty list), `unavailable` (it couldn't be read: offline, not completed, or a merge commit that doesn't match), `denied` (the provider refused access), `unknown` (no provider) |
-| `sources` | what each kind of link was read from and how complete it is |
-
-How pull requests are found: a merge commit `Merge pull request #12 …` (GitHub) or `Merged PR 12: …` (Azure DevOps)
-owns itself and the commits its merge brought in (first parent..second parent); a commit on the first-parent line whose
-subject ends in `(#12)` (GitHub squash) or starts with `Merged PR 12:` (Azure DevOps squash) owns itself. Inside a merged
-branch, `(#75)` names an issue, not a PR. Each PR is then confirmed with the provider: GitHub through
-`gh pr view N --json number,title,state,url,baseRefName,mergeCommit,closingIssuesReferences` (merged, same merge commit;
-linked work items are the issues it closes), Azure DevOps through `ado pr context N` (completed; for a merge, the merged
-head is one of the PR's commits; linked work items). A PR that can't be confirmed stays `inferred`, never `exact`, and
-its work items are `unavailable`, never an empty list.
-
-The git part (commits, files, ranges, message links) is stored in the workspace under its inputs: gitwizz build, schema,
-both commit ids, the limit and whether the clone is shallow; `--no-cache` skips it. Provider answers (pull requests and
-commit links) are never stored, as they change without a commit. The repository is identified by its `origin` URL without user, password or query, so
-no credential is exported; author names and e-mail addresses aren't exported either.
-
-## Version history: `version-history`
-
-```bash
-gitwizz version-history list                                       # text: each version, its bases and its commits
-gitwizz version-history export -o docs/architecture/versions.md    # a Markdown changelog page
-gitwizz version-history export -t main -o CHANGELOG.md             # main's history: its unreleased changes first
-gitwizz version-history export -o versions.json                    # JSON (gitwizz.version-history/v2)
-```
-
-Lists every release and every version still in progress from local refs alone. SemVer tags (`v1.2.3`, `1.2.3`,
-prereleases such as `v2.0.0-rc.1`) are **released**; branches under `--branch-pattern` (default `release/*`), local or
-only on a remote, are **unreleased**, and the branch name after the prefix is their version. Each version lists the
-pull requests (merge commits `Merge pull request #12` / `Merged PR 12:`, squash commits `title (#12)`), and the commits
-made without one, that none of the releases it builds on contain: `v1.1.0` on main builds on `v1.0.0` even when `v1.0.1` exists
-on `release/1.0`, and after `release/1.0` is merged back, `v2.0.0` builds on both, so the backport is listed once. A
-release builds on releases only, so `v2.0.0` spans its release candidates. A release branch builds on the one before
-it in its folder (`release/cxm/1.9.0` on `release/cxm/1.8.0`: `git log 1.8.0..1.9.0`), so releases marked by branches
-alone work too, and `--from 1.0.6 --to 1.9.0` lists just that span. `--clean` writes the page for end users: each
-change only its day and description, with no pull request numbers, commits or links. Commits are grouped by their Conventional
-Commits type: breaking changes, features, fixes, performance, other; a pull request by its title. With `--target main`
-it is the history of one branch: main's unreleased pull requests come first, then only the release branches cut from
-main and the releases main or they contain, so apps kept on separate branches (`--target app-b`) each get their own
-history, with every pull request under the release it shipped in.
-
-The Markdown page has one section per version (`## 2.0.0 (2026-09-01)`, `## 1.0 (unreleased)`) with the grouped
-changes linked to their commits, and no generation time, so it only changes with the history: commit it next to the
-documentation docwizz generates (docwizz leaves `docs/architecture/` to you). The JSON carries the same as data for
-tools. The format follows the `-o` extension; without one, `list` writes text and `export` JSON.
-
-Read-only and offline: no provider, no checkout, no fetch, so `git fetch --tags origin` first in a fresh or partial
-clone. Each version holds at most `--limit` commits (default 200, max 10000); more sets `truncated`, a shallow clone
-sets `shallow`, both with a warning. [docs/version-history](docs/version-history/README.md) has the fields, the exact
-rules, the JSON Schema and a worked example ([JSON](docs/version-history/example.json),
-[Markdown](docs/version-history/example.md)).
-
-## Configuration reference
-
-Everything is optional: without `.gitwizz.yml`, the built-in defaults apply. The file is read from the target branch's
-commit. Patterns use `*` and `?` and match the file name, or the whole path when they contain a `/`.
-
-| Keys | Section |
-|---|---|
-| `gates`, `profiles`, `risk`, `secrets` | [Policy as code](#policy-as-code) |
-| `tests`, `traceability` | [Test selection and traceability](#test-selection-and-traceability-trace) |
-| `environment` | [Ephemeral PR test environments](#ephemeral-pr-test-environments) |
-| `review` | [AI review](#ai-review) |
-| `context` | [System context from docwizz](#system-context-from-docwizz) |
-| `benchmark` | [AI quality benchmark](#ai-quality-benchmark-when-ai-review-may-block) |
-| `regenerators`, `generated`, `ignored`, `costs` | [Planning configuration](#planning-configuration) |
-
-Unknown keys, empty patterns, negative costs, unknown gate types, duplicate gate or test ids and references to unknown
-gates or profiles are errors.
+A rendered merge plan: [docs/sample-plan.html](docs/sample-plan.html).
 
 ## Exit codes
 
@@ -1092,81 +139,21 @@ gates or profiles are errors.
 | `0` | ok: ready, plan made, thresholds met |
 | `1` | error, or failed `--verify` |
 | `2` | usage error |
-| `3` | `evaluate`/`explain`/`guide`: blocked by a failed gate · `trace`: a suite failed · `benchmark`: thresholds missed or regressed |
+| `3` | `evaluate`/`explain`/`guide`: blocked · `trace`: a suite failed · `benchmark`: thresholds missed |
 | `4` | `evaluate`/`explain`/`guide`: undetermined, a blocking gate could not run · `guide`: exited before a verdict |
 | `5` | `doctor`: degraded, only advisory checks are affected |
 | `6` | `doctor`: verdict at risk, a blocking gate cannot run |
-| `7` | `doctor`: cannot start (git, repository, provider or `.gitwizz.yml`) · `guide`: git, the repository or the provider is unusable |
+| `7` | `doctor`/`guide`: cannot start (git, repository, provider or `.gitwizz.yml`) |
 
-## Known limitations
-
-- The workspace's tool fingerprint covers the program each command segment starts, not what that program starts in
-  turn: a script in the repository is covered by the commit, but a tool it calls is not. After changing such tools
-  underneath, run with `--no-cache` or `gitwizz cache clear`. Another gitwizz build invalidates everything stored.
-- `status`, `refresh` and the repository guide read every open PR's linked work items, one or two provider calls per
-  PR. The workspace is never pruned; `gitwizz cache clear` empties it.
-- System context: relations come from docwizz's model of the target, so a symbol the PR adds has no callers or
-  callees there (the diff shows them). `docwizz diff` scans the target again for every PR, because it takes refs and no
-  stored model. Flows are static call chains, so they are marked inferred.
-- Hunk overlap assumes the PRs share a merge-base; with very different bases it's an approximation.
-- A declared dependency on an *open* PR outside the selected set blocks the PR; one on a merged or closed PR counts as
-  met. A PR whose base is neither the target nor a planned PR's branch is blocked ("targets 'release', not 'main'"),
-  because merging it would land elsewhere. Branches already in the target are left out with a note; a local target
-  behind `origin` gets a warning.
-- Beam search is a heuristic. Complete plans always win, but one that only a very wide search reaches can be missed.
-  Raise `--beam` when the plan blocks PRs you expected to merge.
-- After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one.
-- Synthetic commits are unreferenced objects; `git gc` cleans them up.
-- History needs true merge commits; squash- or rebase-merged repositories have nothing to replay.
-- `history export` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
-  messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
-  conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
-  links issues to pull requests, not to commits), and only for the newest `--commit-lookups` commits.
-- `version-history` reads local refs (fetched remote branches included) and git dates: when a GitHub or Azure DevOps
-  release was published isn't read, pull requests and work items aren't attached, and a cherry-picked fix is listed
-  in each line it was picked to.
-- Requirement evidence needs a resolver that answers `gitwizz.requirement-input/v1`; gitwizz doesn't build one. Until
-  docwizz ships it ([docwizz#166](https://github.com/mycaravam-crypto/docwizz/issues/166)), leave
-  `context.requirements` off or point it at your own read-only command.
-- Structural and semantic analysis (members, API deltas, test selection by changed symbol) cover C# only; other
-  languages use file and hunk overlap. It is syntax-only: same-named members of different classes look alike, which is
-  why only a name new to the whole base becomes a hard dependency.
-
-## Roadmap
-
-Done: the v1, v2 and v0.4 planner work, and the PR quality & merge orchestrator epic (#53): quality gates with
-`evaluate`/`explain` (#55), the Azure DevOps Server provider with `context` (#54), requirement-to-test traceability
-with risk-based test selection (#57), advisory AI review on a bounded evidence package (#56), the AI quality benchmark
-that decides when AI review may block (#59), and ephemeral per-PR test environments (#58). Since then: the guided
-PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
-workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
-docwizz system context for guided and AI-assisted review (#73), the dependency preflight `doctor` and its checks in
-`guide` (#75), the historical evidence export `history export` for code-to-requirement tracing (#84), and optional
-requirement evidence in the PR system context (#85), and the version history of released tags and open release
-branches `version-history` (#95), with Markdown changelog pages and the `gitwizz.version-history/v2` contract.
-
-Known gaps from the epic: the benchmark reports generated-test pass rate, acceptance-criterion coverage and mutation
-score as `null` (gitwizz doesn't generate tests yet); Azure DevOps branch policies other than reviewer votes and PR
-builds aren't visible through `ado`; change impact is C#-only and doesn't check architecture rules (docwizz's
-`architecture` layers do); merges are proposed, not executed.
-
-Open, from [PLAN.md](PLAN.md): structural analysis beyond C#, and recording real merge outcomes (CI result,
-resolution) next to the git-history replay.
-
-## Contributing
+## Development
 
 ```bash
 dotnet build
 dotnet test
+docwizz check . --since origin/main      # the documentation gaps your branch introduces, as CI runs it
 ```
 
-The same commands work on Linux, macOS and Windows; [.github/workflows/test.yml](.github/workflows/test.yml) runs
-them on every pull request and on main. [docwizz](https://github.com/mycaravam-crypto/docwizz) checks
-this repository's `///` docs ([docwizz.yaml](docwizz.yaml)). On every pull request,
-[.github/workflows/docwizz.yml](.github/workflows/docwizz.yml) comments with the documentation gaps the change
-*introduces* and fails on a new critical gap; existing gaps don't fail it.
-
-```bash
-docwizz analyze .                        # every gap, ranked by how much it needs docs
-docwizz check . --since origin/main      # only what your branch introduces, as CI runs it
-```
+All three run on every pull request; [docwizz](https://github.com/mycaravam-crypto/docwizz) checks the `///` docs
+against [docwizz.yaml](docwizz.yaml). Every merge to `main` is released as the next
+SemVer tag; a PR label picks the bump: `release:patch` (default), `release:minor`, `release:major` or `release:none`.
+Principles, known limitations and the roadmap: [docs/README.md](docs/README.md).
