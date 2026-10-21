@@ -13,6 +13,7 @@ public static class InspectAdo
         List<FileInspect.DirectoryEntry> rows = new();
         List<string> warnings = report.Warnings.ToList();
         AdoHistory history = new(ado);
+        Dictionary<string, string> mergedPrByCommit = LoadCompletedPrs(ado, warnings);
         foreach (FileInspect.DirectoryEntry entry in report.Files)
         {
             if (!commits.TryGetValue(entry.Sha, out HistoryCommitLinks? links))
@@ -38,6 +39,8 @@ public static class InspectAdo
                 warnings.Add($"ADO commit links unavailable for {entry.Sha[..12]}: {links.Status}.");
             string? title = null;
             string? reference = entry.PullRequest;
+            if (reference == null && mergedPrByCommit.TryGetValue(entry.Sha, out string? matched))
+                reference = matched;
             if (reference != null && int.TryParse(reference.TrimStart('#'), out int number))
             {
                 if (!prs.TryGetValue(number, out var details))
@@ -81,10 +84,43 @@ public static class InspectAdo
             }
             rows.Add(entry with
             {
+                PullRequest = reference,
                 PullRequestTitle = title,
                 LinkedWorkItems = linked.DistinctBy(item => item.Id).ToList().AsReadOnly()
             });
         }
         return report with { Files = rows.AsReadOnly(), Warnings = warnings.Distinct().ToList().AsReadOnly() };
     }
+    /// <summary>Bounded ADO PR listing for exact merge-commit matches; ambiguous candidates are not attributed.</summary>
+    public static Dictionary<string, string> LoadCompletedPrs(IAdoClient ado, List<string> warnings)
+    {
+        Dictionary<string, HashSet<string>> candidates = new(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(ado.Run("pr", "list", "--json", "--status", "completed", "--limit", "500"));
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new(StringComparer.OrdinalIgnoreCase);
+            foreach (JsonElement pr in doc.RootElement.EnumerateArray())
+            {
+                if (!pr.TryGetProperty("pullRequestId", out JsonElement id) || !id.TryGetInt32(out int number)) continue;
+                string reference = "#" + number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                foreach (string property in new[] { "lastMergeCommit", "lastMergeSourceCommit" })
+                {
+                    if (!pr.TryGetProperty(property, out JsonElement commit) || commit.ValueKind != JsonValueKind.Object
+                        || !commit.TryGetProperty("commitId", out JsonElement sha)) continue;
+                    string? value = sha.GetString();
+                    if (string.IsNullOrEmpty(value)) continue;
+                    if (!candidates.TryGetValue(value, out HashSet<string>? matches))
+                        candidates[value] = matches = new(StringComparer.Ordinal);
+                    matches.Add(reference);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JsonException)
+        {
+            warnings.Add("ADO completed PR list unavailable; commit work-item links can still be shown.");
+        }
+        return candidates.Where(pair => pair.Value.Count == 1)
+            .ToDictionary(pair => pair.Key, pair => pair.Value.Single(), StringComparer.OrdinalIgnoreCase);
+    }
+
 }
