@@ -35,7 +35,7 @@ public static class FileInspect
         if (raw.ExitCode != 0) throw new InvalidOperationException("git log failed: " + raw.Stderr.Trim());
         var parts = raw.Stdout.Split('\0');
         var changes = new List<Change>();
-        for (var i = 1; i + 7 < parts.Length && changes.Count <= limit; )
+        for (var i = 1; i + 6 < parts.Length && changes.Count <= limit; )
         {
             var sha = parts[i++].Trim();
             if (sha.Length < 40 || !sha.All(Uri.IsHexDigit)) break;
@@ -46,9 +46,6 @@ public static class FileInspect
             var body = parts[i++];
             var diff = parts[i++];
             // git log places a newline between the message and the patch, and may separate entries.
-            var next = i < parts.Length ? parts[i] : "";
-            if (next.Length > 0 && next.Trim().Length > 0) diff += next;
-            i++;
             var pr = System.Text.RegularExpressions.Regex.Match(subject, @"\(#(?<id>\d+)\)$");
             var work = System.Text.RegularExpressions.Regex.Matches(subject + "\n" + body,
                 @"\bAB#\d+\b|\b(?:fixes|closes|resolves)\s+#\d+\b",
