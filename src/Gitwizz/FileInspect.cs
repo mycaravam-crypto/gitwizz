@@ -88,7 +88,7 @@ public static class FileInspect
         int Limit, bool Truncated, IReadOnlyList<DirectoryEntry> Files, IReadOnlyList<string> Warnings);
 
     /// <summary>Directory mode uses the revision's tracked tree, never the working-tree filesystem.</summary>
-    public static DirectoryResult InspectDirectory(Git git, string path, string until = "HEAD", int limit = 200, string? since = null)
+    public static DirectoryResult InspectDirectory(Git git, string path, string until = "HEAD", int limit = 200, string? since = null, ProgressBars? progress = null)
     {
         if (limit is < 1 or > 10000) throw new ArgumentException("--limit must be between 1 and 10000");
         var relative = NormalizePath(git, path);
@@ -100,6 +100,7 @@ public static class FileInspect
         if (paths.Length == 0) throw new ArgumentException($"no tracked directory found at '{relative}' in {until}");
         var range = since == null ? end : git.RevParse(since) + ".." + end;
         var entries = new List<DirectoryEntry>();
+        if (paths.Length >= 20) progress?.Start($"Inspecting {paths.Length} file histories", paths.Length);
         foreach (var file in paths)
         {
             // The end-of-revision tree bounds the file set; log is scoped to one tracked path.
@@ -107,7 +108,7 @@ public static class FileInspect
                 range, "--", file);
             if (r.ExitCode != 0) throw new InvalidOperationException("git log failed: " + r.Stderr.Trim());
             var fields = r.Stdout.Trim('\n', '\r').Split('\0');
-            if (fields.Length < 7 || fields[0].Length < 40) continue;
+            if (fields.Length < 7 || fields[0].Length < 40) { progress?.Advance(); continue; }
             var subject = fields[4];
             var pr = System.Text.RegularExpressions.Regex.Match(subject, @"\(#(?<id>\d+)\)$");
             var work = System.Text.RegularExpressions.Regex.Matches(subject + "\n" + fields[5],
@@ -119,6 +120,7 @@ public static class FileInspect
                 throw new InvalidOperationException($"git log returned an invalid timestamp for {file}");
             entries.Add(new DirectoryEntry(file, fields[0], fields[1], fields[2], fields[3], subject,
                 pr.Success ? "#" + pr.Groups["id"].Value : null, Array.AsReadOnly(work), timestamp));
+            progress?.Advance();
         }
         var sorted = entries.OrderByDescending(e => e.CommitTimestamp).ThenBy(e => e.Path, StringComparer.Ordinal).ToList();
         var shallow = git.Try("rev-parse", "--is-shallow-repository").Stdout.Trim() == "true";
