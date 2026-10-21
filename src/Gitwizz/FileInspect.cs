@@ -11,6 +11,13 @@ public static class FileInspect
     public record Result(string Schema, string File, string Until, int Limit, bool Truncated,
         bool Shallow, List<Change> Changes, string[] Warnings);
 
+    /// <summary>Inspects the bounded commit history for a repository-relative file, including changed line hunks and unverified references.</summary>
+    /// <param name="git">Git repository used for read-only history queries.</param>
+    /// <param name="path">Repository-relative file path.</param>
+    /// <param name="until">Revision at which the inspection ends.</param>
+    /// <param name="limit">Maximum number of commits to report.</param>
+    /// <param name="since">Optional exclusive starting revision.</param>
+    /// <returns>File change history, evidence and completeness warnings.</returns>
     public static Result Inspect(Git git, string path, string until = "HEAD", int limit = 200, string? since = null)
     {
         if (string.IsNullOrWhiteSpace(path) || path.StartsWith('-') || Path.IsPathRooted(path))
