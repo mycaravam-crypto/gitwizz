@@ -1,6 +1,6 @@
 # File inspection (first increment)
 
-`gitwizz inspect <path>` shows a read-only history of changes to a tracked file.
+`gitwizz inspect <path>` shows a read-only history for a tracked file, or a\nlast-change-first overview of all tracked files recursively under a directory at the selected revision.
 
 ```bash
 gitwizz inspect src/Gitwizz/History.cs
@@ -21,3 +21,4 @@ provider-enriched reasoning remain follow-up increments.
 
 The operation runs read-only git commands and does not modify the index or working tree.
 The output uses `gitwizz.inspect/v1`, independent of `gitwizz.history/v2`.
+\n## Directory overview\n\nA directory argument (including `.` for the repository root) lists tracked files\nrecursively, newest touching commit first, with path, committer date, author,\ncommit SHA, subject and unverified PR/work-item mentions. `--limit` bounds\nthe returned rows; `--since` excludes files with no changes in the range.\nUse a file path to drill down to all change hunks. This overview is based on\ntracked files at `--until`, not uncommitted or untracked working-tree content.\n
