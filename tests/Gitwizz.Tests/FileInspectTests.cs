@@ -139,4 +139,17 @@ public class FileInspectTests : IDisposable
     [InlineData("")]
     public void ParseLines_rejects_invalid_ranges(string value) =>
         Assert.Throws<ArgumentException>(() => FileInspect.ParseLines(value));
+
+    [Fact]
+    public void Unknown_file_is_an_error_but_a_deleted_file_keeps_its_history()
+    {
+        Commit("gone.txt", "x\n", "Add gone");
+        git.Run("rm", "-q", "gone.txt");
+        git.Run("commit", "-q", "-m", "Remove gone");
+        var unknown = Assert.Throws<ArgumentException>(() => FileInspect.Inspect(git, "nope.txt"));
+        Assert.Contains("never tracked", unknown.Message);
+        var deleted = FileInspect.Inspect(git, "gone.txt");
+        Assert.Equal(["Remove gone", "Add gone"], deleted.Changes.Select(c => c.Subject));
+        Assert.Equal("deleted", deleted.Changes[0].Action);
+    }
 }

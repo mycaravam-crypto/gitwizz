@@ -51,6 +51,11 @@ public static class FileInspect
         var relative = Path.GetRelativePath(root, full).Replace('\\', '/');
         if (relative == ".") throw new ArgumentException("need a file path");
         var end = git.RevParse(until);
+        // Checked against the whole history up to --until (ignoring --since), so deleted files still qualify.
+        var seen = git.Try("rev-list", "-1", end, "--", relative);
+        if (seen.ExitCode != 0) throw new InvalidOperationException("git rev-list failed: " + seen.Stderr.Trim());
+        if (seen.Stdout.Trim().Length == 0)
+            throw new ArgumentException($"'{relative}' was never tracked up to {until}; check the path (it is relative to the repository root) or --until");
         var range = since == null ? end : git.RevParse(since) + ".." + end;
         // --follow tracks renames; -p retains deleted lines and earlier states.
         // Use NUL separators for fields that can contain whitespace.
