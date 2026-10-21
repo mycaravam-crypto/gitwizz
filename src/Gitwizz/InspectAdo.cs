@@ -25,15 +25,15 @@ public static class InspectAdo
             if (links.Status == "verified" && links.Items != null)
                 foreach (HistoryLink link in links.Items)
                 {
-                    string? title = null;
+                    string? itemTitle = null;
                     try
                     {
                         string id = link.WorkItem.Replace("AB#", "", StringComparison.Ordinal);
                         using JsonDocument doc = JsonDocument.Parse(ado.Run("workitem", "show", id, "--json"));
-                        title = AzureDevOps.ParseWorkItem(doc.RootElement).Title;
+                        itemTitle = AzureDevOps.ParseWorkItem(doc.RootElement).Title;
                     }
                     catch (InvalidOperationException) { /* Keep the confirmed link if title lookup fails. */ }
-                    linked.Add(new InspectLinks.WorkItem(link.WorkItem, title, link.Uri, "ado-commit-link"));
+                    linked.Add(new InspectLinks.WorkItem(link.WorkItem, itemTitle, link.Uri ?? null, "ado-commit-link"));
                 }
             else if (links.Status != "verified")
                 warnings.Add($"ADO commit links unavailable for {entry.Sha[..12]}: {links.Status}.");
