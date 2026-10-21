@@ -7,7 +7,7 @@ public static class InspectPretty
 {
     public static void Directory(FileInspect.DirectoryResult report, IAnsiConsole console)
     {
-        console.Write(new Rule("[steelblue1]File history · " + Markup.Escape(report.Directory) + "[/]").LeftJustified());
+        console.Write(new Rule("[steelblue1]File history · " + Markup.Escape(report.Directory) + "[/]"));
         console.MarkupLine($"[grey]{report.Files.Count} of {report.TotalFiles} tracked files · newest commit first · revision {Markup.Escape(report.Until)}[/]");
         console.WriteLine();
 
@@ -34,7 +34,7 @@ public static class InspectPretty
 
     public static void File(FileInspect.Result report, IAnsiConsole console)
     {
-        console.Write(new Rule("[steelblue1]File history · " + Markup.Escape(report.File) + "[/]").LeftJustified());
+        console.Write(new Rule("[steelblue1]File history · " + Markup.Escape(report.File) + "[/]"));
         console.MarkupLine($"[grey]{report.Changes.Count} commits · newest first · revision {Markup.Escape(report.Until)}[/]");
         foreach (FileInspect.Change c in report.Changes)
         {
@@ -53,7 +53,7 @@ public static class InspectPretty
             string[] hunks = c.Diff.Split('\n').Where(line => line.StartsWith("@@ ", StringComparison.Ordinal)).ToArray();
             if (hunks.Length > 0)
                 table.AddRow("Changed lines", Markup.Escape(string.Join("\n", hunks.Select(line => line.TrimEnd('\r')))));
-            table.Caption = new TableTitle("[grey]Why: commit subject is evidence, not verified intent[/]");
+
             console.Write(new Panel(table).Header(heading).Border(BoxBorder.Rounded).Expand());
         }
         Warnings(report.Warnings, console);
