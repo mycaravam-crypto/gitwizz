@@ -6,40 +6,50 @@ var err = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutp
 if (Console.IsErrorRedirected) err.Profile.Width = 120;
 if (Console.IsOutputRedirected) AnsiConsole.Profile.Width = 120;
 
-// Old command names keep working for one release, rewritten to the command that replaced them.
-(args, var renamed) = Cli.Deprecated(args);
-if (renamed != null) err.MarkupLine($"[grey]note: {Markup.Escape(renamed)}[/]");
-
-// Command: first non-option argument; bare options mean "plan".
-var command = args.Length == 0 ? "help" : args[0].StartsWith('-') ? "plan" : args[0];
-var rest = args.Length > 0 && !args[0].StartsWith('-') ? args[1..] : args;
-if (command is "help" or "-h" || rest.Contains("-h") || rest.Contains("--help")) { Cli.Help(AnsiConsole.Console); return 0; }
-if (command is "version" || rest.Contains("--version"))
-{
-    Console.WriteLine(AppVersion.Display(typeof(Cli).Assembly));
-    return 0;
-}
-
-try
-{
-    if (!Cli.Commands.TryGetValue(command, out var cmd))
-        throw new ArgumentException($"unknown command '{command}' (try: {string.Join(", ", Cli.Commands.Keys)}, help, version)");
-    // Leading words are the command's arguments (a pull request, a path, a subcommand); options follow.
-    var arguments = rest.TakeWhile(a => !a.StartsWith('-')).ToArray();
-    if (arguments.Length > cmd.MaxArguments)
-        throw new ArgumentException($"unknown argument '{arguments[cmd.MaxArguments]}' (usage: gitwizz {cmd.Usage})");
-    return cmd.Run(arguments, Cli.Parse(rest[arguments.Length..], command), err);
-}
-catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
-{
-    var msg = (e is AggregateException a2 ? a2.InnerException! : e).Message;
-    err.MarkupLine($"[bold indianred1]✘ error:[/] {Markup.Escape(msg)}");
-    if (Cli.Hint(msg) is { } hint) err.MarkupLine($"[grey]  hint: {Markup.Escape(hint)}[/]");
-    return msg.StartsWith("unknown") || msg.StartsWith("need") ? 2 : 1;
-}
+return Cli.Dispatch(args, err);
 
 public static partial class Cli
 {
+    /// <summary>
+    /// Runs the command line: rewrites an old command name, answers help and version, looks the command up in
+    /// Commands, splits its leading arguments from its options and runs it. Usage, repository and provider errors are
+    /// printed to err with a hint; returns the command's exit code, 2 for a usage error, 1 for any other error.
+    /// </summary>
+    public static int Dispatch(string[] args, IAnsiConsole err)
+    {
+        // Old command names keep working for one release, rewritten to the command that replaced them.
+        (args, var renamed) = Deprecated(args);
+        if (renamed != null) err.MarkupLine($"[grey]note: {Markup.Escape(renamed)}[/]");
+
+        // Command: first non-option argument; bare options mean "plan".
+        var command = args.Length == 0 ? "help" : args[0].StartsWith('-') ? "plan" : args[0];
+        var rest = args.Length > 0 && !args[0].StartsWith('-') ? args[1..] : args;
+        if (command is "help" or "-h" || rest.Contains("-h") || rest.Contains("--help")) { Help(AnsiConsole.Console); return 0; }
+        if (command is "version" || rest.Contains("--version"))
+        {
+            Console.WriteLine(AppVersion.Display(typeof(Cli).Assembly));
+            return 0;
+        }
+
+        try
+        {
+            if (!Commands.TryGetValue(command, out var cmd))
+                throw new ArgumentException($"unknown command '{command}' (try: {string.Join(", ", Commands.Keys)}, help, version)");
+            // Leading words are the command's arguments (a pull request, a path, a subcommand); options follow.
+            var arguments = rest.TakeWhile(a => !a.StartsWith('-')).ToArray();
+            if (arguments.Length > cmd.MaxArguments)
+                throw new ArgumentException($"unknown argument '{arguments[cmd.MaxArguments]}' (usage: gitwizz {cmd.Usage})");
+            return cmd.Run(arguments, Parse(rest[arguments.Length..], command), err);
+        }
+        catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
+        {
+            var msg = (e is AggregateException a2 ? a2.InnerException! : e).Message;
+            err.MarkupLine($"[bold indianred1]✘ error:[/] {Markup.Escape(msg)}");
+            if (Hint(msg) is { } hint) err.MarkupLine($"[grey]  hint: {Markup.Escape(hint)}[/]");
+            return msg.StartsWith("unknown") || msg.StartsWith("need") ? 2 : 1;
+        }
+    }
+
     static readonly Dictionary<string, string> Aliases = new()
     {
         ["-t"] = "target", ["-p"] = "prs", ["-s"] = "strategy", ["-b"] = "beam", ["-f"] = "format",

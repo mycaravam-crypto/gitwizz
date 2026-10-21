@@ -308,6 +308,17 @@ public class WorkspaceTests : IDisposable
         Assert.Equal(["broken"], current.In("blocked").Select(p => p.Pr.Id));
         Assert.All(current.Facts, f => Assert.True(f.State.Current));
         Assert.Equal("PR broken is blocked: see what blocks it", current.Next.Text);
+        string Rendered(string? workspace)
+        {
+            var text = new StringWriter();
+            var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings
+                { Out = new Spectre.Console.AnsiConsoleOutput(text), Ansi = Spectre.Console.AnsiSupport.No });
+            console.Profile.Width = 200;
+            Repository.Render(current, console, workspace: workspace);
+            return text.ToString().Split('\n').Single(l => l.StartsWith("Workspace")).TrimEnd();
+        }
+        Assert.Equal("Workspace  current", Rendered(null));
+        Assert.Equal("Workspace  current  /repo/.git/gitwizz, 3 file(s), 2 KiB", Rendered("/repo/.git/gitwizz, 3 file(s), 2 KiB"));
 
         OnBranch("nobuild", () => Write("src/Extra.cs", "class Extra { int X; }\n"));
         var stale = Status();
