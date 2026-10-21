@@ -19,7 +19,7 @@ if (command is "version" || rest.Contains("--version"))
 try
 {
     // evaluate / explain take the pull request as their first argument.
-    string? subject = command is "evaluate" or "explain" or "guide" or "context" or "trace" or "evidence" or "env" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    string? subject = command is "evaluate" or "explain" or "guide" or "context" or "trace" or "evidence" or "env" or "inspect" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
     var opt = Cli.Parse(command is "env" or "cache" or "history" or "version-history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
@@ -33,6 +33,7 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
+    if (command == "inspect") return Cli.Inspect(subject ?? throw new ArgumentException("need a file or directory: gitwizz inspect <path>"), opt, err);
     if (command == "benchmark") return Cli.Benchmark(opt, err);
     if (command == "env")
         return Cli.EnvDown(subject is "down" && rest.Length > 1 && !rest[1].StartsWith('-') ? rest[1]
@@ -94,6 +95,7 @@ public static partial class Cli
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
         ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"],
+        ["inspect"] = ["since", "until", "limit", "format", "output", "repo"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean"];
@@ -128,6 +130,35 @@ public static partial class Cli
     /// renders or writes the report. Returns 1 if verification failed, else 0. Throws ArgumentException on invalid
     /// options and InvalidOperationException when the repository, provider or configuration can't be read.
     /// </summary>
+    public static int Inspect(string path, Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var git = OpenRepo(opt);
+        var limit = int.TryParse(opt.GetValueOrDefault("limit", "200"), out var n) ? n : throw new ArgumentException("--limit must be an integer");
+        var (format, output) = FormatOption(opt, "text", "text", "json");
+        var until = opt.GetValueOrDefault("until", "HEAD");
+        var relative = FileInspect.NormalizePath(git, path);
+        var end = git.RevParse(until);
+        var tree = git.Try("ls-tree", end, "--", relative);
+        if (tree.ExitCode != 0) throw new InvalidOperationException("git ls-tree failed: " + tree.Stderr.Trim());
+        var isDirectory = relative == "." || tree.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
+        if (isDirectory)
+        {
+            var report = FileInspect.InspectDirectory(git, relative, until, limit, opt.GetValueOrDefault("since"));
+            Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
+        }
+        else
+        {
+            var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"));
+            Write(format == "json" ? FileInspect.Json(report) : FileInspect.Text(report), format, output, err);
+        }
+        return 0;
+    }
+
+    /// <summary>Builds and renders a merge plan for selected pull requests using the configured strategy and verification.</summary>
+    /// <param name="opt">Parsed command options.</param>
+    /// <param name="err">Console used for progress messages and diagnostics.</param>
+    /// <returns>Zero on success, or one if merge-plan verification failed.</returns>
     public static int Plan(Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
@@ -849,6 +880,7 @@ public static partial class Cli
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items); also merged or closed
                                                 --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
+              gitwizz inspect <path> [[options]] read-only file history or directory table (author, dates, changed hunks, unverified references)
               gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz version-history list | export [[options]]
                                                 released SemVer tags and release branches with their changes (text, JSON, Markdown)
@@ -894,6 +926,12 @@ public static partial class Cli
             [bold]Trace[/]
                   --run                 also run the selected test suites on the merged state [grey](exit 3 if one fails)[/]
                   --evidence <dir>      keep each suite's full log in dir
+
+            [bold]File / directory inspect[/]
+                  --since <ref>         only changes after ref
+                  --until <ref>         inspect history until ref (default: HEAD)
+                  --limit <n>          at most n commits (default 200, max 10000)
+                  -f text | json       output format (no HTML in the first increment)
 
             [bold]History export[/]
                   --since <ref>         start after this commit (exclusive) [grey](default: none, so --limit bounds it)[/]
