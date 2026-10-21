@@ -63,4 +63,32 @@ public class FileInspectTests : IDisposable
         var result = FileInspect.Inspect(git, "new.txt");
         Assert.Equal(2, result.Changes.Count);
     }
+    [Fact]
+    public void Directory_lists_tracked_files_sorted_by_last_change_and_supports_json()
+    {
+        Commit("src/a.txt", "a\n", "Create a AB#12");
+        Commit("src/b.txt", "b\n", "Add b (#34)");
+        Commit("src/a.txt", "updated\n", "Update a AB#13");
+        Commit("other/c.txt", "c\n", "Unrelated");
+        var result = FileInspect.InspectDirectory(git, "src");
+        Assert.Equal(2, result.TotalFiles);
+        Assert.Equal(["src/a.txt", "src/b.txt"], result.Files.Select(f => f.Path));
+        Assert.Equal("AB#13", Assert.Single(result.Files[0].WorkItems));
+        Assert.Equal("#34", result.Files[1].PullRequest);
+        Assert.Contains("src/a.txt", FileInspect.DirectoryText(result));
+        Assert.Contains("gitwizz.inspect-directory/v1", FileInspect.DirectoryJson(result));
+    }
+
+    [Fact]
+    public void Directory_limit_reports_truncation_and_rejects_escape()
+    {
+        Commit("src/a.txt", "a\n", "A");
+        Commit("src/b.txt", "b\n", "B");
+        var result = FileInspect.InspectDirectory(git, "src", limit: 1);
+        Assert.Single(result.Files);
+        Assert.True(result.Truncated);
+        Assert.Throws<ArgumentException>(() => FileInspect.InspectDirectory(git, "../outside"));
+        Assert.Throws<ArgumentException>(() => FileInspect.InspectDirectory(git, "nonexistent"));
+    }
+
 }
