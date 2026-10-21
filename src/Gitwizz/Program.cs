@@ -95,7 +95,7 @@ public static partial class Cli
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
         ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"],
-        ["inspect"] = ["since", "until", "limit", "format", "output", "repo"],
+        ["inspect"] = ["since", "until", "limit", "format", "output", "repo", "provider"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean"];
