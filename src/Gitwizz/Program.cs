@@ -64,7 +64,7 @@ public static partial class Cli
         ["trace"] = new("trace <pr>", [.. Common, "run", "evidence"], 1, (a, opt, err) => Trace(Argument(a, "a pull request", "trace <pr>"), opt, err)),
         ["context"] = new("context <pr>", ["target", "provider", "strategy", "output", "repo", "no-cache", "system", "ai"], 1,
             (a, opt, err) => Context(Argument(a, "a pull request", "context <pr>"), opt, err)),
-        ["inspect"] = new("inspect <path>", ["since", "until", "limit", "format", "output", "repo", "provider"], 1,
+        ["inspect"] = new("inspect <path>", ["since", "until", "limit", "line", "lines", "format", "output", "repo", "provider"], 1,
             (a, opt, err) => Inspect(Argument(a, "a file or directory", "inspect <path>"), opt, err)),
         ["history"] = new("history", ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"], 0,
             (_, opt, err) => HistoryExport(opt, err)),
@@ -147,7 +147,8 @@ public static partial class Cli
 
     /// <summary>
     /// Runs inspect: the read-only history of one file (timeline with diff hunks and unverified commit-message links) or
-    /// a directory table, up to --until and bounded by --since and --limit. Changes nothing.
+    /// a directory table, up to --until and bounded by --since and --limit; --line/--lines keeps a file's commits that
+    /// shaped those lines. Changes nothing.
     /// </summary>
     public static int Inspect(string path, Dictionary<string, string> opt, IAnsiConsole err)
     {
@@ -161,6 +162,10 @@ public static partial class Cli
         if (tree.ExitCode != 0) throw new InvalidOperationException("git ls-tree failed: " + tree.Stderr.Trim());
         var isDirectory = relative == "." || tree.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
+        if (opt.ContainsKey("line") && opt.ContainsKey("lines")) throw new ArgumentException("use either --line or --lines, not both");
+        var lineRange = opt.TryGetValue("line", out var rangeText) || opt.TryGetValue("lines", out rangeText)
+            ? FileInspect.ParseLines(rangeText) : ((int, int)?)null;
+        if (isDirectory && lineRange != null) throw new ArgumentException("--line/--lines needs a file path, not a directory");
         if (isDirectory)
         {
             FileInspect.DirectoryResult report = ProgressBars.Show(err, progress =>
@@ -184,7 +189,7 @@ public static partial class Cli
         }
         else
         {
-            var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"));
+            var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"), lineRange);
             if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.File(report, AnsiConsole.Console);
             else Write(format == "json" ? FileInspect.Json(report) : FileInspect.Text(report), format, output, err);
         }
@@ -945,6 +950,8 @@ public static partial class Cli
                   --since <ref>         only changes after ref
                   --until <ref>         inspect history until ref (default: HEAD)
                   --limit <n>          at most n commits (default 200, max 10000)
+                  --line <n>            only commits that shaped line n at --until (files only)
+                  --lines <a>-<b>       only commits that shaped lines a..b at --until, following edits and renames
                   -f pretty | text | json   styled terminal report (default on TTY), plain text or JSON
 
             [bold]History[/]

@@ -48,7 +48,8 @@ public static class InspectPretty
 
     public static void File(FileInspect.Result report, IAnsiConsole console)
     {
-        console.Write(new Rule("[steelblue1]File history · " + Markup.Escape(report.File) + "[/]"));
+        console.Write(new Rule("[steelblue1]File history · " + Markup.Escape(report.File)
+            + (report.Lines != null ? " · lines " + Markup.Escape(report.Lines) : "") + "[/]"));
         console.MarkupLine($"[grey]{report.Changes.Count} commits · newest first · revision {Markup.Escape(report.Until)}[/]");
         foreach (FileInspect.Change c in report.Changes)
         {
