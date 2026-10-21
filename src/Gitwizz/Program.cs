@@ -144,9 +144,16 @@ public static partial class Cli
             .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
         if (isDirectory)
         {
-            var report = FileInspect.InspectDirectory(git, relative, until, limit, opt.GetValueOrDefault("since"));
-            if (opt.GetValueOrDefault("provider") is "github" || opt.GetValueOrDefault("provider") is null && git.Try("remote", "get-url", "origin").Stdout.Contains("github.com", StringComparison.OrdinalIgnoreCase))
-                report = InspectLinks.Enrich(git, report);
+            FileInspect.DirectoryResult report = ProgressBars.Show(err, progress =>
+            {
+                FileInspect.DirectoryResult found = FileInspect.InspectDirectory(
+                    git, relative, until, limit, opt.GetValueOrDefault("since"), progress);
+                if (opt.GetValueOrDefault("provider") is "github"
+                    || opt.GetValueOrDefault("provider") is null
+                    && git.Try("remote", "get-url", "origin").Stdout.Contains("github.com", StringComparison.OrdinalIgnoreCase))
+                    found = InspectLinks.Enrich(git, found, progress);
+                return found;
+            });
             if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.Directory(report, AnsiConsole.Console);
             else Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
         }
