@@ -95,7 +95,7 @@ public static partial class Cli
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
         ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"],
-        ["inspect"] = ["since", "until", "limit", "format", "output", "repo"],
+        ["inspect"] = ["since", "until", "limit", "format", "output", "repo", "provider"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean"];
@@ -148,10 +148,16 @@ public static partial class Cli
             {
                 FileInspect.DirectoryResult found = FileInspect.InspectDirectory(
                     git, relative, until, limit, opt.GetValueOrDefault("since"), progress);
-                if (opt.GetValueOrDefault("provider") is "github"
-                    || opt.GetValueOrDefault("provider") is null
-                    && git.Try("remote", "get-url", "origin").Stdout.Contains("github.com", StringComparison.OrdinalIgnoreCase))
-                    found = InspectLinks.Enrich(git, found, progress);
+                string remote = git.Try("remote", "get-url", "origin").Stdout;
+                switch (InspectProvider.Select(opt.GetValueOrDefault("provider"), remote))
+                {
+                    case "github":
+                        found = InspectLinks.Enrich(git, found, progress);
+                        break;
+                    case "azure-devops":
+                        found = InspectAdo.Enrich(found, new AdoCli(git.RepoDir));
+                        break;
+                }
                 return found;
             });
             if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.Directory(report, AnsiConsole.Console);
