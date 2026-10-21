@@ -21,8 +21,8 @@ gitwizz never handles or logs a credential. Set `GITWIZZ_ADO` to use an `ado` ex
 | PRs, refs, source commit, description, author | `ado pr list --json --status active` |
 | review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
 | checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
-| completed PRs for `history export` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
-| commit → work item links for `history export` | `ado commit context <full sha>` (`ado.commit-context/v1`): the work items the server links to each exported commit (`--commit-lookups`, default 500) |
+| completed PRs for `history` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
+| commit → work item links for `history` | `ado commit context <full sha>` (`ado.commit-context/v1`): the work items the server links to each exported commit (`--commit-lookups`, default 500) |
 | linked work items, acceptance criteria | `ado pr context N` names them, then `ado workitem show <id> --json` reads each in full (for `evaluate`, `trace` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
 
 Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; reports say so.
@@ -32,7 +32,9 @@ installed, not logged in (exit 3, with a hint), permission denied, not found.
 ## PR context as JSON
 
 `gitwizz context 42 --system` returns the system context instead (`gitwizz.system-context/v1`): every selected fact,
-document and linked test, unbounded by the AI budget, with the quality and its reasons.
+document and linked test, unbounded by the AI budget, with the quality and its reasons. `gitwizz context 42 --ai`
+returns the bounded [evidence package](ai-review.md) an AI review would get (`gitwizz.evidence/v1`), built on the
+merged state of an open PR, without contacting a model.
 
 `gitwizz context 42` returns one PR from any provider as one stable document (`gitwizz.context/v1`): the PR (title,
 description, author, URL, draft, labels), source and target refs with commits, reviewers and votes, checks, policy
@@ -49,4 +51,4 @@ that commit. When its source commit is gone (the branch was deleted and the serv
 read from its merge commit and `warnings` says so; without either, the lists are empty and `warnings` says why. Reviews,
 votes and checks are their final state; work items are their current state, not the state at the merge.
 `--system` works for a merged PR as well (docwizz on the merged state). The commands that merge-simulate or gate a PR
-(`evaluate`, `explain`, `trace`, `evidence`, `guide <pr>`) keep needing an open one and say which state it is in.
+(`evaluate`, `trace`, `context --ai`, `guide <pr>`) keep needing an open one and say which state it is in.

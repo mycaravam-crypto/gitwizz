@@ -5,13 +5,13 @@ The [README](../README.md) covers installation and the command overview. These p
 | Page | Covers |
 |---|---|
 | [install.md](install.md) | requirements, Windows (PowerShell, cmd) and a single-file binary |
-| [workflow.md](workflow.md) | `guide`, `doctor`, the repository workspace (`status`, `refresh`, `cache`) |
-| [gates.md](gates.md) | `evaluate` and `explain`, gates and policy as code, CI, `trace`, per-PR test environments |
+| [workflow.md](workflow.md) | `guide`, `doctor`, the repository workspace (`status`, `--refresh`, `--clear-cache`) |
+| [gates.md](gates.md) | `evaluate` (and `--explain`), gates and policy as code, CI, `trace`, per-PR test environments |
 | [system-context.md](system-context.md) | what gitwizz reads from docwizz, context quality, requirement evidence |
 | [ai-review.md](ai-review.md) | the `ai-review` gate, the evidence package, the benchmark that lets it block |
 | [planning.md](planning.md) | `plan`: options, configuration, how the search works, performance |
 | [providers.md](providers.md) | GitHub, Azure DevOps Server and local branches; `context` as JSON |
-| [history/](history/README.md) | `history export` and the `gitwizz.history/v2` contract |
+| [history/](history/README.md) | `history` and the `gitwizz.history/v2` contract |
 | [version-history/](version-history/README.md) | `version-history` and the `gitwizz.version-history/v2` contract |
 
 ## Common options
@@ -49,9 +49,9 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
 
 - The workspace's tool fingerprint covers the program each command segment starts, not what that program starts in
   turn: a script in the repository is covered by the commit, but a tool it calls is not. After changing such tools
-  underneath, run with `--no-cache` or `gitwizz cache clear`. Another gitwizz build invalidates everything stored.
-- `status`, `refresh` and the repository guide read every open PR's linked work items, one or two provider calls per
-  PR. The workspace is never pruned; `gitwizz cache clear` empties it.
+  underneath, run with `--no-cache` or `gitwizz status --clear-cache`. Another gitwizz build invalidates everything stored.
+- `status` (also with `--refresh`) and the repository guide read every open PR's linked work items, one or two provider calls per
+  PR. The workspace is never pruned; `gitwizz status --clear-cache` empties it.
 - System context: relations come from docwizz's model of the target, so a symbol the PR adds has no callers or
   callees there (the diff shows them). `docwizz diff` scans the target again for every PR, because it takes refs and no
   stored model. Flows are static call chains, so they are marked inferred.
@@ -65,7 +65,7 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
 - After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one.
 - Synthetic commits are unreferenced objects; `git gc` cleans them up.
 - History needs true merge commits; squash- or rebase-merged repositories have nothing to replay.
-- `history export` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
+- `history` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
   conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
   links issues to pull requests, not to commits), and only for the newest `--commit-lookups` commits.
@@ -88,7 +88,7 @@ that decides when AI review may block (#59), and ephemeral per-PR test environme
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
 docwizz system context for guided and AI-assisted review (#73), the dependency preflight `doctor` and its checks in
-`guide` (#75), the historical evidence export `history export` for code-to-requirement tracing (#84), and optional
+`guide` (#75), the historical evidence export `history` for code-to-requirement tracing (#84), and optional
 requirement evidence in the PR system context (#85), and the version history of released tags and open release
 branches `version-history` (#95), with Markdown changelog pages and the `gitwizz.version-history/v2` contract.
 

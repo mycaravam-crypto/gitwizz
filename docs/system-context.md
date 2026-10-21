@@ -77,7 +77,7 @@ still list `- id: system-context` under `gates` to see the context quality in ev
 ## Requirement evidence (optional)
 
 The system context can also say which requirements the changed symbols are linked to, from docwizz's requirement
-resolver (fed by [`history export`](history/README.md#usage) and your evidence files). gitwizz keeps no
+resolver (fed by [`history`](history/README.md#usage) and your evidence files). gitwizz keeps no
 requirement index of its own: it asks one read-only command, validates and bounds the answer, and keeps each link's
 provenance. **Off by default, and advisory**: it never changes a gate, the context quality or the verdict.
 
@@ -95,7 +95,7 @@ With docwizz, export the history and import it once, then point the command at `
 access:
 
 ```bash
-gitwizz history export --provider azure-devops -o history.json
+gitwizz history --provider azure-devops -o history.json
 docwizz requirements import . history.json work-items/
 ```
 

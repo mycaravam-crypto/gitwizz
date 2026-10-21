@@ -48,7 +48,7 @@ In your own repository:
 gitwizz guide                    # which PRs are ready, blocked or stale, and what to do next
 gitwizz guide 57                 # step by step: context, system context, test impact, tests, verdict, next step
 gitwizz evaluate 57              # is PR 57 ready? (exit 0 ready, 3 blocked, 4 undetermined)
-gitwizz explain 57               # every blocking decision, with evidence
+gitwizz evaluate 57 --explain     # every blocking decision, with evidence
 gitwizz --all-open               # merge order for all open PRs (plan is the default command)
 ```
 
@@ -58,17 +58,13 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 |---|---|
 | `guide [<pr>] [--yes]` | What do I do next? The repository overview, or one PR walked from context to verdict |
 | `doctor` | Is the environment ready? git, provider login, docwizz, AI endpoint, Docker, gate tools, and which gates they affect |
-| `status` | Which open PRs are ready, blocked, undetermined, stale or never evaluated? |
-| `refresh [--all-open]` | Re-evaluates what is stale, reusing the rest |
-| `cache status\|clear` | The workspace of stored results (under `.git/gitwizz/`) |
-| `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`, `--evidence <dir>` keeps logs) |
-| `explain <pr>` | Why (not)? Blocking decisions, evidence, the acceptance criteria matrix |
+| `status` | Which open PRs are ready, blocked, undetermined, stale or never evaluated? `--refresh [--all-open]` re-evaluates what is stale first, reusing the rest; `--clear-cache` removes the workspace (under `.git/gitwizz/`) |
+| `evaluate <pr>` | Is it ready? Runs the gates and prints the verdict (`-f pretty\|text\|json`, `--evidence <dir>` keeps logs); `--explain`: why (not), with blocking decisions, evidence and the acceptance criteria matrix |
 | `trace <pr> [--run]` | Which tests does the change need, and which acceptance criteria do they cover? |
-| `context <pr> [--system]` | The PR's normalized context as JSON (open, merged or closed); `--system`: the system context from docwizz |
-| `evidence <pr>` | The bounded package an AI review would see, without contacting a model |
+| `context <pr> [--system\|--ai]` | The PR's normalized context as JSON (open, merged or closed); `--system`: the system context from docwizz; `--ai`: the bounded package an AI review would see, without contacting a model |
 | `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline that lets it block |
 | `inspect <file>` | Who changed a file and when? Read-only timeline with diff hunks and unverified commit-message links ([docs](docs/inspect.md)) | 
-| `history export` | Which commits changed which lines, with their PRs and work items ([`gitwizz.history/v2`](docs/history/README.md)) |
+| `history` | Which commits changed which lines, with their PRs and work items ([`gitwizz.history/v2`](docs/history/README.md)) |
 | `version-history list\|export` | Released tags and open `release/*` branches with the PRs each shipped, as a changelog ([`gitwizz.version-history/v2`](docs/version-history/README.md)) |
 | `env down <pr>` | Removes a PR's test environment |
 | `plan` (default) | In which order should these PRs merge? (`-a` all open, `-p 101,102`, `-s squash`, `--verify "cmd"`, `-o plan.html`) |
@@ -79,6 +75,9 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 (`local`, `github`, `azure-devops`; detected from `origin`), `--profile`, `-f/--format`, `-o/--output`, `-r/--repo`,
 `--no-cache`. Every report ends with the next step as a ready-to-run command; gitwizz proposes merges, it never runs
 them.
+
+`explain`, `evidence`, `refresh`, `cache status|clear` and `history export` still work for now: they print the command that replaced
+them and run it.
 
 The full reference is in [docs/](docs/README.md): [guide, doctor and the workspace](docs/workflow.md),
 [gates and tests](docs/gates.md), [system context](docs/system-context.md), [AI review](docs/ai-review.md),
@@ -140,8 +139,8 @@ A rendered merge plan: [docs/sample-plan.html](docs/sample-plan.html).
 | `0` | ok: ready, plan made, thresholds met |
 | `1` | error, or failed `--verify` |
 | `2` | usage error |
-| `3` | `evaluate`/`explain`/`guide`: blocked · `trace`: a suite failed · `benchmark`: thresholds missed |
-| `4` | `evaluate`/`explain`/`guide`: undetermined, a blocking gate could not run · `guide`: exited before a verdict |
+| `3` | `evaluate`/`guide`: blocked · `trace`: a suite failed · `benchmark`: thresholds missed |
+| `4` | `evaluate`/`guide`: undetermined, a blocking gate could not run · `guide`: exited before a verdict |
 | `5` | `doctor`: degraded, only advisory checks are affected |
 | `6` | `doctor`: verdict at risk, a blocking gate cannot run |
 | `7` | `doctor`/`guide`: cannot start (git, repository, provider or `.gitwizz.yml`) |

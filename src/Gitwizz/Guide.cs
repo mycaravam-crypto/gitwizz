@@ -575,7 +575,7 @@ public sealed class Guide(PullRequestWorkflow wf, GuideOptions options, IAnsiCon
                     .Where(k => Count("systemContext", k) > 0).Select(k => $"{Count("systemContext", k)} {k}")) is { Length: > 0 } parts ? Markup.Escape(parts) : "none");
         if (Count("budget", "truncated") > 0)
             Warn("cut to fit the budget: " + string.Join(", ", package["budget"]!["truncated"]!.AsArray().Select(t => t!.GetValue<string>())));
-        output.MarkupLine($"  [grey]full package (nothing is sent anywhere):[/] gitwizz evidence {Markup.Escape(wf.Pr.Id.TrimStart('#'))}");
+        output.MarkupLine($"  [grey]full package (nothing is sent anywhere):[/] gitwizz context {Markup.Escape(wf.Pr.Id.TrimStart('#'))} --ai");
     }
 
     void SaveEvidence()

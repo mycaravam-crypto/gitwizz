@@ -44,7 +44,7 @@ public sealed class RepositoryStatus
             var id = (PrStatus p) => p.Pr.Id.TrimStart('#');
             if (In("stale").FirstOrDefault() is { } s) return ($"PR {s.Pr.Id} needs evaluation: {s.Evaluation.Reason}", s, $"gitwizz guide {id(s)}");
             if (In("missing").FirstOrDefault() is { } m) return ($"PR {m.Pr.Id} has not been evaluated", m, $"gitwizz guide {id(m)}");
-            if (StoreEnabled && Facts.Any(f => !f.State.Current)) return ("Refresh the repository facts", null, "gitwizz refresh");
+            if (StoreEnabled && Facts.Any(f => !f.State.Current)) return ("Refresh the repository facts", null, "gitwizz status --refresh");
             if (In("undetermined").FirstOrDefault() is { } u) return ($"PR {u.Pr.Id} could not be judged: fix the tooling", u, $"gitwizz guide {id(u)}");
             if (In("blocked").FirstOrDefault() is { } b) return ($"PR {b.Pr.Id} is blocked: see what blocks it", b, $"gitwizz guide {id(b)}");
             if (In("ready").Count > 0) return ($"{In("ready").Count} ready: see the merge order", null, $"gitwizz plan --all-open --target {Target}" + (Provider == "local" ? " --provider local" : ""));
@@ -142,13 +142,16 @@ public static class Repository
         _ => "[grey]– missing[/]",
     };
 
-    /// <summary>The repository summary: target, workspace, PRs by category, repository facts and the next action.</summary>
-    public static void Render(RepositoryStatus s, IAnsiConsole c, string heading = "REPOSITORY")
+    /// <summary>
+    /// The repository summary: target, workspace (with where it is and what it holds, when given), PRs by category,
+    /// repository facts and the next action.
+    /// </summary>
+    public static void Render(RepositoryStatus s, IAnsiConsole c, string heading = "REPOSITORY", string? workspace = null)
     {
         c.MarkupLine($"[bold steelblue1]{Markup.Escape(heading)}[/]  [bold]{Markup.Escape(s.Name)}[/]");
         c.MarkupLine($"[grey]Target[/]     {Markup.Escape(s.Target)} @ {Short(s.TargetSha)}  [grey]({Markup.Escape(s.Provider)})[/]");
         var ws = s.Workspace switch { "current" => "[springgreen3]current[/]", "stale" => "[gold1]stale[/]", var w => $"[grey]{w}[/]" };
-        c.MarkupLine($"[grey]Workspace[/]  {ws}");
+        c.MarkupLine($"[grey]Workspace[/]  {ws}" + (workspace != null ? $"  [grey]{Markup.Escape(workspace)}[/]" : ""));
         c.WriteLine();
         c.MarkupLine($"[bold]Open PRs[/]   {s.Prs.Count}");
         foreach (var cat in RepositoryStatus.Categories)

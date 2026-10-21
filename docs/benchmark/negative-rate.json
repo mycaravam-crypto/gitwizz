@@ -1,6 +1,6 @@
 {
   "id": "negative-rate",
-  "notes": "Labelled case: the change lets Rate return a negative value, which ADR 001 forbids. Built with `gitwizz evidence`, then labelled by adding expected.",
+  "notes": "Labelled case: the change lets Rate return a negative value, which ADR 001 forbids. Built with `gitwizz context --ai`, then labelled by adding expected.",
   "expected": [ { "file": "src/Tax.cs", "line": 6, "rule": "adr-001" } ],
   "schema": "gitwizz.evidence/v1",
   "pr": { "id": "#12", "title": "Reduced tax rate", "description": "" },
