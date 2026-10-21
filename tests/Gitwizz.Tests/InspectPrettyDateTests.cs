@@ -8,6 +8,7 @@ public class InspectPrettyDateTests
     [InlineData("2026-10-21T07:47:30+02:00", "21.10.2026 07:47")]
     [InlineData("2026-01-03T12:05:59Z", "03.01.2026 12:05")]
     [InlineData("not-a-date", "not-a-date")]
+    [InlineData("2026-12-31T23:59:00+01:00", "31.12.2026 23:59")]
     public void German_minute_is_formatted_consistently(string input, string expected) =>
         Assert.Equal(expected, InspectPretty.GermanMinute(input));
 }
