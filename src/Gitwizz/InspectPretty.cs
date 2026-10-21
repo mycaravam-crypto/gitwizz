@@ -16,15 +16,19 @@ public static class InspectPretty
         table.AddColumn("File / change");
         table.AddColumn("Author");
         table.AddColumn(new TableColumn("Commit").NoWrap());
-        table.AddColumn("References");
+        table.AddColumn("Pull request / work items");
         foreach (FileInspect.DirectoryEntry f in report.Files)
         {
             string date = DateTimeOffset.TryParse(f.CommittedAt, out DateTimeOffset parsed)
                 ? parsed.ToString("yyyy-MM-dd HH:mm") : f.CommittedAt;
             string description = $"[bold]{Markup.Escape(f.Path)}[/]\n[grey]{Markup.Escape(f.Subject)}[/]";
-            string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) + " [grey]*[/]";
+            string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) + " [grey](inferred)[/]";
+            if (f.PullRequestTitle != null) refs += "\n" + Markup.Escape(f.PullRequestTitle);
+            foreach (InspectLinks.WorkItem item in f.LinkedWorkItems)
+                refs += "\n[steelblue1]" + Markup.Escape(item.Id) + "[/] " +
+                    Markup.Escape(item.Title ?? "(untitled)") + " [grey](PR link)[/]";
             if (f.WorkItems.Count > 0)
-                refs += "\n" + Markup.Escape(string.Join(", ", f.WorkItems)) + " [grey]*[/]";
+                refs += "\n[grey]Commit mentions: " + Markup.Escape(string.Join(", ", f.WorkItems)) + "[/]";
             table.AddRow(Markup.Escape(date), description, Markup.Escape(f.Author),
                 $"[grey]{Markup.Escape(f.Sha[..12])}[/]", refs);
         }
