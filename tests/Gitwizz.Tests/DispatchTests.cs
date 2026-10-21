@@ -39,7 +39,11 @@ public class DispatchTests : IDisposable
     (int Code, string Err) Run(params string[] args)
     {
         var text = new StringWriter();
-        var err = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(text), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors });
+        var err = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Out = new AnsiConsoleOutput(text), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors, Interactive = InteractionSupport.No,
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false },
+        });
         err.Profile.Width = 200;
         return (Cli.Dispatch(args, err), text.ToString());
     }

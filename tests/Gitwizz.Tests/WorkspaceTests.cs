@@ -312,7 +312,10 @@ public class WorkspaceTests : IDisposable
         {
             var text = new StringWriter();
             var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings
-                { Out = new Spectre.Console.AnsiConsoleOutput(text), Ansi = Spectre.Console.AnsiSupport.No });
+            {
+                Out = new Spectre.Console.AnsiConsoleOutput(text), Ansi = Spectre.Console.AnsiSupport.No, ColorSystem = Spectre.Console.ColorSystemSupport.NoColors,
+                Enrichment = new Spectre.Console.ProfileEnrichment { UseDefaultEnrichers = false }, // GitHub Actions would turn ANSI back on
+            });
             console.Profile.Width = 200;
             Repository.Render(current, console, workspace: workspace);
             return text.ToString().Split('\n').Single(l => l.StartsWith("Workspace")).TrimEnd();
