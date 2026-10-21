@@ -9,12 +9,23 @@ public static class InspectLinks
 
     public static FileInspect.DirectoryResult Enrich(Git git, FileInspect.DirectoryResult report)
     {
-        if (!report.Files.Any(entry => entry.PullRequest != null)) return report;
+
         Dictionary<string, (string? Title, string? Url, IReadOnlyList<WorkItem> Items)> resolved = new(StringComparer.Ordinal);
         List<FileInspect.DirectoryEntry> rows = new();
         List<string> warnings = report.Warnings.ToList();
-        foreach (FileInspect.DirectoryEntry entry in report.Files)
+        Dictionary<string, string?> shaToPr = new(StringComparer.Ordinal);
+        foreach (FileInspect.DirectoryEntry original in report.Files)
         {
+            FileInspect.DirectoryEntry entry = original;
+            if (entry.PullRequest == null)
+            {
+                if (!shaToPr.TryGetValue(entry.Sha, out string? discovered))
+                {
+                    discovered = FindPullRequest(git, entry.Sha);
+                    shaToPr.Add(entry.Sha, discovered);
+                }
+                if (discovered != null) entry = entry with { PullRequest = discovered };
+            }
             if (entry.PullRequest is not { } reference
                 || !int.TryParse(reference.TrimStart('#'), out int number))
             {
@@ -51,6 +62,29 @@ public static class InspectLinks
             });
         }
         return report with { Files = rows.AsReadOnly(), Warnings = warnings.AsReadOnly() };
+    }
+
+    /// <summary>Ask GitHub for the PR containing the exact commit. No guess when association is missing or ambiguous.</summary>
+    public static string? FindPullRequest(Git git, string sha)
+    {
+        GitResult result = Git.Exec(git.RepoDir, "gh",
+            ["api", "--header", "Accept: application/vnd.github+json",
+             $"repos/{{owner}}/{{repo}}/commits/{sha}/pulls"],
+            timeout: TimeSpan.FromSeconds(20));
+        if (result.ExitCode != 0) return null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(result.Stdout);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            JsonElement[] merged = doc.RootElement.EnumerateArray()
+                .Where(pr => pr.TryGetProperty("merged_at", out JsonElement date)
+                    && date.ValueKind == JsonValueKind.String)
+                .ToArray();
+            return merged.Length == 1 && merged[0].TryGetProperty("number", out JsonElement number)
+                ? "#" + number.GetInt32().ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     /// <summary>Parse the provider-verified metadata of a PR without asserting its relation to the inspected commit.</summary>
