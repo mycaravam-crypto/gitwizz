@@ -30,7 +30,7 @@ internal host name (`.internal`, `.corp`, `.lan`, `.local`, …), or listed in `
 configuration error.
 
 **Bounded evidence, not the repository.** The model gets one JSON package (`gitwizz.evidence/v1`; see it with
-`gitwizz evidence 42 -o pkg.json`): PR title and description, linked requirements and acceptance criteria, changed
+`gitwizz context 42 --ai -o pkg.json`): PR title and description, linked requirements and acceptance criteria, changed
 files, changed C# members and API changes, the diff (without lockfiles, generated and binary files), where changed
 symbols are used outside the change (`git grep`), the configured rules, the paragraphs of `docs` that mention what
 changed, the selected tests, and the [system context](system-context.md) (`systemContext`: changed symbols,
@@ -67,7 +67,7 @@ without a JSON `findings` array is an `error`, not a verdict.
 baseline for exactly this model and prompt lets an `ai-review` gate with `blocking: true` block.
 
 ```bash
-gitwizz evidence 42 -o benchmark/rate-sign.json     # then add "expected": [...] by hand: a labelled case
+gitwizz context 42 --ai -o benchmark/rate-sign.json # then add "expected": [...] by hand: a labelled case
 gitwizz benchmark                                   # score every case, compare with the accepted baseline
 gitwizz benchmark -f json -o bench.json             # schema gitwizz.benchmark/v1
 gitwizz benchmark --accept                          # write the baseline; commit it to promote the gate

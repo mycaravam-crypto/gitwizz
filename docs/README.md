@@ -5,8 +5,8 @@ The [README](../README.md) covers installation and the command overview. These p
 | Page | Covers |
 |---|---|
 | [install.md](install.md) | requirements, Windows (PowerShell, cmd) and a single-file binary |
-| [workflow.md](workflow.md) | `guide`, `doctor`, the repository workspace (`status`, `refresh`, `cache`) |
-| [gates.md](gates.md) | `evaluate` and `explain`, gates and policy as code, CI, `trace`, per-PR test environments |
+| [workflow.md](workflow.md) | `guide`, `doctor`, the repository workspace (`status`, `--refresh`, `--clear-cache`) |
+| [gates.md](gates.md) | `evaluate` (and `--explain`), gates and policy as code, CI, `trace`, per-PR test environments |
 | [system-context.md](system-context.md) | what gitwizz reads from docwizz, context quality, requirement evidence |
 | [ai-review.md](ai-review.md) | the `ai-review` gate, the evidence package, the benchmark that lets it block |
 | [planning.md](planning.md) | `plan`: options, configuration, how the search works, performance |
@@ -49,9 +49,9 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
 
 - The workspace's tool fingerprint covers the program each command segment starts, not what that program starts in
   turn: a script in the repository is covered by the commit, but a tool it calls is not. After changing such tools
-  underneath, run with `--no-cache` or `gitwizz cache clear`. Another gitwizz build invalidates everything stored.
-- `status`, `refresh` and the repository guide read every open PR's linked work items, one or two provider calls per
-  PR. The workspace is never pruned; `gitwizz cache clear` empties it.
+  underneath, run with `--no-cache` or `gitwizz status --clear-cache`. Another gitwizz build invalidates everything stored.
+- `status` (also with `--refresh`) and the repository guide read every open PR's linked work items, one or two provider calls per
+  PR. The workspace is never pruned; `gitwizz status --clear-cache` empties it.
 - System context: relations come from docwizz's model of the target, so a symbol the PR adds has no callers or
   callees there (the diff shows them). `docwizz diff` scans the target again for every PR, because it takes refs and no
   stored model. Flows are static call chains, so they are marked inferred.

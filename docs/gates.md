@@ -1,12 +1,12 @@
 # Merge readiness, test selection and test environments
 
-## Merge readiness: `evaluate` and `explain`
+## Merge readiness: `evaluate`
 
 ```bash
 gitwizz evaluate 57                                               # run the gates, print the verdict
 gitwizz evaluate feature/x -f json                                # a local branch, schema gitwizz.evaluation/v1
 gitwizz evaluate 57 --profile fast --evidence .gitwizz-evidence   # pick a profile, keep full logs
-gitwizz explain 57                                                # why it is (not) ready
+gitwizz evaluate 57 --explain                                     # why it is (not) ready
 ```
 
 `evaluate` loads one PR and runs its **quality gates** in order. Every gate reports the same shape: a status, whether
@@ -35,7 +35,7 @@ Advisory gates (`blocking: false`; `ai-review` by default) are reported but neve
 | Run AI-assisted review | an `ai-review` gate, if configured, on the [bounded evidence package](ai-review.md), system context included |
 | Aggregate evidence | one result per gate; `--evidence` keeps logs, packages and `evaluation.json` |
 | Evaluate the readiness policy | blocking vs advisory gates → `ready`, `blocked` or `undetermined` |
-| Explain blockers | `explain`: every blocking decision with its evidence, and the criteria matrix |
+| Explain blockers | `evaluate --explain`: every blocking decision with its evidence, and the criteria matrix |
 | Optimize the merge | [`plan`](planning.md): the merge order and the next merge command. gitwizz proposes the command; it doesn't run it |
 
 ### Gates
@@ -101,7 +101,7 @@ files; `medium`: an API signature, migration or configuration change; else `low`
 Redefining `merge` or `policy` (e.g. `{ id: policy, blocking: false }`) changes the built-in. Values of `secrets` and of
 `GITHUB_TOKEN`, `GH_TOKEN`, `ADO_PAT`, `SYSTEM_ACCESSTOKEN` are masked as `***` everywhere.
 
-A build, test, command or docwizz gate's result is [reused](workflow.md#repository-workspace-status-refresh-cache)
+A build, test, command or docwizz gate's result is [reused](workflow.md#repository-workspace-status)
 while its merged state, definition, command, environment and tools are unchanged. Files in the commit are part of the
 merged state; `cache_inputs` names files outside it that the command also reads (a shared script, a machine config, a
 tool-version file). Their path, mode and content become part of the gate's cache inputs, so a change reruns that gate
@@ -175,7 +175,7 @@ A suite **verifies** a criterion when `criteria:` lists it or its test files men
 
 A link alone, including a generated test proposal, is never evidence: only a suite that ran and passed covers a
 criterion. The `traceability` gate fails when a selected suite fails; uncovered criteria only warn unless
-`traceability.require` is set. `evaluate` includes the whole trace in its JSON, and `explain` prints the criteria
+`traceability.require` is set. `evaluate` includes the whole trace in its JSON, and `evaluate --explain` prints the criteria
 matrix. `trace` exits `3` when a suite it ran didn't pass.
 
 ## Ephemeral PR test environments

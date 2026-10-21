@@ -296,6 +296,6 @@ public static class Evaluator
             t.AddRow($"{Markup.Escape(g.Id)}{(g.Blocking ? "" : " [grey](advisory)[/]")}", s, detail, g.CachedAt != null ? "[grey]cached[/]" : $"[grey]{g.Duration.TotalSeconds:0.0}s[/]");
         }
         c.Write(t);
-        if (!e.Ready) c.MarkupLine($"[grey]why:[/] gitwizz explain {Markup.Escape(e.Pr.Id.TrimStart('#'))}");
+        if (!e.Ready) c.MarkupLine($"[grey]why:[/] gitwizz evaluate {Markup.Escape(e.Pr.Id.TrimStart('#'))} --explain");
     }
 }

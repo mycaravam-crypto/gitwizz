@@ -253,7 +253,7 @@ public static class SystemContexts
         return WorkspaceStore.Check(store.Read<DocwizzModel>(ModelPath), ModelInputs(git, version, targetSha));
     }
 
-    /// <summary>Brings the stored repository facts up to date for the target (gitwizz refresh). Returns the problem, if docwizz failed.</summary>
+    /// <summary>Brings the stored repository facts up to date for the target (gitwizz status --refresh). Returns the problem, if docwizz failed.</summary>
     public static string? RefreshModel(Git git, WorkspaceStore store, RepoConfig config, string targetSha)
     {
         var policy = config.Context.Docwizz;
@@ -933,7 +933,7 @@ public static class SystemContexts
         if (sc.Unowned.Any())
             actions.Add($"Assign {string.Join(", ", sc.Unowned.Select(s => s.Module).Distinct())} to a layer under architecture.layers in docwizz.yaml");
         if (sc.UnanalyzedFiles.Count > 0) actions.Add("Files docwizz doesn't analyze get no system context: check docwizz.yaml exclude and its supported languages");
-        if (sc.Quality is "MISSING" or "STALE") actions.Add("Fix what stops docwizz, then choose Refresh docwizz analysis (or run: gitwizz refresh)");
+        if (sc.Quality is "MISSING" or "STALE") actions.Add("Fix what stops docwizz, then choose Refresh docwizz analysis (or run: gitwizz status --refresh)");
         if (actions.Count > 0)
         {
             sb.AppendLine();

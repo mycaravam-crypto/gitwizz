@@ -6,6 +6,10 @@ var err = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutp
 if (Console.IsErrorRedirected) err.Profile.Width = 120;
 if (Console.IsOutputRedirected) AnsiConsole.Profile.Width = 120;
 
+// Old command names keep working for one release, rewritten to the command that replaced them.
+(args, var renamed) = Cli.Deprecated(args);
+if (renamed != null) err.MarkupLine($"[grey]note: {Markup.Escape(renamed)}[/]");
+
 // Command: first non-option argument; bare options mean "plan".
 var command = args.Length == 0 ? "help" : args[0].StartsWith('-') ? "plan" : args[0];
 var rest = args.Length > 0 && !args[0].StartsWith('-') ? args[1..] : args;
@@ -18,9 +22,9 @@ if (command is "version" || rest.Contains("--version"))
 
 try
 {
-    // evaluate / explain take the pull request as their first argument.
-    string? subject = command is "evaluate" or "explain" or "guide" or "context" or "trace" or "evidence" or "env" or "inspect" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
-    var opt = Cli.Parse(command is "env" or "cache" or "history" or "version-history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
+    // Single-PR commands take the pull request (inspect: the path) as their first argument.
+    string? subject = command is "evaluate" or "guide" or "context" or "trace" or "env" or "inspect" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
+    var opt = Cli.Parse(command is "env" or "history" or "version-history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
     if (command == "example")
     {
         var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
@@ -38,15 +42,9 @@ try
     if (command == "env")
         return Cli.EnvDown(subject is "down" && rest.Length > 1 && !rest[1].StartsWith('-') ? rest[1]
             : throw new ArgumentException("need a pull request: gitwizz env down <pr>"), opt, err);
-    if (command == "evidence")
-        return Cli.EvidencePackage(subject ?? throw new ArgumentException("need a pull request: gitwizz evidence <pr>"), opt, err);
     if (command == "guide") return subject != null ? Cli.Guide(subject, opt, err) : Cli.RepositoryGuide(opt, err);
     if (command == "status") return Cli.Status(opt, err);
     if (command == "doctor") return Cli.Doctor(opt, err);
-    if (command == "refresh") return Cli.Refresh(opt, err);
-    if (command == "cache")
-        return Cli.Cache(rest.Length > 0 && rest[0] is "status" or "clear" ? rest[0]
-            : throw new ArgumentException("need a cache command: gitwizz cache status | gitwizz cache clear"), opt, err);
     if (command == "history")
         return Cli.HistoryExport(rest.Length > 0 && rest[0] == "export" ? rest[0]
             : throw new ArgumentException("need a history command: gitwizz history export --since <ref>"), opt, err);
@@ -57,9 +55,9 @@ try
         return Cli.Trace(subject ?? throw new ArgumentException("need a pull request: gitwizz trace <pr>"), opt, err);
     if (command == "context")
         return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
-    if (command is "evaluate" or "explain")
-        return Cli.Evaluate(subject ?? throw new ArgumentException($"need a pull request: gitwizz {command} <pr>"), opt, command == "explain", err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, doctor, status, refresh, cache, evaluate, explain, trace, context, evidence, history, benchmark, env, example, help)");
+    if (command == "evaluate")
+        return Cli.Evaluate(subject ?? throw new ArgumentException("need a pull request: gitwizz evaluate <pr>"), opt, err);
+    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, doctor, status, evaluate, trace, context, inspect, history, version-history, benchmark, env, example, help, version)");
     return Cli.Plan(opt, err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
@@ -82,23 +80,40 @@ public static partial class Cli
     {
         ["plan"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
         ["example"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
-        ["evaluate"] = [.. Common, "profile", "evidence"],
-        ["explain"] = [.. Common, "profile", "evidence"],
+        ["evaluate"] = [.. Common, "profile", "evidence", "explain"],
         ["guide"] = ["target", "provider", "profile", "evidence", "yes", "repo", "no-cache"],
-        ["status"] = ["target", "provider", "format", "repo"],
+        ["status"] = ["target", "provider", "format", "repo", "refresh", "all-open", "clear-cache"],
         ["doctor"] = ["target", "provider", "profile", "format", "output", "repo", "working-tree"],
-        ["refresh"] = ["target", "provider", "all-open", "repo"],
-        ["cache"] = ["repo"],
-        ["context"] = ["target", "provider", "output", "repo", "no-cache", "system"],
+        ["context"] = ["target", "provider", "strategy", "output", "repo", "no-cache", "system", "ai"],
         ["trace"] = [.. Common, "run", "evidence"],
-        ["evidence"] = ["target", "provider", "strategy", "output", "repo", "no-cache"],
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
         ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"],
         ["inspect"] = ["since", "until", "limit", "format", "output", "repo", "provider"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
-    static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean"];
+    static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean", "explain", "ai", "refresh", "clear-cache"];
+
+    /// <summary>
+    /// Rewrites a command name that was folded into another command (explain, evidence, refresh, cache status|clear) to
+    /// the command and option that replaced it, with the note to print; other arguments come back unchanged.
+    /// </summary>
+    public static (string[] Args, string? Note) Deprecated(string[] args)
+    {
+        string[]? now = args switch
+        {
+            ["explain", .. var r] => ["evaluate", .. r, "--explain"],
+            ["evidence", .. var r] => ["context", .. r, "--ai"],
+            ["refresh", .. var r] => ["status", "--refresh", .. r],
+            ["cache", "status", .. var r] => ["status", .. r],
+            ["cache", "clear", .. var r] => ["status", "--clear-cache", .. r],
+            _ => null,
+        };
+        if (now == null) return (args, null);
+        var was = args[0] == "cache" ? $"cache {args[1]}" : args[0];
+        var replacement = now[0] + string.Concat(now.Where(a => a is "--explain" or "--ai" or "--refresh" or "--clear-cache").Select(a => " " + a));
+        return (now, $"'gitwizz {was}' is now 'gitwizz {replacement}'; the old name will be removed in a later release");
+    }
 
     /// <summary>
     /// Parses arguments into option → value (flags become "true"), resolving aliases; options the command doesn't take
@@ -126,9 +141,8 @@ public static partial class Cli
     }
 
     /// <summary>
-    /// Runs the plan command: validates options, loads PRs from the provider, analyzes, plans, optionally verifies, and
-    /// renders or writes the report. Returns 1 if verification failed, else 0. Throws ArgumentException on invalid
-    /// options and InvalidOperationException when the repository, provider or configuration can't be read.
+    /// Runs inspect: the read-only history of one file (timeline with diff hunks and unverified commit-message links) or
+    /// a directory table, up to --until and bounded by --since and --limit. Changes nothing.
     /// </summary>
     public static int Inspect(string path, Dictionary<string, string> opt, IAnsiConsole err)
     {
@@ -258,12 +272,14 @@ public static partial class Cli
     }
 
     /// <summary>
-    /// Runs evaluate (or explain): loads one pull request, runs the quality gates its target's policy selects and
-    /// reports the merge-readiness verdict. Returns 0 ready, 3 blocked, 4 undetermined.
+    /// Runs evaluate: loads one pull request, runs the quality gates its target's policy selects and
+    /// reports the merge-readiness verdict; --explain prints every blocking decision with its evidence instead. Returns
+    /// 0 ready, 3 blocked, 4 undetermined.
     /// </summary>
-    public static int Evaluate(string subject, Dictionary<string, string> opt, bool explain, IAnsiConsole err)
+    public static int Evaluate(string subject, Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
+        var explain = opt.ContainsKey("explain");
         var (format, output) = explain ? FormatOption(opt, "text", "text", "json") : FormatOption(opt, "pretty", "pretty", "text", "json");
         var evidenceDir = opt.GetValueOrDefault("evidence") is { } ed ? Directory.CreateDirectory(ed).FullName : null;
 
@@ -306,7 +322,7 @@ public static partial class Cli
     /// <summary>The workspace, unless --no-cache.</summary>
     static WorkspaceStore StoreFor(Git git, Dictionary<string, string> opt) => opt.ContainsKey("no-cache") ? WorkspaceStore.Off : WorkspaceStore.For(git);
 
-    /// <summary>The open PRs into the target, with their linked work items: what status, refresh and the repository guide look at.</summary>
+    /// <summary>The open PRs into the target, with their linked work items: what status (and --refresh) and the repository guide look at.</summary>
     static (string Provider, string Target, BranchPolicy Policy, string TargetSha, List<PullRequest> Prs) LoadRepository(Git git, Dictionary<string, string> opt,
         ProgressBars progress)
     {
@@ -319,45 +335,50 @@ public static partial class Cli
 
     /// <summary>
     /// Runs status: the repository's open PRs as the workspace sees them (current, stale or missing, with the last
-    /// verdicts that still apply), the repository facts and the next suggested action. Computes no analysis.
+    /// verdicts that still apply), the repository facts and the next suggested action. Computes no analysis, unless
+    /// --refresh: that first brings stale repository facts up to date and re-evaluates PRs whose latest evaluation is
+    /// stale (--all-open: also those never evaluated), reusing current artifacts. --clear-cache removes the workspace
+    /// instead, without asking the provider.
     /// </summary>
     public static int Status(Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
-        var (format, output) = FormatOption(opt, "pretty", "pretty", "text", "json");
-        var status = ProgressBars.Show(err, progress =>
-        {
-            var (provider, target, policy, targetSha, prs) = LoadRepository(git, opt, progress);
-            progress.Start("Reading the workspace");
-            return Repository.Status(git, WorkspaceStore.For(git), provider, target, policy, targetSha, prs);
-        });
-        if (format == "json") Write(Repository.Json(status) + "\n", "json", output, err);
-        else Repository.Render(status, AnsiConsole.Console);
-        return 0;
-    }
-
-    /// <summary>
-    /// Runs refresh: brings stale repository facts up to date and re-evaluates PRs whose latest evaluation is stale;
-    /// --all-open also evaluates PRs never evaluated. Current artifacts are reused, never recomputed.
-    /// </summary>
-    public static int Refresh(Dictionary<string, string> opt, IAnsiConsole err)
-    {
-        var git = OpenRepo(opt);
         var store = WorkspaceStore.For(git);
+        if (opt.ContainsKey("clear-cache"))
+        {
+            if (opt.Keys.Any(k => k is not ("clear-cache" or "repo"))) throw new ArgumentException("--clear-cache takes no other option but --repo");
+            var (files, bytes) = store.Clear();
+            err.MarkupLine(files == 0 ? "[grey]workspace already empty[/]" : $"[springgreen3]✔[/] removed {files} file(s), {Size(bytes)}: {Markup.Escape(store.Dir!)}");
+            return 0;
+        }
+        var refresh = opt.ContainsKey("refresh");
+        if (opt.ContainsKey("all-open") && !refresh) throw new ArgumentException("--all-open needs --refresh: gitwizz status --refresh --all-open");
+        var (format, output) = FormatOption(opt, "pretty", "pretty", "text", "json");
         var (status, done) = ProgressBars.Show(err, progress =>
         {
             var (provider, target, policy, targetSha, prs) = LoadRepository(git, opt, progress);
-            var done = Repository.Refresh(git, store, provider, target, policy, targetSha, prs, opt.ContainsKey("all-open"), progress);
+            var done = refresh ? Repository.Refresh(git, store, provider, target, policy, targetSha, prs, opt.ContainsKey("all-open"), progress) : null;
+            progress.Start("Reading the workspace");
             return (Repository.Status(git, store, provider, target, policy, targetSha, prs), done);
         });
-        var c = AnsiConsole.Console;
-        foreach (var e in done)
-            c.MarkupLine($"[grey]evaluated[/] {Markup.Escape(e.Pr.Id),-24} {e.Verdict}");
-        if (done.Count == 0) c.MarkupLine("[grey]no stale PR overlay to evaluate[/]" + (opt.ContainsKey("all-open") ? "" : "[grey] (--all-open also evaluates PRs never evaluated)[/]"));
-        c.WriteLine();
-        Repository.Render(status, c);
+        if (done != null)
+        {
+            var log = format == "json" ? err : AnsiConsole.Console;
+            foreach (var e in done)
+                log.MarkupLine($"[grey]evaluated[/] {Markup.Escape(e.Pr.Id),-24} {e.Verdict}");
+            if (done.Count == 0) log.MarkupLine("[grey]no stale PR overlay to evaluate[/]" + (opt.ContainsKey("all-open") ? "" : "[grey] (--all-open also evaluates PRs never evaluated)[/]"));
+            log.WriteLine();
+        }
+        if (format == "json") Write(Repository.Json(status) + "\n", "json", output, err);
+        else
+        {
+            var (n, size) = store.Size();
+            Repository.Render(status, AnsiConsole.Console, workspace: store.Exists ? $"{store.Dir}, {n} file(s), {Size(size)}" : store.Dir);
+        }
         return 0;
     }
+
+    static string Size(long b) => b < 1024 ? $"{b} B" : b < 1 << 20 ? $"{b / 1024.0:0.#} KiB" : $"{b / 1048576.0:0.#} MiB";
 
     /// <summary>
     /// Runs doctor: checks git, the provider, .gitwizz.yml and what the configured gates rely on, without running a
@@ -468,29 +489,6 @@ public static partial class Cli
         }
     }
 
-    /// <summary>Runs cache status (where the workspace is and what it holds) or cache clear (removes it).</summary>
-    public static int Cache(string sub, Dictionary<string, string> opt, IAnsiConsole err)
-    {
-        var git = OpenRepo(opt);
-        var store = WorkspaceStore.For(git);
-        static string Size(long b) => b < 1024 ? $"{b} B" : b < 1 << 20 ? $"{b / 1024.0:0.#} KiB" : $"{b / 1048576.0:0.#} MiB";
-        if (sub == "clear")
-        {
-            var (files, bytes) = store.Clear();
-            err.MarkupLine(files == 0 ? "[grey]workspace already empty[/]" : $"[springgreen3]✔[/] removed {files} file(s), {Size(bytes)}: {Markup.Escape(store.Dir!)}");
-            return 0;
-        }
-        var (n, size) = store.Size();
-        var c = AnsiConsole.Console;
-        c.MarkupLine($"[bold]Workspace[/]  {Markup.Escape(store.Dir!)}" + (store.Exists ? "" : "  [grey](not created yet)[/]"));
-        c.MarkupLine($"  {n} file(s), {Size(size)}");
-        c.MarkupLine($"  PR overlays       {store.Count("prs")}");
-        c.MarkupLine($"  gate/test results {store.Count("results")}");
-        c.MarkupLine($"  repository facts  {store.Count("repo")}");
-        c.MarkupLine("[grey]Entries are reused only while their inputs match; see gitwizz status. Remove all: gitwizz cache clear[/]");
-        return 0;
-    }
-
     /// <summary>
     /// Runs guide without a PR: the repository summary, then the next action; a chosen PR continues in the PR guide.
     /// Without a terminal (or with --yes) it prints the summary and the recommended command. Checks git, the repository
@@ -544,14 +542,23 @@ public static partial class Cli
     /// prints the provider-neutral context of one pull request as JSON (schema gitwizz.context/v1): refs, reviewers,
     /// checks, policy state, linked work items with acceptance criteria, changed files and commits. Open, merged or
     /// closed: a merged one is measured against the target it was merged into. --system prints the system context
-    /// docwizz gives for the change instead (schema gitwizz.system-context/v1).
+    /// docwizz gives for the change instead (schema gitwizz.system-context/v1); --ai the bounded evidence package an AI
+    /// review would get (schema gitwizz.evidence/v1), built on the merged state of an open PR without contacting any
+    /// model: to audit what leaves the machine, or to review it by other means.
     /// </summary>
     public static int Context(string subject, Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
+        var ai = opt.ContainsKey("ai");
+        if (ai && opt.ContainsKey("system")) throw new ArgumentException("--system and --ai are two views of the context: pick one");
         var json = ProgressBars.Show(err, progress =>
         {
-            using var wf = OpenWorkflow(git, opt, subject, null, progress, allowClosed: true);
+            using var wf = OpenWorkflow(git, opt, subject, null, progress, allowClosed: !ai);
+            if (ai)
+            {
+                progress.Start($"Building the evidence package on the merge into {wf.Target}");
+                return wf.EvidenceJson();
+            }
             if (!opt.ContainsKey("system")) return Report.Context(git, wf.Pr, wf.Provider, wf.Target, wf.TargetSha);
             if (!HasCommit(git, wf.Pr.HeadSha))
                 throw new InvalidOperationException($"pull request {wf.Pr.Id}: no system context without its source commit ({string.Join("; ", wf.Pr.Warnings)})");
@@ -704,23 +711,6 @@ public static partial class Cli
             err.MarkupLine($"[springgreen3]✔[/] baseline written to [bold]{Markup.Escape(Path.GetRelativePath(root, baselinePath))}[/]; commit it to make it count");
         }
         return (bool)result["passed"]! && regressions.Count == 0 ? 0 : 3;
-    }
-
-    /// <summary>
-    /// Prints the bounded evidence package an AI review of the PR would get (schema gitwizz.evidence/v1), built on the
-    /// merged state, without contacting any model: to audit what leaves the machine, or to review it by other means.
-    /// </summary>
-    public static int EvidencePackage(string subject, Dictionary<string, string> opt, IAnsiConsole err)
-    {
-        var git = OpenRepo(opt);
-        var json = ProgressBars.Show(err, progress =>
-        {
-            using var wf = OpenWorkflow(git, opt, subject, null, progress);
-            progress.Start($"Building the evidence package on the merge into {wf.Target}");
-            return wf.EvidenceJson();
-        });
-        Write(json + "\n", "json", opt.GetValueOrDefault("output"), err);
-        return 0;
     }
 
     /// <summary>
@@ -890,13 +880,11 @@ public static partial class Cli
               gitwizz guide [[<pr>]] [[options]]   the repository's state and next action; with a PR: step by step to its verdict
               gitwizz doctor [[options]]         is the environment ready? git, provider login, docwizz, AI endpoint, Docker, gate tools
               gitwizz status [[options]]         open PRs as the workspace sees them: current, stale or not evaluated
-              gitwizz refresh [[--all-open]]     re-evaluate stale PRs (and with --all-open, unevaluated ones); reuses the rest
-              gitwizz cache status | clear      where the workspace is and what it holds; remove it
-              gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge?
-              gitwizz explain <pr> [[options]]   why a PR is (not) ready, with the evidence
+                                                --refresh: re-evaluate what is stale first; --clear-cache: remove the workspace
+              gitwizz evaluate <pr> [[options]]  run the quality gates: is this PR ready to merge? --explain: why (not), with the evidence
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items); also merged or closed
                                                 --system: the system context docwizz gives for the change instead
-              gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
+                                                --ai: the bounded evidence package an AI review would see
               gitwizz inspect <path> [[options]] read-only file history or directory table (author, dates, changed hunks, unverified references)
               gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz version-history list | export [[options]]
@@ -920,9 +908,10 @@ public static partial class Cli
                   --verify <command>    run a command on merged states, e.g. "dotnet test"
                   --verify-at <level>   final | critical (after high-risk steps) | step [grey](default: final)[/]
 
-            [bold]Evaluate / explain[/]
+            [bold]Evaluate[/]
                   --profile <name>      gate profile from .gitwizz.yml [grey](default: by risk, else "default", else all)[/]
                   --evidence <dir>      keep full gate logs and evaluation.json in dir
+                  --explain             every blocking decision with its evidence and the acceptance criteria matrix [grey](-f text | json)[/]
               [grey]exit code: 0 ready, 3 blocked by a failed gate, 4 undetermined (a blocking gate could not run)[/]
 
             [bold]Guide[/]
@@ -936,8 +925,11 @@ public static partial class Cli
                   --target, --provider, --profile as above; -f pretty | text | json\n                  --working-tree       read the local .gitwizz.yml (including uncommitted changes) instead of the target policy
               [grey]exit code: 0 ok, 5 degraded (advisory checks affected), 6 verdict at risk (a blocking gate can't run), 7 cannot start[/]
 
-            [bold]Workspace[/]
-                  --no-cache            neither reuse nor store results (plan, evaluate, explain, guide, trace, context, evidence, history)
+            [bold]Status and the workspace[/]
+                  --refresh             first bring stale repository facts up to date and re-evaluate stale PRs, reusing the rest
+                  --all-open            with --refresh: also evaluate PRs never evaluated
+                  --clear-cache         remove the workspace and stop
+                  --no-cache            neither reuse nor store results (plan, evaluate, guide, trace, context, history)
               [grey]stored in .git/gitwizz (or GITWIZZ_WORKSPACE); a result is reused only when every input it came from is unchanged[/]
 
             [bold]Trace[/]

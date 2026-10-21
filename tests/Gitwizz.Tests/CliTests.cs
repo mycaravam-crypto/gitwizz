@@ -19,6 +19,38 @@ public class CliTests
     }
 
     [Fact]
+    public void Folded_commands_are_rewritten_to_their_replacement_with_a_note()
+    {
+        var (args, note) = Cli.Deprecated(["explain", "57", "-f", "json"]);
+        Assert.Equal(["evaluate", "57", "-f", "json", "--explain"], args);
+        Assert.Equal("'gitwizz explain' is now 'gitwizz evaluate --explain'; the old name will be removed in a later release", note);
+        Assert.Equal(["context", "57", "-o", "e.json", "--ai"], Cli.Deprecated(["evidence", "57", "-o", "e.json"]).Args);
+        Assert.Equal(["status", "--refresh", "--all-open"], Cli.Deprecated(["refresh", "--all-open"]).Args);
+        Assert.Equal(["status", "-r", "x"], Cli.Deprecated(["cache", "status", "-r", "x"]).Args);
+        (args, note) = Cli.Deprecated(["cache", "clear"]);
+        Assert.Equal(["status", "--clear-cache"], args);
+        Assert.Contains("'gitwizz cache clear' is now 'gitwizz status --clear-cache'", note);
+
+        // Everything else is left alone, including an incomplete cache command (it stays an unknown command).
+        Assert.Null(Cli.Deprecated(["evaluate", "57"]).Note);
+        Assert.Null(Cli.Deprecated(["cache"]).Note);
+        Assert.Null(Cli.Deprecated([]).Note);
+    }
+
+    [Fact]
+    public void Folded_commands_became_options()
+    {
+        Assert.Equal("true", Cli.Parse(["--explain", "-f", "json"], "evaluate")["explain"]);
+        Assert.Equal("true", Cli.Parse(["--ai", "-s", "squash"], "context")["ai"]);
+        var o = Cli.Parse(["--refresh", "--all-open"], "status");
+        Assert.Equal("true", o["refresh"]);
+        Assert.Equal("true", o["all-open"]);
+        Assert.Equal("true", Cli.Parse(["--clear-cache"], "status")["clear-cache"]);
+        var e = Assert.Throws<ArgumentException>(() => Cli.Parse(["--explain"], "trace"));
+        Assert.Contains("it belongs to evaluate", e.Message);
+    }
+
+    [Fact]
     public void Example_repository_shows_every_outcome()
     {
         var dir = Path.Combine(Path.GetTempPath(), "gitwizz_example-" + Guid.NewGuid().ToString("N")[..8]);

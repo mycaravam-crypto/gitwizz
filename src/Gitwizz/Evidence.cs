@@ -190,7 +190,7 @@ public static class Evidence
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(copy.ToJsonString())));
     }
 
-    /// <summary>Indented JSON for gitwizz evidence and evidence directories.</summary>
+    /// <summary>Indented JSON for gitwizz context --ai and evidence directories.</summary>
     public static string Json(JsonObject package) =>
         package.ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 }

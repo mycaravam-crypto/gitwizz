@@ -106,14 +106,13 @@ Options: `--target`, `--provider`, `--profile`, `--working-tree`, `-f`, `-o`, `-
 with the fix when one of them is unusable, and the rest for the gates selected for that PR after its context; see
 [Guided workflow](#guided-workflow-guide).
 
-## Repository workspace: `status`, `refresh`, `cache`
+## Repository workspace: `status`
 
 ```bash
-gitwizz status                # open PRs as the workspace sees them, and the next suggested action
-gitwizz refresh               # re-evaluate PRs whose verdict is stale; bring repository facts up to date
-gitwizz refresh --all-open    # also evaluate open PRs never evaluated
-gitwizz cache status          # where the workspace is and what it holds
-gitwizz cache clear           # remove it (only a directory gitwizz created)
+gitwizz status                       # open PRs as the workspace sees them, where it is and what it holds, the next action
+gitwizz status --refresh             # first re-evaluate PRs whose verdict is stale and bring repository facts up to date
+gitwizz status --refresh --all-open  # also evaluate open PRs never evaluated
+gitwizz status --clear-cache         # remove the workspace (only a directory gitwizz created)
 ```
 
 gitwizz keeps what it computed in a workspace under the repository's git directory (`.git/gitwizz/`, shared by
@@ -157,4 +156,4 @@ Incremental in practice:
 
 The one repository-wide index is docwizz's code model of the target, which gitwizz stores and reuses for every PR
 until the target's code or docwizz changes; `status` lists it as *docwizz system model* when docwizz is installed, and
-`refresh` brings it up to date.
+`status --refresh` brings it up to date.
