@@ -155,6 +155,10 @@ public static partial class Cli
         return 0;
     }
 
+    /// <summary>Builds and renders a merge plan for selected pull requests using the configured strategy and verification.</summary>
+    /// <param name="opt">Parsed command options.</param>
+    /// <param name="err">Console used for progress messages and diagnostics.</param>
+    /// <returns>Zero on success, or one if merge-plan verification failed.</returns>
     public static int Plan(Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
