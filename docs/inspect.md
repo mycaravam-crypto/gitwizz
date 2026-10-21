@@ -1,0 +1,23 @@
+# File inspection (first increment)
+
+`gitwizz inspect <path>` shows a read-only history of changes to a tracked file.
+
+```bash
+gitwizz inspect src/Gitwizz/History.cs
+gitwizz inspect src/Gitwizz/History.cs --since v1.0.0 --until HEAD --limit 500
+gitwizz inspect src/Gitwizz/History.cs -f json -o inspect.json
+```
+
+The report includes author, author date, committer date in JSON, SHA, subject,
+change type, diff hunk headers and commit-message references to PRs and work items.
+References are **unverified**; the tool does not currently retrieve PR details,
+review discussion or verified work item links. A commit's subject is not necessarily
+a reliable explanation of the developer's intention.
+
+`--follow` attempts to track renames. History is bounded (200 commits by default,
+up to 10,000). Shallow repositories and truncation are indicated. This is not
+lineage-aware line-by-line superblame yet: `--line`, `--lines`, HTML output and
+provider-enriched reasoning remain follow-up increments.
+
+The operation runs read-only git commands and does not modify the index or working tree.
+The output uses `gitwizz.inspect/v1`, independent of `gitwizz.history/v2`.
