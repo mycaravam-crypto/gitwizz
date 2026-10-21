@@ -150,7 +150,7 @@ public static class FileInspect
         {
             var pr = f.PullRequest ?? "-";
             sb.AppendLine($"{f.CommittedAt,-25} {Short(f.Author, 20)} {f.Sha[..12],-13} {pr,-8} {f.Path}");
-            sb.AppendLine($"    {f.Subject}" + (f.WorkItems.Length > 0 ? $"  [work items mentioned: {string.Join(", ", f.WorkItems)}]" : ""));
+            sb.AppendLine($"    {f.Subject}" + (f.WorkItems.Count > 0 ? $"  [work items mentioned: {string.Join(", ", f.WorkItems)}]" : ""));
         }
         foreach (var w in result.Warnings) sb.AppendLine("Warning: " + w);
         return sb.ToString();
@@ -172,7 +172,7 @@ public static class FileInspect
             sb.AppendLine($"{c.AuthoredAt}  {c.Author}  {c.Sha[..12]}  [{c.Action}]");
             sb.AppendLine($"  {c.Subject}");
             if (c.PullRequest != null) sb.AppendLine($"  PR mentioned: {c.PullRequest} (unverified)");
-            if (c.WorkItems.Length > 0) sb.AppendLine($"  Work items mentioned: {string.Join(", ", c.WorkItems)} (unverified)");
+            if (c.WorkItems.Count > 0) sb.AppendLine($"  Work items mentioned: {string.Join(", ", c.WorkItems)} (unverified)");
             sb.AppendLine("  Why: only the commit message is available; no independently verified rationale.");
             var hunks = c.Diff.Split('\n').Where(l => l.StartsWith("@@ ", StringComparison.Ordinal)).ToArray();
             foreach (var h in hunks) sb.AppendLine("  " + h.TrimEnd('\r'));
