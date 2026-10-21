@@ -25,3 +25,7 @@ The output uses `gitwizz.inspect/v1`, independent of `gitwizz.history/v2`.
 ## Terminal display
 
 In an interactive terminal, `gitwizz inspect` now uses a bordered table for directories and per-commit cards for files. The directory view shows the last commit date, file path, change subject, author, abbreviated SHA, and unverified PR/work-item mentions. The file view shows authored/committed dates, change status, references and changed hunk headers. `-f text` forces plain text; redirected output defaults to plain text. `-f json` and `-o *.json` preserve the existing JSON contracts. The extra visual formatting is presentation-only and does not verify why a change was made.
+
+## Pull request and work-item titles
+
+For GitHub repositories, directory inspection optionally calls `gh pr view` for PR numbers inferred from commit messages and shows the fetched PR title and issues from its `closingIssuesReferences`. The commit-to-PR association is still inferred from the commit subject, **not independently verified**. PR title and closing-issue metadata are provider-sourced when available. When `gh` is unavailable, inaccessible or unauthenticated, the report retains its local commit evidence and adds a warning. Multiple files referencing the same PR share one lookup per invocation. Non-GitHub providers currently show commit-message references only. The local file-history output and its JSON schema are unchanged.
