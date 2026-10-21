@@ -1,3 +1,4 @@
+using System.Globalization;
 using Spectre.Console;
 
 namespace Gitwizz;
@@ -17,10 +18,13 @@ public static class InspectPretty
         table.AddColumn("Author");
         table.AddColumn(new TableColumn("Commit").NoWrap());
         table.AddColumn("Pull request / work items");
+        string? priorMinute = null;
         foreach (FileInspect.DirectoryEntry f in report.Files)
         {
-            string date = DateTimeOffset.TryParse(f.CommittedAt, out DateTimeOffset parsed)
-                ? parsed.ToString("yyyy-MM-dd HH:mm") : f.CommittedAt;
+            string date = GermanMinute(f.CommittedAt);
+            bool newGroup = priorMinute != date;
+            if (newGroup && priorMinute != null) table.AddEmptyRow();
+            priorMinute = date;
             string description = $"[bold]{Markup.Escape(f.Path)}[/]\n[grey]{Markup.Escape(f.Subject)}[/]";
             string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) + " [grey](inferred)[/]";
             if (f.PullRequestTitle != null) refs += "\n" + Markup.Escape(f.PullRequestTitle);
@@ -29,12 +33,18 @@ public static class InspectPretty
                     Markup.Escape(item.Title ?? "(untitled)") + " [grey](PR link)[/]";
             if (f.WorkItems.Count > 0)
                 refs += "\n[grey]Commit mentions: " + Markup.Escape(string.Join(", ", f.WorkItems)) + "[/]";
-            table.AddRow(Markup.Escape(date), description, Markup.Escape(f.Author),
+            table.AddRow(newGroup ? $"[bold steelblue1]{Markup.Escape(date)}[/]" : "", description, Markup.Escape(f.Author),
                 $"[grey]{Markup.Escape(f.Sha[..12])}[/]", refs);
         }
         console.Write(table);
         Warnings(report.Warnings, console);
     }
+
+    /// <summary>Formats a commit timestamp in German day/month/year order.</summary>
+    public static string GermanMinute(string timestamp) =>
+        DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset parsed)
+            ? parsed.ToString("dd.MM.yyyy HH:mm", CultureInfo.GetCultureInfo("de-DE"))
+            : timestamp;
 
     public static void File(FileInspect.Result report, IAnsiConsole console)
     {

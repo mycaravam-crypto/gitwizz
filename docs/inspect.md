@@ -41,3 +41,5 @@ For Azure DevOps Server remotes (`/_git/`) or `--provider azure-devops`, directo
 - `ado pr context <id>` confirms PR information and its linked work items. A PR title/PR-linked work item is shown only if that PR context names the inspected commit or merge commit.
 
 Not every commit is attributable to a PR. In particular, rebase merges, older PRs outside the 500-item listing, and commits whose merge metadata is incomplete may have no confirmed PR even when work-item evidence exists. Missing ADO credentials or permissions are reported as warnings; no association is fabricated. Run `ado auth status` to verify access.
+
+In the interactive directory table, consecutive files with the same last-change minute form a visual group: the German-formatted date (`dd.MM.yyyy HH:mm`) is shown only on its first row and a blank separator appears between different minutes. This changes presentation only; text and JSON output retain their existing contracts.
