@@ -145,12 +145,16 @@ public static partial class Cli
         if (isDirectory)
         {
             var report = FileInspect.InspectDirectory(git, relative, until, limit, opt.GetValueOrDefault("since"));
-            if (opt.GetValueOrDefault("provider") is "github" || opt.GetValueOrDefault("provider") is null && git.Try("remote", "get-url", "origin").Stdout.Contains("github.com", StringComparison.OrdinalIgnoreCase))
-                report = InspectLinks.Enrich(git, report);
-            else if (opt.GetValueOrDefault("provider") is "azure-devops" or "ado" or "azure"
-                || opt.GetValueOrDefault("provider") is null
-                    && AzureDevOps.IsRemote(git.Try("remote", "get-url", "origin").Stdout))
-                report = InspectAdo.Enrich(report, new AdoCli(git.RepoDir));
+            string remote = git.Try("remote", "get-url", "origin").Stdout;
+            switch (InspectProvider.Select(opt.GetValueOrDefault("provider"), remote))
+            {
+                case "github":
+                    report = InspectLinks.Enrich(git, report);
+                    break;
+                case "azure-devops":
+                    report = InspectAdo.Enrich(report, new AdoCli(git.RepoDir));
+                    break;
+            }
             if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.Directory(report, AnsiConsole.Console);
             else Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
         }
