@@ -5,6 +5,8 @@ namespace Gitwizz;
 /// <summary>Azure DevOps Server evidence enrichment for file inspection, via the existing ado CLI adapter.</summary>
 public static class InspectAdo
 {
+    const string WorkItemPrefix = "AB#";
+    const int CompletedPrLimit = 500;
     /// <summary>Enriches commit rows with verified commit work-item links and available PR context.</summary>
     public static FileInspect.DirectoryResult Enrich(FileInspect.DirectoryResult report, IAdoClient ado)
     {
@@ -28,12 +30,12 @@ public static class InspectAdo
                     string? itemTitle = null;
                     try
                     {
-                        string id = link.WorkItem.Replace("AB#", "", StringComparison.Ordinal);
+                        string id = WorkItemId(link.WorkItem);
                         using JsonDocument doc = JsonDocument.Parse(ado.Run("workitem", "show", id, "--json"));
                         itemTitle = AzureDevOps.ParseWorkItem(doc.RootElement).Title;
                     }
-                    catch (InvalidOperationException) { /* Keep the confirmed link if title lookup fails. */ }
-                    linked.Add(new InspectLinks.WorkItem(link.WorkItem, itemTitle, link.Uri ?? null, "ado-commit-link"));
+                    catch (InvalidOperationException e) { warnings.Add($"ADO work item title unavailable for {link.WorkItem}: {e.GetType().Name}."); }
+                    linked.Add(new InspectLinks.WorkItem(link.WorkItem, itemTitle, link.Uri, "ado-commit-link"));
                 }
             else if (links.Status != "verified")
                 warnings.Add($"ADO commit links unavailable for {entry.Sha[..12]}: {links.Status}.");
@@ -54,11 +56,11 @@ public static class InspectAdo
                             string? itemTitle = null;
                             try
                             {
-                                string id = link.WorkItem.Replace("AB#", "", StringComparison.Ordinal);
+                                string id = WorkItemId(link.WorkItem);
                                 using JsonDocument doc = JsonDocument.Parse(ado.Run("workitem", "show", id, "--json"));
                                 itemTitle = AzureDevOps.ParseWorkItem(doc.RootElement).Title;
                             }
-                            catch (InvalidOperationException) { /* Preserve the verified link without an optional title. */ }
+                            catch (InvalidOperationException e) { warnings.Add($"ADO work item title unavailable for {link.WorkItem}: {e.GetType().Name}."); }
                             items.Add(new InspectLinks.WorkItem(link.WorkItem, itemTitle, link.Uri, "ado-pr-link"));
                         }
                         details = (pr, items.AsReadOnly());
@@ -97,7 +99,7 @@ public static class InspectAdo
         Dictionary<string, HashSet<string>> candidates = new(StringComparer.OrdinalIgnoreCase);
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(ado.Run("pr", "list", "--json", "--status", "completed", "--limit", "500"));
+            using JsonDocument doc = JsonDocument.Parse(ado.Run("pr", "list", "--json", "--status", "completed", "--limit", CompletedPrLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             if (doc.RootElement.ValueKind != JsonValueKind.Array) return new(StringComparer.OrdinalIgnoreCase);
             foreach (JsonElement pr in doc.RootElement.EnumerateArray())
             {
@@ -121,6 +123,17 @@ public static class InspectAdo
         }
         return candidates.Where(pair => pair.Value.Count == 1)
             .ToDictionary(pair => pair.Key, pair => pair.Value.Single(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Extracts a numeric Azure Boards ID before passing it as one CLI argument.</summary>
+    public static string WorkItemId(string reference)
+    {
+        if (!reference.StartsWith(WorkItemPrefix, StringComparison.Ordinal)
+            || !int.TryParse(reference.AsSpan(WorkItemPrefix.Length),
+                System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int id)
+            || id <= 0)
+            throw new ArgumentException("Invalid Azure Boards work item reference", nameof(reference));
+        return id.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
 }
