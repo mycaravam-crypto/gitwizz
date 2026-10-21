@@ -15,9 +15,25 @@ review discussion or verified work item links. A commit's subject is not necessa
 a reliable explanation of the developer's intention.
 
 `--follow` attempts to track renames. History is bounded (200 commits by default,
-up to 10,000). Shallow repositories and truncation are indicated. This is not
-lineage-aware line-by-line superblame yet: `--line`, `--lines`, HTML output and
-provider-enriched reasoning remain follow-up increments.
+up to 10,000). Shallow repositories and truncation are indicated. HTML output
+remains a follow-up increment.
+
+## Line ranges
+
+```bash
+gitwizz inspect src/Gitwizz/History.cs --line 42
+gitwizz inspect src/Gitwizz/History.cs --lines 40-60 --since v1.0.0 -f json
+```
+
+`--line <n>` and `--lines <start>-<end>` (also `start,end`) restrict file
+inspection to the commits that shaped those lines, using `git log -L`. Line numbers
+refer to the file at `--until`; the range is traced backwards through edits and
+renames, so earlier commits show the lines at their old positions, including
+deleted lines. Unlike `blame`, which names only the last commit per final line,
+this lists every change to the range, and only the range's hunks are reported.
+JSON adds `lines` (`"start-end"`, or `null` without a filter). The options apply
+to files only; a range past the end of the file, a file missing at `--until`,
+or passing both options is an error.
 
 The operation runs read-only git commands and does not modify the index or working tree.
 The output uses `gitwizz.inspect/v1`, independent of `gitwizz.history/v2`.

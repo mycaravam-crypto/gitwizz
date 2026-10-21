@@ -95,7 +95,7 @@ public static partial class Cli
         ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
         ["env"] = ["repo"],
         ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"],
-        ["inspect"] = ["since", "until", "limit", "format", "output", "repo", "provider"],
+        ["inspect"] = ["since", "until", "limit", "line", "lines", "format", "output", "repo", "provider"],
         ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
     };
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean"];
@@ -142,6 +142,10 @@ public static partial class Cli
         if (tree.ExitCode != 0) throw new InvalidOperationException("git ls-tree failed: " + tree.Stderr.Trim());
         var isDirectory = relative == "." || tree.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
+        if (opt.ContainsKey("line") && opt.ContainsKey("lines")) throw new ArgumentException("use either --line or --lines, not both");
+        var lineRange = opt.TryGetValue("line", out var rangeText) || opt.TryGetValue("lines", out rangeText)
+            ? FileInspect.ParseLines(rangeText) : ((int, int)?)null;
+        if (isDirectory && lineRange != null) throw new ArgumentException("--line/--lines needs a file path, not a directory");
         if (isDirectory)
         {
             FileInspect.DirectoryResult report = ProgressBars.Show(err, progress =>
@@ -165,7 +169,7 @@ public static partial class Cli
         }
         else
         {
-            var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"));
+            var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"), lineRange);
             if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.File(report, AnsiConsole.Console);
             else Write(format == "json" ? FileInspect.Json(report) : FileInspect.Text(report), format, output, err);
         }
@@ -948,6 +952,8 @@ public static partial class Cli
                   --since <ref>         only changes after ref
                   --until <ref>         inspect history until ref (default: HEAD)
                   --limit <n>          at most n commits (default 200, max 10000)
+                  --line <n>            only commits that shaped line n at --until (files only)
+                  --lines <a>-<b>       only commits that shaped lines a..b at --until, following edits and renames
                   -f pretty | text | json   styled terminal report (default on TTY), plain text or JSON
 
             [bold]History export[/]

@@ -9,7 +9,25 @@ public static class FileInspect
     public record Change(string Sha, string Author, string AuthoredAt, string CommittedAt,
         string Subject, string Path, string Action, string Diff, string? PullRequest, IReadOnlyList<string> WorkItems);
     public record Result(string Schema, string File, string Until, int Limit, bool Truncated,
-        bool Shallow, IReadOnlyList<Change> Changes, IReadOnlyList<string> Warnings);
+        bool Shallow, IReadOnlyList<Change> Changes, IReadOnlyList<string> Warnings)
+    {
+        /// <summary>Inspected line range ("start-end") at the end revision, or null for the whole file.</summary>
+        public string? Lines { get; init; }
+    }
+
+    /// <summary>Parses "--line n" or "--lines start-end" (also "start,end") into a 1-based inclusive range.</summary>
+    public static (int Start, int End) ParseLines(string value)
+    {
+        var parts = value.Split('-', ',');
+        if (parts.Length > 2 || parts.Any(p => !int.TryParse(p, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out _)))
+            throw new ArgumentException($"invalid line range '{value}' (use --line <n> or --lines <start>-<end>)");
+        var start = int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture);
+        var end = parts.Length == 2 ? int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture) : start;
+        if (start < 1 || end < start)
+            throw new ArgumentException($"invalid line range '{value}': lines start at 1 and the end must not precede the start");
+        return (start, end);
+    }
 
     /// <summary>Inspects the bounded commit history for a repository-relative file, including changed line hunks and unverified references.</summary>
     /// <param name="git">Git repository used for read-only history queries.</param>
@@ -17,8 +35,10 @@ public static class FileInspect
     /// <param name="until">Revision at which the inspection ends.</param>
     /// <param name="limit">Maximum number of commits to report.</param>
     /// <param name="since">Optional exclusive starting revision.</param>
+    /// <param name="lines">Optional 1-based inclusive line range at <paramref name="until"/>; only commits touching it are reported.</param>
     /// <returns>File change history, evidence and completeness warnings.</returns>
-    public static Result Inspect(Git git, string path, string until = "HEAD", int limit = 200, string? since = null)
+    public static Result Inspect(Git git, string path, string until = "HEAD", int limit = 200, string? since = null,
+        (int Start, int End)? lines = null)
     {
         if (string.IsNullOrWhiteSpace(path) || path.StartsWith('-') || Path.IsPathRooted(path))
             throw new ArgumentException("need a repository-relative file path (no absolute paths or options)");
@@ -34,12 +54,19 @@ public static class FileInspect
         var range = since == null ? end : git.RevParse(since) + ".." + end;
         // --follow tracks renames; -p retains deleted lines and earlier states.
         // Use NUL separators for fields that can contain whitespace.
-        var args = new List<string> { "-c", "core.quotePath=false", "log", "--follow",
+        var args = new List<string> { "-c", "core.quotePath=false", "log",
             "--format=%x00%H%x00%an%x00%aI%x00%cI%x00%s%x00%b%x00",
-            "--no-ext-diff", "--find-renames", "-p", "--unified=0",
-            "--max-count=" + (limit + 1), range, "--", relative };
+            "--no-ext-diff", "--max-count=" + (limit + 1) };
+        // -L traces the range through edits and renames and takes no pathspec; it emits only the range's hunks.
+        if (lines is (int start, int stop)) args.AddRange(["-L", $"{start},{stop}:{relative}", range]);
+        else args.AddRange(["--follow", "--find-renames", "-p", "--unified=0", range, "--", relative]);
         var raw = git.Try([.. args]);
-        if (raw.ExitCode != 0) throw new InvalidOperationException("git log failed: " + raw.Stderr.Trim());
+        if (raw.ExitCode != 0)
+            throw lines != null && raw.Stderr.Contains("has only", StringComparison.Ordinal)
+                ? new ArgumentException($"--lines is outside {relative} at {until}: {raw.Stderr.Trim().Replace("fatal: ", "")}")
+                : lines != null && raw.Stderr.Contains("no path", StringComparison.Ordinal)
+                ? new ArgumentException($"{relative} does not exist at {until}; --line/--lines needs a file present at --until")
+                : new InvalidOperationException("git log failed: " + raw.Stderr.Trim());
         var parts = raw.Stdout.Split('\0');
         var changes = new List<Change>();
         for (var i = 1; i + 6 < parts.Length && changes.Count <= limit; )
@@ -58,7 +85,9 @@ public static class FileInspect
                 @"\bAB#\d+\b|\b(?:fixes|closes|resolves)\s+#\d+\b",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 .Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var action = diff.Contains("new file mode ", StringComparison.Ordinal) ? "added"
+            // -L patches omit mode lines, so a creation shows up only as "--- /dev/null".
+            var action = diff.Contains("new file mode ", StringComparison.Ordinal)
+                    || diff.Contains("\n--- /dev/null", StringComparison.Ordinal) ? "added"
                 : diff.Contains("deleted file mode ", StringComparison.Ordinal) ? "deleted"
                 : diff.Contains("rename from ", StringComparison.Ordinal) ? "renamed" : "modified";
             changes.Add(new Change(sha, author, authored, committed, subject, relative, action,
@@ -72,7 +101,10 @@ public static class FileInspect
         if (shallow) warnings.Add("Shallow clone: earlier changes may be missing.");
         warnings.Add("PR ids and work items are unverified commit-message references, not confirmed change rationale.");
         if (changes.Count == 0) warnings.Add("No changes found for this path and revision range.");
-        return new Result("gitwizz.inspect/v1", relative, until, limit, truncated, shallow, changes.AsReadOnly(), warnings.AsReadOnly());
+        return new Result("gitwizz.inspect/v1", relative, until, limit, truncated, shallow, changes.AsReadOnly(), warnings.AsReadOnly())
+        {
+            Lines = lines is (int from, int to) ? $"{from}-{to}" : null,
+        };
     }
 
 
@@ -172,7 +204,8 @@ public static class FileInspect
     public static string Text(Result result)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"File: {result.File}  ({result.Changes.Count} commits, newest first)");
+        sb.AppendLine($"File: {result.File}" + (result.Lines != null ? $"  lines {result.Lines}" : "")
+            + $"  ({result.Changes.Count} commits, newest first)");
         foreach (var c in result.Changes)
         {
             sb.AppendLine();
