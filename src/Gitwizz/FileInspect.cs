@@ -37,6 +37,8 @@ public static class FileInspect
     /// <param name="since">Optional exclusive starting revision.</param>
     /// <param name="lines">Optional 1-based inclusive line range at <paramref name="until"/>; only commits touching it are reported.</param>
     /// <returns>File change history, evidence and completeness warnings.</returns>
+    /// <exception cref="ArgumentException">The path is unsafe, was never tracked up to <paramref name="until"/>, or the line range is invalid.</exception>
+    /// <exception cref="InvalidOperationException">A git command failed.</exception>
     public static Result Inspect(Git git, string path, string until = "HEAD", int limit = 200, string? since = null,
         (int Start, int End)? lines = null)
     {
