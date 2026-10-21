@@ -67,6 +67,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | `context <pr> [--system]` | The PR's normalized context as JSON (open, merged or closed); `--system`: the system context from docwizz |
 | `evidence <pr>` | The bounded package an AI review would see, without contacting a model |
 | `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline that lets it block |
+| `inspect <file>` | Who changed a file and when? Read-only timeline with diff hunks and unverified commit-message links ([docs](docs/inspect.md)) | 
 | `history export` | Which commits changed which lines, with their PRs and work items ([`gitwizz.history/v2`](docs/history/README.md)) |
 | `version-history list\|export` | Released tags and open `release/*` branches with the PRs each shipped, as a changelog ([`gitwizz.version-history/v2`](docs/version-history/README.md)) |
 | `env down <pr>` | Removes a PR's test environment |
