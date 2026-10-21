@@ -78,7 +78,12 @@ public static class FileInspect
 
     /// <summary>One tracked file in a directory tree, with the last touching commit's message evidence.</summary>
     public record DirectoryEntry(string Path, string Sha, string Author, string AuthoredAt,
-        string CommittedAt, string Subject, string? PullRequest, IReadOnlyList<string> WorkItems, long CommitTimestamp);
+        string CommittedAt, string Subject, string? PullRequest, IReadOnlyList<string> WorkItems, long CommitTimestamp)
+    {
+        public string? PullRequestTitle { get; init; }
+        public string? PullRequestUrl { get; init; }
+        public IReadOnlyList<InspectLinks.WorkItem> LinkedWorkItems { get; init; } = Array.Empty<InspectLinks.WorkItem>();
+    }
     public record DirectoryResult(string Schema, string Directory, string Until, int TotalFiles,
         int Limit, bool Truncated, IReadOnlyList<DirectoryEntry> Files, IReadOnlyList<string> Warnings);
 
