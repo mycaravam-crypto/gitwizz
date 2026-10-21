@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mycaravam-crypto/gitwizz/blob/main/docs/history/gitwizz.history.v2.schema.json",
   "title": "gitwizz.history/v2",
-  "description": "Historical commit, pull request and work item evidence exported by `gitwizz history export`. Contract and semantics: docs/history/README.md.",
+  "description": "Historical commit, pull request and work item evidence exported by `gitwizz history`. Contract and semantics: docs/history/README.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "provider", "repository", "range", "sources", "commits", "pullRequests", "warnings"],

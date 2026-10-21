@@ -11,7 +11,7 @@ The [README](../README.md) covers installation and the command overview. These p
 | [ai-review.md](ai-review.md) | the `ai-review` gate, the evidence package, the benchmark that lets it block |
 | [planning.md](planning.md) | `plan`: options, configuration, how the search works, performance |
 | [providers.md](providers.md) | GitHub, Azure DevOps Server and local branches; `context` as JSON |
-| [history/](history/README.md) | `history export` and the `gitwizz.history/v2` contract |
+| [history/](history/README.md) | `history` and the `gitwizz.history/v2` contract |
 | [version-history/](version-history/README.md) | `version-history` and the `gitwizz.version-history/v2` contract |
 
 ## Common options
@@ -65,7 +65,7 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
 - After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one.
 - Synthetic commits are unreferenced objects; `git gc` cleans them up.
 - History needs true merge commits; squash- or rebase-merged repositories have nothing to replay.
-- `history export` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
+- `history` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
   conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
   links issues to pull requests, not to commits), and only for the newest `--commit-lookups` commits.
@@ -88,7 +88,7 @@ that decides when AI review may block (#59), and ephemeral per-PR test environme
 PR workflow `guide` (#69), per-phase progress bars on every long-running command, and the persistent repository
 workspace with incremental, fingerprinted reuse, `status`, `refresh` and the repository-first `guide` (#71), and
 docwizz system context for guided and AI-assisted review (#73), the dependency preflight `doctor` and its checks in
-`guide` (#75), the historical evidence export `history export` for code-to-requirement tracing (#84), and optional
+`guide` (#75), the historical evidence export `history` for code-to-requirement tracing (#84), and optional
 requirement evidence in the PR system context (#85), and the version history of released tags and open release
 branches `version-history` (#95), with Markdown changelog pages and the `gitwizz.version-history/v2` contract.
 

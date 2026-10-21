@@ -21,8 +21,8 @@ gitwizz never handles or logs a credential. Set `GITWIZZ_ADO` to use an `ado` ex
 | PRs, refs, source commit, description, author | `ado pr list --json --status active` |
 | review state | reviewer votes: rejected or waiting for author → changes requested; approved → approved |
 | checks | the newest build per definition on `refs/pull/N/merge` (`ado build list --json`); none without build access |
-| completed PRs for `history export` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
-| commit → work item links for `history export` | `ado commit context <full sha>` (`ado.commit-context/v1`): the work items the server links to each exported commit (`--commit-lookups`, default 500) |
+| completed PRs for `history` | `ado pr context N`: status, target, commits and linked work items of each PR the history names |
+| commit → work item links for `history` | `ado commit context <full sha>` (`ado.commit-context/v1`): the work items the server links to each exported commit (`--commit-lookups`, default 500) |
 | linked work items, acceptance criteria | `ado pr context N` names them, then `ado workitem show <id> --json` reads each in full (for `evaluate`, `trace` and `context`): `Microsoft.VSTS.Common.AcceptanceCriteria`, else an "Acceptance criteria" section in the description |
 
 Other branch policies (minimum reviewer count, comment resolution, …) aren't visible through `ado`; reports say so.

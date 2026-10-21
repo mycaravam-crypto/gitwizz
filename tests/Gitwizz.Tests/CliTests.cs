@@ -30,6 +30,9 @@ public class CliTests
         (args, note) = Cli.Deprecated(["cache", "clear"]);
         Assert.Equal(["status", "--clear-cache"], args);
         Assert.Contains("'gitwizz cache clear' is now 'gitwizz status --clear-cache'", note);
+        (args, note) = Cli.Deprecated(["history", "export", "--since", "v1.0"]);
+        Assert.Equal(["history", "--since", "v1.0"], args);
+        Assert.Contains("'gitwizz history export' is now 'gitwizz history'", note);
 
         // Everything else is left alone, including an incomplete cache command (it stays an unknown command).
         Assert.Null(Cli.Deprecated(["evaluate", "57"]).Note);
@@ -48,6 +51,23 @@ public class CliTests
         Assert.Equal("true", Cli.Parse(["--clear-cache"], "status")["clear-cache"]);
         var e = Assert.Throws<ArgumentException>(() => Cli.Parse(["--explain"], "trace"));
         Assert.Contains("it belongs to evaluate", e.Message);
+    }
+
+    [Fact]
+    public void Command_table_checks_arguments_before_running()
+    {
+        Assert.Equal(["plan", "guide", "doctor", "status", "evaluate", "trace", "context", "inspect", "history", "version-history", "benchmark", "env", "example"],
+            Cli.Commands.Keys);
+        var err = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings { Out = new Spectre.Console.AnsiConsoleOutput(TextWriter.Null) });
+        var e = Assert.Throws<ArgumentException>(() => Cli.Commands["evaluate"].Run([], [], err));
+        Assert.Equal("need a pull request: gitwizz evaluate <pr>", e.Message);
+        e = Assert.Throws<ArgumentException>(() => Cli.Commands["inspect"].Run([], [], err));
+        Assert.Equal("need a file or directory: gitwizz inspect <path>", e.Message);
+        e = Assert.Throws<ArgumentException>(() => Cli.Commands["env"].Run(["up", "57"], [], err));
+        Assert.Equal("need a pull request: gitwizz env down <pr>", e.Message);
+        e = Assert.Throws<ArgumentException>(() => Cli.Commands["version-history"].Run(["show"], [], err));
+        Assert.StartsWith("need a version-history command", e.Message);
+        Assert.All(Cli.Commands, c => Assert.StartsWith(c.Key, c.Value.Usage));
     }
 
     [Fact]

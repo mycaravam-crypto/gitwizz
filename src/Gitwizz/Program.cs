@@ -22,43 +22,13 @@ if (command is "version" || rest.Contains("--version"))
 
 try
 {
-    // Single-PR commands take the pull request (inspect: the path) as their first argument.
-    string? subject = command is "evaluate" or "guide" or "context" or "trace" or "env" or "inspect" && rest.Length > 0 && !rest[0].StartsWith('-') ? rest[0] : null;
-    var opt = Cli.Parse(command is "env" or "history" or "version-history" ? rest.SkipWhile(a => !a.StartsWith('-')).ToArray() : subject != null ? rest[1..] : rest, command);
-    if (command == "example")
-    {
-        var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
-        Example.Create(dir);
-        err.MarkupLine($"[grey]example repository:[/] [bold]{Markup.Escape(dir)}[/]\n");
-        opt["repo"] = dir;
-        opt["all-open"] = "true";
-        opt.TryAdd("target", "main");
-        var code = Cli.Plan(opt, err);
-        err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
-        return code;
-    }
-    if (command == "inspect") return Cli.Inspect(subject ?? throw new ArgumentException("need a file or directory: gitwizz inspect <path>"), opt, err);
-    if (command == "benchmark") return Cli.Benchmark(opt, err);
-    if (command == "env")
-        return Cli.EnvDown(subject is "down" && rest.Length > 1 && !rest[1].StartsWith('-') ? rest[1]
-            : throw new ArgumentException("need a pull request: gitwizz env down <pr>"), opt, err);
-    if (command == "guide") return subject != null ? Cli.Guide(subject, opt, err) : Cli.RepositoryGuide(opt, err);
-    if (command == "status") return Cli.Status(opt, err);
-    if (command == "doctor") return Cli.Doctor(opt, err);
-    if (command == "history")
-        return Cli.HistoryExport(rest.Length > 0 && rest[0] == "export" ? rest[0]
-            : throw new ArgumentException("need a history command: gitwizz history export --since <ref>"), opt, err);
-    if (command == "version-history")
-        return Cli.VersionHistoryCommand(rest.Length > 0 && rest[0] is "list" or "export" ? rest[0]
-            : throw new ArgumentException("need a version-history command: gitwizz version-history list | export"), opt, err);
-    if (command == "trace")
-        return Cli.Trace(subject ?? throw new ArgumentException("need a pull request: gitwizz trace <pr>"), opt, err);
-    if (command == "context")
-        return Cli.Context(subject ?? throw new ArgumentException("need a pull request: gitwizz context <pr>"), opt, err);
-    if (command == "evaluate")
-        return Cli.Evaluate(subject ?? throw new ArgumentException("need a pull request: gitwizz evaluate <pr>"), opt, err);
-    if (command != "plan") throw new ArgumentException($"unknown command '{command}' (try: plan, guide, doctor, status, evaluate, trace, context, inspect, history, version-history, benchmark, env, example, help, version)");
-    return Cli.Plan(opt, err);
+    if (!Cli.Commands.TryGetValue(command, out var cmd))
+        throw new ArgumentException($"unknown command '{command}' (try: {string.Join(", ", Cli.Commands.Keys)}, help, version)");
+    // Leading words are the command's arguments (a pull request, a path, a subcommand); options follow.
+    var arguments = rest.TakeWhile(a => !a.StartsWith('-')).ToArray();
+    if (arguments.Length > cmd.MaxArguments)
+        throw new ArgumentException($"unknown argument '{arguments[cmd.MaxArguments]}' (usage: gitwizz {cmd.Usage})");
+    return cmd.Run(arguments, Cli.Parse(rest[arguments.Length..], command), err);
 }
 catch (Exception e) when ((e is AggregateException a ? a.InnerException : e) is InvalidOperationException or ArgumentException or FormatException)
 {
@@ -76,26 +46,46 @@ public static partial class Cli
         ["-o"] = "output", ["-r"] = "repo", ["-a"] = "all-open", ["--all"] = "all-open", ["-y"] = "yes",
     };
     static readonly string[] Common = ["target", "provider", "strategy", "format", "output", "repo", "no-cache"];
-    static readonly Dictionary<string, string[]> Options = new()
+    static readonly string[] Planning = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"];
+
+    /// <summary>A command: its usage line, the options it takes, how many leading arguments it takes, and what runs it.</summary>
+    public sealed record Command(string Usage, string[] Options, int MaxArguments, Func<string[], Dictionary<string, string>, IAnsiConsole, int> Run);
+
+    /// <summary>Every command by name, in the order the unknown-command error lists them.</summary>
+    public static readonly Dictionary<string, Command> Commands = new()
     {
-        ["plan"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
-        ["example"] = [.. Common, "prs", "all-open", "beam", "history", "verify", "verify-at"],
-        ["evaluate"] = [.. Common, "profile", "evidence", "explain"],
-        ["guide"] = ["target", "provider", "profile", "evidence", "yes", "repo", "no-cache"],
-        ["status"] = ["target", "provider", "format", "repo", "refresh", "all-open", "clear-cache"],
-        ["doctor"] = ["target", "provider", "profile", "format", "output", "repo", "working-tree"],
-        ["context"] = ["target", "provider", "strategy", "output", "repo", "no-cache", "system", "ai"],
-        ["trace"] = [.. Common, "run", "evidence"],
-        ["benchmark"] = ["cases", "baseline", "accept", "format", "output", "repo"],
-        ["env"] = ["repo"],
-        ["version-history"] = ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"],
-        ["inspect"] = ["since", "until", "limit", "format", "output", "repo", "provider"],
-        ["history"] = ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"],
+        ["plan"] = new("plan [options]", Planning, 0, (_, opt, err) => Plan(opt, err)),
+        ["guide"] = new("guide [<pr>]", ["target", "provider", "profile", "evidence", "yes", "repo", "no-cache"], 1,
+            (a, opt, err) => a is [var pr] ? Guide(pr, opt, err) : RepositoryGuide(opt, err)),
+        ["doctor"] = new("doctor", ["target", "provider", "profile", "format", "output", "repo", "working-tree"], 0, (_, opt, err) => Doctor(opt, err)),
+        ["status"] = new("status", ["target", "provider", "format", "repo", "refresh", "all-open", "clear-cache"], 0, (_, opt, err) => Status(opt, err)),
+        ["evaluate"] = new("evaluate <pr>", [.. Common, "profile", "evidence", "explain"], 1,
+            (a, opt, err) => Evaluate(Argument(a, "a pull request", "evaluate <pr>"), opt, err)),
+        ["trace"] = new("trace <pr>", [.. Common, "run", "evidence"], 1, (a, opt, err) => Trace(Argument(a, "a pull request", "trace <pr>"), opt, err)),
+        ["context"] = new("context <pr>", ["target", "provider", "strategy", "output", "repo", "no-cache", "system", "ai"], 1,
+            (a, opt, err) => Context(Argument(a, "a pull request", "context <pr>"), opt, err)),
+        ["inspect"] = new("inspect <path>", ["since", "until", "limit", "format", "output", "repo", "provider"], 1,
+            (a, opt, err) => Inspect(Argument(a, "a file or directory", "inspect <path>"), opt, err)),
+        ["history"] = new("history", ["since", "until", "limit", "commit-lookups", "provider", "format", "output", "repo", "no-cache"], 0,
+            (_, opt, err) => HistoryExport(opt, err)),
+        ["version-history"] = new("version-history list | export", ["target", "limit", "branch-pattern", "from", "to", "clean", "format", "output", "repo"], 1,
+            (a, opt, err) => VersionHistoryCommand(a is ["list" or "export"] ? a[0]
+                : throw new ArgumentException("need a version-history command: gitwizz version-history list | export"), opt, err)),
+        ["benchmark"] = new("benchmark", ["cases", "baseline", "accept", "format", "output", "repo"], 0, (_, opt, err) => Benchmark(opt, err)),
+        ["env"] = new("env down <pr>", ["repo"], 2,
+            (a, opt, err) => EnvDown(a is ["down", var pr] ? pr : throw new ArgumentException("need a pull request: gitwizz env down <pr>"), opt, err)),
+        ["example"] = new("example", Planning, 0, (_, opt, err) => Example(opt, err)),
     };
+
+    /// <summary>The command's one argument, or the usage error that names what is missing.</summary>
+    static string Argument(string[] arguments, string what, string usage) =>
+        arguments is [var a] ? a : throw new ArgumentException($"need {what}: gitwizz {usage}");
+
     static readonly string[] Flags = ["all-open", "run", "accept", "yes", "no-cache", "system", "working-tree", "clean", "explain", "ai", "refresh", "clear-cache"];
 
     /// <summary>
-    /// Rewrites a command name that was folded into another command (explain, evidence, refresh, cache status|clear) to
+    /// Rewrites a command name that was folded into another command (explain, evidence, refresh, cache status|clear,
+    /// history export) to
     /// the command and option that replaced it, with the note to print; other arguments come back unchanged.
     /// </summary>
     public static (string[] Args, string? Note) Deprecated(string[] args)
@@ -107,10 +97,11 @@ public static partial class Cli
             ["refresh", .. var r] => ["status", "--refresh", .. r],
             ["cache", "status", .. var r] => ["status", .. r],
             ["cache", "clear", .. var r] => ["status", "--clear-cache", .. r],
+            ["history", "export", .. var r] => ["history", .. r],
             _ => null,
         };
         if (now == null) return (args, null);
-        var was = args[0] == "cache" ? $"cache {args[1]}" : args[0];
+        var was = args[0] is "cache" or "history" ? $"{args[0]} {args[1]}" : args[0];
         var replacement = now[0] + string.Concat(now.Where(a => a is "--explain" or "--ai" or "--refresh" or "--clear-cache").Select(a => " " + a));
         return (now, $"'gitwizz {was}' is now 'gitwizz {replacement}'; the old name will be removed in a later release");
     }
@@ -121,15 +112,15 @@ public static partial class Cli
     /// </summary>
     public static Dictionary<string, string> Parse(string[] args, string command = "plan")
     {
-        var options = Options.GetValueOrDefault(command) ?? Options["plan"];
+        var options = (Commands.GetValueOrDefault(command) ?? Commands["plan"]).Options;
         var opt = new Dictionary<string, string>();
         for (int i = 0; i < args.Length; i++)
         {
             var key = Aliases.GetValueOrDefault(args[i]) ?? (args[i].StartsWith("--") ? args[i][2..] : null);
             if (key == null || !options.Contains(key))
             {
-                if (key != null && Options.Values.Any(o => o.Contains(key)))
-                    throw new ArgumentException($"unknown option '{args[i]}' for {command} (it belongs to {string.Join(", ", Options.Where(o => o.Value.Contains(key)).Select(o => o.Key))})");
+                if (key != null && Commands.Values.Any(c => c.Options.Contains(key)))
+                    throw new ArgumentException($"unknown option '{args[i]}' for {command} (it belongs to {string.Join(", ", Commands.Where(c => c.Value.Options.Contains(key)).Select(c => c.Key))})");
                 var near = options.FirstOrDefault(o => key != null && key.Length >= 2 && (o.StartsWith(key[..2]) || o.Contains(key)));
                 throw new ArgumentException($"unknown option '{args[i]}'" + (near != null ? $" (did you mean --{near}?)" : ""));
             }
@@ -138,6 +129,20 @@ public static partial class Cli
             opt[key] = args[++i];
         }
         return opt;
+    }
+
+    /// <summary>Runs example: builds the demo repository (in --repo, else a temporary directory) and plans all its branches.</summary>
+    static int Example(Dictionary<string, string> opt, IAnsiConsole err)
+    {
+        var dir = opt.GetValueOrDefault("repo") ?? Path.Combine(Path.GetTempPath(), "gitwizz-example");
+        Gitwizz.Example.Create(dir);
+        err.MarkupLine($"[grey]example repository:[/] [bold]{Markup.Escape(dir)}[/]\n");
+        opt["repo"] = dir;
+        opt["all-open"] = "true";
+        opt.TryAdd("target", "main");
+        var code = Plan(opt, err);
+        err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
+        return code;
     }
 
     /// <summary>
@@ -592,12 +597,12 @@ public static partial class Cli
     }
 
     /// <summary>
-    /// Exports historical evidence (schema gitwizz.history/v2): the commits since..until with their changed lines,
+    /// Runs history: exports historical evidence (schema gitwizz.history/v2): the commits since..until with their changed lines,
     /// the pull request each came in with and the work items commits and pull requests name or the provider links to
     /// them, each with its source and certainty. Bounded by --limit (default 200) and --commit-lookups (default 500).
     /// Read-only: asks the provider, changes nothing.
     /// </summary>
-    public static int HistoryExport(string sub, Dictionary<string, string> opt, IAnsiConsole err)
+    public static int HistoryExport(Dictionary<string, string> opt, IAnsiConsole err)
     {
         var git = OpenRepo(opt);
         if (opt.GetValueOrDefault("format", "json") != "json") throw new ArgumentException($"unknown format '{opt["format"]}' (json)");
@@ -886,7 +891,7 @@ public static partial class Cli
                                                 --system: the system context docwizz gives for the change instead
                                                 --ai: the bounded evidence package an AI review would see
               gitwizz inspect <path> [[options]] read-only file history or directory table (author, dates, changed hunks, unverified references)
-              gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
+              gitwizz history [[options]]        commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz version-history list | export [[options]]
                                                 released SemVer tags and release branches with their changes (text, JSON, Markdown)
               gitwizz env down <pr>             remove a PR's test environment (idempotent)
@@ -942,7 +947,7 @@ public static partial class Cli
                   --limit <n>          at most n commits (default 200, max 10000)
                   -f pretty | text | json   styled terminal report (default on TTY), plain text or JSON
 
-            [bold]History export[/]
+            [bold]History[/]
                   --since <ref>         start after this commit (exclusive) [grey](default: none, so --limit bounds it)[/]
                   --until <ref>         end at this commit [grey](default: origin/HEAD, main or master)[/]
                   --limit <n>           at most n commits, newest first [grey](default: 200, max 10000; more: "truncated")[/]

@@ -1,6 +1,6 @@
 # `gitwizz.history/v2` — the history export contract
 
-`gitwizz history export` writes one JSON document: which commits changed which lines, which pull request each came
+`gitwizz history` writes one JSON document: which commits changed which lines, which pull request each came
 in with, and which work items are linked to them, each with where that came from and how certain it is. This page is
 the contract for that document. gitwizz is its producer and owns it; consumers (DocWizz's
 `requirements import`, scripts) read the document as specified here and don't rename or reinterpret its fields.
@@ -18,9 +18,9 @@ of `example.json`.
 ## Usage
 
 ```bash
-gitwizz history export --since v1.4.0                  # commits after v1.4.0 up to the default branch
-gitwizz history export --since v1.4.0 --until release/1.5 --limit 1000 -o history.json
-gitwizz history export --since v1.4.0 --provider azure-devops --commit-lookups 100 -o history.json
+gitwizz history --since v1.4.0                  # commits after v1.4.0 up to the default branch
+gitwizz history --since v1.4.0 --until release/1.5 --limit 1000 -o history.json
+gitwizz history --since v1.4.0 --provider azure-devops --commit-lookups 100 -o history.json
 ```
 
 **Bounded.** The range is `--since` (exclusive) to `--until` (default: the default branch), newest first, at most
@@ -198,7 +198,7 @@ aren't exported. gitwizz never sees the Azure DevOps PAT (it stays in `ado`'s co
 ## Importing into DocWizz
 
 ```bash
-gitwizz history export --since v1.4.0 --provider azure-devops -o history.json
+gitwizz history --since v1.4.0 --provider azure-devops -o history.json
 docwizz requirements import . history.json work-items/
 ```
 

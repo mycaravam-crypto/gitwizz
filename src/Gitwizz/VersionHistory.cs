@@ -511,7 +511,7 @@ public static partial class VersionHistory
         return n != 0 ? n : StringComparer.Ordinal.Compare(a, b);
     }
 
-    /// <summary>The document as JSON with history export's options: indented, camelCase, nulls written, "+" kept.</summary>
+    /// <summary>The document as JSON with the history export's options: indented, camelCase, nulls written, "+" kept.</summary>
     public static string Json(VersionHistoryExport result) => JsonSerializer.Serialize(result, History.JsonOptions);
 
     /// <summary>

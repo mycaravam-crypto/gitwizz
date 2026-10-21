@@ -64,7 +64,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 | `context <pr> [--system\|--ai]` | The PR's normalized context as JSON (open, merged or closed); `--system`: the system context from docwizz; `--ai`: the bounded package an AI review would see, without contacting a model |
 | `benchmark [--accept]` | How good is the AI review on labelled cases? `--accept` saves the baseline that lets it block |
 | `inspect <file>` | Who changed a file and when? Read-only timeline with diff hunks and unverified commit-message links ([docs](docs/inspect.md)) | 
-| `history export` | Which commits changed which lines, with their PRs and work items ([`gitwizz.history/v2`](docs/history/README.md)) |
+| `history` | Which commits changed which lines, with their PRs and work items ([`gitwizz.history/v2`](docs/history/README.md)) |
 | `version-history list\|export` | Released tags and open `release/*` branches with the PRs each shipped, as a changelog ([`gitwizz.version-history/v2`](docs/version-history/README.md)) |
 | `env down <pr>` | Removes a PR's test environment |
 | `plan` (default) | In which order should these PRs merge? (`-a` all open, `-p 101,102`, `-s squash`, `--verify "cmd"`, `-o plan.html`) |
@@ -76,7 +76,7 @@ gitwizz --all-open               # merge order for all open PRs (plan is the def
 `--no-cache`. Every report ends with the next step as a ready-to-run command; gitwizz proposes merges, it never runs
 them.
 
-`explain`, `evidence`, `refresh` and `cache status|clear` still work for now: they print the command that replaced
+`explain`, `evidence`, `refresh`, `cache status|clear` and `history export` still work for now: they print the command that replaced
 them and run it.
 
 The full reference is in [docs/](docs/README.md): [guide, doctor and the workspace](docs/workflow.md),

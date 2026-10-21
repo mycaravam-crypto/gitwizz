@@ -226,7 +226,7 @@ public sealed class AdoHistory(IAdoClient ado, string? repository = null) : IHis
 }
 
 /// <summary>
-/// The historical evidence export (gitwizz history export): which commits changed which lines, which pull request
+/// The historical evidence export (gitwizz history): which commits changed which lines, which pull request
 /// each came in with, and which work items the commits and the pull requests name, each with where that came from.
 /// Read-only and bounded: a range and a commit limit, never the whole history by default. Deterministic: the same
 /// commits and provider answers give the same document. It never claims more than the evidence says: a PR it can't
