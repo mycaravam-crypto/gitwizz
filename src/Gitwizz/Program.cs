@@ -33,7 +33,7 @@ try
         err.MarkupLine($"\n[grey]Try it yourself:[/]\n  cd {Markup.Escape(dir)}\n  gitwizz plan --all-open --strategy squash\n  gitwizz plan -p feature/billing-tax,fix/billing-rounding -f json\n  gitwizz plan --all-open -o plan.html");
         return code;
     }
-    if (command == "inspect") return Cli.Inspect(subject ?? throw new ArgumentException("need a file: gitwizz inspect <path>"), opt, err);
+    if (command == "inspect") return Cli.Inspect(subject ?? throw new ArgumentException("need a file or directory: gitwizz inspect <path>"), opt, err);
     if (command == "benchmark") return Cli.Benchmark(opt, err);
     if (command == "env")
         return Cli.EnvDown(subject is "down" && rest.Length > 1 && !rest[1].StartsWith('-') ? rest[1]
@@ -135,8 +135,23 @@ public static partial class Cli
         var git = OpenRepo(opt);
         var limit = int.TryParse(opt.GetValueOrDefault("limit", "200"), out var n) ? n : throw new ArgumentException("--limit must be an integer");
         var (format, output) = FormatOption(opt, "text", "text", "json");
-        var result = FileInspect.Inspect(git, path, opt.GetValueOrDefault("until", "HEAD"), limit, opt.GetValueOrDefault("since"));
-        Write(format == "json" ? FileInspect.Json(result) : FileInspect.Text(result), format, output, err);
+        var until = opt.GetValueOrDefault("until", "HEAD");
+        var relative = FileInspect.NormalizePath(git, path);
+        var end = git.RevParse(until);
+        var tree = git.Try("ls-tree", end, "--", relative);
+        if (tree.ExitCode != 0) throw new InvalidOperationException("git ls-tree failed: " + tree.Stderr.Trim());
+        var isDirectory = relative == "." || tree.Stdout.Split('\\n', StringSplitOptions.RemoveEmptyEntries)
+            .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
+        if (isDirectory)
+        {
+            var report = FileInspect.InspectDirectory(git, relative, until, limit, opt.GetValueOrDefault("since"));
+            Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
+        }
+        else
+        {
+            var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"));
+            Write(format == "json" ? FileInspect.Json(report) : FileInspect.Text(report), format, output, err);
+        }
         return 0;
     }
 
@@ -861,7 +876,7 @@ public static partial class Cli
               gitwizz context <pr> [[options]]   the PR's normalized context as JSON (refs, reviews, checks, work items); also merged or closed
                                                 --system: the system context docwizz gives for the change instead
               gitwizz evidence <pr> [[options]]  the bounded evidence package an AI review would see (JSON)
-              gitwizz inspect <file> [[options]] read-only file history (author, dates, changed hunks, unverified references)
+              gitwizz inspect <path> [[options]] read-only file history or directory table (author, dates, changed hunks, unverified references)
               gitwizz history export [[options]] commits, their changed lines, pull requests and work items, with provenance (JSON)
               gitwizz version-history list | export [[options]]
                                                 released SemVer tags and release branches with their changes (text, JSON, Markdown)
@@ -908,7 +923,7 @@ public static partial class Cli
                   --run                 also run the selected test suites on the merged state [grey](exit 3 if one fails)[/]
                   --evidence <dir>      keep each suite's full log in dir
 
-            [bold]File inspect[/]
+            [bold]File / directory inspect[/]
                   --since <ref>         only changes after ref
                   --until <ref>         inspect history until ref (default: HEAD)
                   --limit <n>          at most n commits (default 200, max 10000)
