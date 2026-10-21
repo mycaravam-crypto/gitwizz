@@ -68,6 +68,88 @@ public static class FileInspect
         return new Result("gitwizz.inspect/v1", relative, until, limit, truncated, shallow, changes, [.. warnings]);
     }
 
+
+    /// <summary>One tracked file in a directory tree, with the last touching commit's message evidence.</summary>
+    public record DirectoryEntry(string Path, string Sha, string Author, string AuthoredAt,
+        string CommittedAt, string Subject, string? PullRequest, string[] WorkItems, long CommitTimestamp);
+    public record DirectoryResult(string Schema, string Directory, string Until, int TotalFiles,
+        int Limit, bool Truncated, List<DirectoryEntry> Files, string[] Warnings);
+
+    /// <summary>Directory mode uses the revision's tracked tree, never the working-tree filesystem.</summary>
+    public static DirectoryResult InspectDirectory(Git git, string path, string until = "HEAD", int limit = 200, string? since = null)
+    {
+        if (limit is < 1 or > 10000) throw new ArgumentException("--limit must be between 1 and 10000");
+        var relative = NormalizePath(git, path);
+        var end = git.RevParse(until);
+        var prefix = relative == "." ? "" : relative.TrimEnd('/') + "/";
+        var ls = git.Try("ls-tree", "-r", "-z", "--name-only", end, "--", prefix);
+        if (ls.ExitCode != 0) throw new InvalidOperationException("git ls-tree failed: " + ls.Stderr.Trim());
+        var paths = ls.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        if (paths.Length == 0) throw new ArgumentException($"no tracked directory found at '{relative}' in {until}");
+        var range = since == null ? end : git.RevParse(since) + ".." + end;
+        var entries = new List<DirectoryEntry>();
+        foreach (var file in paths)
+        {
+            // The end-of-revision tree bounds the file set; log is scoped to one tracked path.
+            var r = git.Try("log", "-1", "--format=%H%x00%an%x00%aI%x00%cI%x00%s%x00%b%x00%ct",
+                range, "--", file);
+            if (r.ExitCode != 0) throw new InvalidOperationException("git log failed: " + r.Stderr.Trim());
+            var fields = r.Stdout.Trim('\n', '\r').Split('\0');
+            if (fields.Length < 7 || fields[0].Length < 40) continue;
+            var subject = fields[4];
+            var pr = System.Text.RegularExpressions.Regex.Match(subject, @"\(#(?<id>\d+)\)$");
+            var work = System.Text.RegularExpressions.Regex.Matches(subject + "\n" + fields[5],
+                @"\bAB#\d+\b|\b(?:fixes|closes|resolves)\s+#\d+\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                .Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            _ = long.TryParse(fields[6].Trim(), out var timestamp);
+            entries.Add(new DirectoryEntry(file, fields[0], fields[1], fields[2], fields[3], subject,
+                pr.Success ? "#" + pr.Groups["id"].Value : null, work, timestamp));
+        }
+        var sorted = entries.OrderByDescending(e => e.CommitTimestamp).ThenBy(e => e.Path, StringComparer.Ordinal).ToList();
+        var shallow = git.Try("rev-parse", "--is-shallow-repository").Stdout.Trim() == "true";
+        var warnings = new List<string> { "PR/work-item references are unverified commit-message mentions; a subject is not verified rationale." };
+        if (shallow) warnings.Add("Shallow repository: older history may be missing.");
+        if (sorted.Count > limit) warnings.Add("Directory results truncated by --limit.");
+        return new DirectoryResult("gitwizz.inspect-directory/v1", relative, until, paths.Length, limit,
+            sorted.Count > limit, sorted.Take(limit).ToList(), [.. warnings]);
+    }
+
+    /// <summary>Canonical, repository-relative path shared by file and directory mode.</summary>
+    public static string NormalizePath(Git git, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith('-') || Path.IsPathRooted(path))
+            throw new ArgumentException("need a repository-relative file or directory path");
+        var root = Path.GetFullPath(git.Run("rev-parse", "--show-toplevel"));
+        var full = Path.GetFullPath(Path.Combine(root, path));
+        if (full != root && !full.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ArgumentException("path must stay inside the repository");
+        return Path.GetRelativePath(root, full).Replace('\\', '/');
+    }
+
+    public static string DirectoryJson(DirectoryResult result) => JsonSerializer.Serialize(result,
+        new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }) + "\n";
+
+    public static string DirectoryText(DirectoryResult result)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Directory: {result.Directory}  ({result.Files.Count} shown of {result.TotalFiles} tracked files; last change first)");
+        sb.AppendLine("Last change               Author                Commit        PR       File / reason");
+        sb.AppendLine(new string('-', 105));
+        foreach (var f in result.Files)
+        {
+            var pr = f.PullRequest ?? "-";
+            sb.AppendLine($"{f.CommittedAt,-25} {Short(f.Author, 20)} {f.Sha[..12],-13} {pr,-8} {f.Path}");
+            sb.AppendLine($"    {f.Subject}" + (f.WorkItems.Length > 0 ? $"  [work items mentioned: {string.Join(", ", f.WorkItems)}]" : ""));
+        }
+        foreach (var w in result.Warnings) sb.AppendLine("Warning: " + w);
+        return sb.ToString();
+    }
+
+    static string Short(string value, int width) =>
+        value.Length > width ? value[..(width - 1)] + "…" : value.PadRight(width);
+
     public static string Json(Result result) => JsonSerializer.Serialize(result,
         new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }) + "\n";
 
