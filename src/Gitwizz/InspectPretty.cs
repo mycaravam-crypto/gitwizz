@@ -22,11 +22,9 @@ public static class InspectPretty
         foreach (FileInspect.DirectoryEntry f in report.Files)
         {
             string date = GermanMinute(f.CommittedAt);
-            if (priorMinute != date)
-            {
-                if (priorMinute != null) table.AddEmptyRow();
-                priorMinute = date;
-            }
+            bool newGroup = priorMinute != date;
+            if (newGroup && priorMinute != null) table.AddEmptyRow();
+            priorMinute = date;
             string description = $"[bold]{Markup.Escape(f.Path)}[/]\n[grey]{Markup.Escape(f.Subject)}[/]";
             string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) + " [grey](inferred)[/]";
             if (f.PullRequestTitle != null) refs += "\n" + Markup.Escape(f.PullRequestTitle);
@@ -35,7 +33,7 @@ public static class InspectPretty
                     Markup.Escape(item.Title ?? "(untitled)") + " [grey](PR link)[/]";
             if (f.WorkItems.Count > 0)
                 refs += "\n[grey]Commit mentions: " + Markup.Escape(string.Join(", ", f.WorkItems)) + "[/]";
-            table.AddRow(Markup.Escape(date), description, Markup.Escape(f.Author),
+            table.AddRow(newGroup ? $"[bold steelblue1]{Markup.Escape(date)}[/]" : "", description, Markup.Escape(f.Author),
                 $"[grey]{Markup.Escape(f.Sha[..12])}[/]", refs);
         }
         console.Write(table);
