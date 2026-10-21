@@ -37,6 +37,8 @@ public static class FileInspect
     /// <param name="since">Optional exclusive starting revision.</param>
     /// <param name="lines">Optional 1-based inclusive line range at <paramref name="until"/>; only commits touching it are reported.</param>
     /// <returns>File change history, evidence and completeness warnings.</returns>
+    /// <exception cref="ArgumentException">The path is unsafe, was never tracked up to <paramref name="until"/>, or the line range is invalid.</exception>
+    /// <exception cref="InvalidOperationException">A git command failed.</exception>
     public static Result Inspect(Git git, string path, string until = "HEAD", int limit = 200, string? since = null,
         (int Start, int End)? lines = null)
     {
@@ -51,6 +53,11 @@ public static class FileInspect
         var relative = Path.GetRelativePath(root, full).Replace('\\', '/');
         if (relative == ".") throw new ArgumentException("need a file path");
         var end = git.RevParse(until);
+        // Checked against the whole history up to --until (ignoring --since), so deleted files still qualify.
+        var seen = git.Try("rev-list", "-1", end, "--", relative);
+        if (seen.ExitCode != 0) throw new InvalidOperationException("git rev-list failed: " + seen.Stderr.Trim());
+        if (seen.Stdout.Trim().Length == 0)
+            throw new ArgumentException($"'{relative}' was never tracked up to {until}; check the path (it is relative to the repository root) or --until");
         var range = since == null ? end : git.RevParse(since) + ".." + end;
         // --follow tracks renames; -p retains deleted lines and earlier states.
         // Use NUL separators for fields that can contain whitespace.

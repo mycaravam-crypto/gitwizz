@@ -35,6 +35,9 @@ JSON adds `lines` (`"start-end"`, or `null` without a filter). The options apply
 to files only; a range past the end of the file, a file missing at `--until`,
 or passing both options is an error.
 
+A file path that was never tracked up to `--until` is an error; a file deleted
+before `--until` still shows its history, including the deletion.
+
 The operation runs read-only git commands and does not modify the index or working tree.
 The output uses `gitwizz.inspect/v1`, independent of `gitwizz.history/v2`.
 \n## Directory overview\n\nA directory argument (including `.` for the repository root) lists tracked files\nrecursively, newest touching commit first, with path, committer date, author,\ncommit SHA, subject and unverified PR/work-item mentions. `--limit` bounds\nthe returned rows; `--since` excludes files with no changes in the range.\nUse a file path to drill down to all change hunks. This overview is based on\ntracked files at `--until`, not uncommitted or untracked working-tree content.\n
