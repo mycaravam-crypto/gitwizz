@@ -29,3 +29,7 @@ In an interactive terminal, `gitwizz inspect` now uses a bordered table for dire
 ## Pull request and work-item titles
 
 For GitHub repositories, directory inspection optionally calls `gh pr view` for PR numbers inferred from commit messages and shows the fetched PR title and issues from its `closingIssuesReferences`. The commit-to-PR association is still inferred from the commit subject, **not independently verified**. PR title and closing-issue metadata are provider-sourced when available. When `gh` is unavailable, inaccessible or unauthenticated, the report retains its local commit evidence and adds a warning. Multiple files referencing the same PR share one lookup per invocation. Non-GitHub providers currently show commit-message references only. The local file-history output and its JSON schema are unchanged.
+
+## Progress feedback
+
+Directory inspection reuses GitWizz's standard progress bars on interactive terminals. The file-history phase displays progress when at least 20 tracked files are examined; the GitHub PR enrichment phase displays progress when at least 5 distinct PR references need provider lookups. Small inspections remain quiet. Progress appears only on the diagnostic terminal, never in piped JSON or text output.
