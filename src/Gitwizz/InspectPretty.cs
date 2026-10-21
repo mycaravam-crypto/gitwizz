@@ -43,7 +43,7 @@ public static class InspectPretty
     /// <summary>Formats a commit timestamp in German day/month/year order.</summary>
     public static string GermanMinute(string timestamp) =>
         DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset parsed)
-            ? parsed.ToString("dd.MM.yyyy HH:mm", CultureInfo.GetCultureInfo("de-DE"))
+            ? parsed.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)
             : timestamp;
 
     public static void File(FileInspect.Result report, IAnsiConsole console)
