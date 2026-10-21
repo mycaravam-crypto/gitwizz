@@ -140,7 +140,7 @@ public static partial class Cli
         var end = git.RevParse(until);
         var tree = git.Try("ls-tree", end, "--", relative);
         if (tree.ExitCode != 0) throw new InvalidOperationException("git ls-tree failed: " + tree.Stderr.Trim());
-        var isDirectory = relative == "." || tree.Stdout.Split('\\n', StringSplitOptions.RemoveEmptyEntries)
+        var isDirectory = relative == "." || tree.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
         if (isDirectory)
         {
