@@ -15,10 +15,10 @@ public class InspectAdoTests
             if (command.StartsWith("commit context "))
             {
                 string sha = args[2];
-                return $$"""
-                {"schema":"ado.commit-context/v1","commit":{"commitId":"{{sha}}"},
+                return """
+                {"schema":"ado.commit-context/v1","commit":{"commitId":"SHA_PLACEHOLDER"},
                  "workItems":{"status":"verified","items":[{"id":42,"source":"commit-workitem"}]}}
-                """;
+                """.Replace("SHA_PLACEHOLDER", sha, StringComparison.Ordinal);
             }
             if (command == "pr context 9")
                 return """
