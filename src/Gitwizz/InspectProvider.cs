@@ -16,7 +16,7 @@ public static class InspectProvider
                 AzureDevOps or "ado" or "azure" => AzureDevOps,
                 _ => throw new ArgumentException($"Unknown inspect provider: {requested}")
             };
-        if (AzureDevOps.IsRemote(remote ?? "")) return AzureDevOps;
+        if (Gitwizz.AzureDevOps.IsRemote(remote ?? "")) return AzureDevOps;
         if (remote?.Contains("github.com", StringComparison.OrdinalIgnoreCase) == true) return Github;
         return null;
     }
