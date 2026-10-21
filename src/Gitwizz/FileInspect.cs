@@ -7,9 +7,9 @@ namespace Gitwizz;
 public static class FileInspect
 {
     public record Change(string Sha, string Author, string AuthoredAt, string CommittedAt,
-        string Subject, string Path, string Action, string Diff, string? PullRequest, string[] WorkItems);
+        string Subject, string Path, string Action, string Diff, string? PullRequest, IReadOnlyList<string> WorkItems);
     public record Result(string Schema, string File, string Until, int Limit, bool Truncated,
-        bool Shallow, List<Change> Changes, string[] Warnings);
+        bool Shallow, IReadOnlyList<Change> Changes, IReadOnlyList<string> Warnings);
 
     /// <summary>Inspects the bounded commit history for a repository-relative file, including changed line hunks and unverified references.</summary>
     /// <param name="git">Git repository used for read-only history queries.</param>
@@ -62,7 +62,7 @@ public static class FileInspect
                 : diff.Contains("deleted file mode ", StringComparison.Ordinal) ? "deleted"
                 : diff.Contains("rename from ", StringComparison.Ordinal) ? "renamed" : "modified";
             changes.Add(new Change(sha, author, authored, committed, subject, relative, action,
-                diff.Trim(), pr.Success ? "#" + pr.Groups["id"].Value : null, work));
+                diff.Trim(), pr.Success ? "#" + pr.Groups["id"].Value : null, Array.AsReadOnly(work)));
         }
         var truncated = changes.Count > limit;
         if (truncated) changes.RemoveAt(changes.Count - 1);
@@ -72,15 +72,15 @@ public static class FileInspect
         if (shallow) warnings.Add("Shallow clone: earlier changes may be missing.");
         warnings.Add("PR ids and work items are unverified commit-message references, not confirmed change rationale.");
         if (changes.Count == 0) warnings.Add("No changes found for this path and revision range.");
-        return new Result("gitwizz.inspect/v1", relative, until, limit, truncated, shallow, changes, [.. warnings]);
+        return new Result("gitwizz.inspect/v1", relative, until, limit, truncated, shallow, changes.AsReadOnly(), warnings.AsReadOnly());
     }
 
 
     /// <summary>One tracked file in a directory tree, with the last touching commit's message evidence.</summary>
     public record DirectoryEntry(string Path, string Sha, string Author, string AuthoredAt,
-        string CommittedAt, string Subject, string? PullRequest, string[] WorkItems, long CommitTimestamp);
+        string CommittedAt, string Subject, string? PullRequest, IReadOnlyList<string> WorkItems, long CommitTimestamp);
     public record DirectoryResult(string Schema, string Directory, string Until, int TotalFiles,
-        int Limit, bool Truncated, List<DirectoryEntry> Files, string[] Warnings);
+        int Limit, bool Truncated, IReadOnlyList<DirectoryEntry> Files, IReadOnlyList<string> Warnings);
 
     /// <summary>Directory mode uses the revision's tracked tree, never the working-tree filesystem.</summary>
     public static DirectoryResult InspectDirectory(Git git, string path, string until = "HEAD", int limit = 200, string? since = null)
@@ -109,9 +109,11 @@ public static class FileInspect
                 @"\bAB#\d+\b|\b(?:fixes|closes|resolves)\s+#\d+\b",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 .Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            _ = long.TryParse(fields[6].Trim(), out var timestamp);
+            if (!long.TryParse(fields[6].Trim(), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out long timestamp))
+                throw new InvalidOperationException($"git log returned an invalid timestamp for {file}");
             entries.Add(new DirectoryEntry(file, fields[0], fields[1], fields[2], fields[3], subject,
-                pr.Success ? "#" + pr.Groups["id"].Value : null, work, timestamp));
+                pr.Success ? "#" + pr.Groups["id"].Value : null, Array.AsReadOnly(work), timestamp));
         }
         var sorted = entries.OrderByDescending(e => e.CommitTimestamp).ThenBy(e => e.Path, StringComparer.Ordinal).ToList();
         var shallow = git.Try("rev-parse", "--is-shallow-repository").Stdout.Trim() == "true";
@@ -119,7 +121,7 @@ public static class FileInspect
         if (shallow) warnings.Add("Shallow repository: older history may be missing.");
         if (sorted.Count > limit) warnings.Add("Directory results truncated by --limit.");
         return new DirectoryResult("gitwizz.inspect-directory/v1", relative, until, paths.Length, limit,
-            sorted.Count > limit, sorted.Take(limit).ToList(), [.. warnings]);
+            sorted.Count > limit, sorted.Take(limit).ToList().AsReadOnly(), warnings.AsReadOnly());
     }
 
     /// <summary>Canonical, repository-relative path shared by file and directory mode.</summary>
