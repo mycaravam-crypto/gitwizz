@@ -34,7 +34,7 @@ public static class InspectAdo
                         using JsonDocument doc = JsonDocument.Parse(ado.Run("workitem", "show", id, "--json"));
                         itemTitle = AzureDevOps.ParseWorkItem(doc.RootElement).Title;
                     }
-                    catch (InvalidOperationException e) { warnings.Add($"ADO work item title unavailable for {link.WorkItem}: {e.GetType().Name}."); }
+                    catch (Exception e) when (e is InvalidOperationException or JsonException or ArgumentException) { warnings.Add($"ADO work item title unavailable for {link.WorkItem}: {e.GetType().Name}."); }
                     linked.Add(new InspectLinks.WorkItem(link.WorkItem, itemTitle, link.Uri, "ado-commit-link"));
                 }
             else if (links.Status != "verified")
@@ -75,7 +75,7 @@ public static class InspectAdo
                 {
                     // Verify that the provider attributes this commit to the PR.
                     bool exact = details.Pr.MergeCommit == entry.Sha
-                        || details.Pr.Commits.Contains(entry.Sha, StringComparer.OrdinalIgnoreCase);
+                        || (details.Pr.Commits?.Contains(entry.Sha, StringComparer.OrdinalIgnoreCase) == true);
                     if (details.Pr.Completed && exact)
                     {
                         title = details.Pr.Title;
