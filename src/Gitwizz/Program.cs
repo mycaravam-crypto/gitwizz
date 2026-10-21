@@ -144,17 +144,22 @@ public static partial class Cli
             .Any(line => line.StartsWith("040000 tree ", StringComparison.Ordinal));
         if (isDirectory)
         {
-            var report = FileInspect.InspectDirectory(git, relative, until, limit, opt.GetValueOrDefault("since"));
-            string remote = git.Try("remote", "get-url", "origin").Stdout;
-            switch (InspectProvider.Select(opt.GetValueOrDefault("provider"), remote))
+            FileInspect.DirectoryResult report = ProgressBars.Show(err, progress =>
             {
-                case "github":
-                    report = InspectLinks.Enrich(git, report);
-                    break;
-                case "azure-devops":
-                    report = InspectAdo.Enrich(report, new AdoCli(git.RepoDir));
-                    break;
-            }
+                FileInspect.DirectoryResult found = FileInspect.InspectDirectory(
+                    git, relative, until, limit, opt.GetValueOrDefault("since"), progress);
+                string remote = git.Try("remote", "get-url", "origin").Stdout;
+                switch (InspectProvider.Select(opt.GetValueOrDefault("provider"), remote))
+                {
+                    case "github":
+                        found = InspectLinks.Enrich(git, found, progress);
+                        break;
+                    case "azure-devops":
+                        found = InspectAdo.Enrich(found, new AdoCli(git.RepoDir));
+                        break;
+                }
+                return found;
+            });
             if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.Directory(report, AnsiConsole.Console);
             else Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
         }

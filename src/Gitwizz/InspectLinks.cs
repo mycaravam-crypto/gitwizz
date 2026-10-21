@@ -7,13 +7,15 @@ public static class InspectLinks
 {
     public record WorkItem(string Id, string? Title, string? Url, string Source);
 
-    public static FileInspect.DirectoryResult Enrich(Git git, FileInspect.DirectoryResult report)
+    public static FileInspect.DirectoryResult Enrich(Git git, FileInspect.DirectoryResult report, ProgressBars? progress = null)
     {
 
         Dictionary<string, (string? Title, string? Url, IReadOnlyList<WorkItem> Items)> resolved = new(StringComparer.Ordinal);
         List<FileInspect.DirectoryEntry> rows = new();
         List<string> warnings = report.Warnings.ToList();
         Dictionary<string, string?> shaToPr = new(StringComparer.Ordinal);
+        int total = report.Files.Where(e => e.PullRequest != null).Select(e => e.PullRequest).Distinct(StringComparer.Ordinal).Count();
+        if (total >= 5) progress?.Start($"Loading {total} pull request details", total);
         foreach (FileInspect.DirectoryEntry original in report.Files)
         {
             FileInspect.DirectoryEntry entry = original;
@@ -53,6 +55,7 @@ public static class InspectLinks
                     }
                 }
                 detail = resolved[reference];
+                progress?.Advance();
             }
             rows.Add(entry with
             {
