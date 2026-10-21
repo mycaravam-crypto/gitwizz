@@ -134,7 +134,7 @@ public static partial class Cli
     {
         var git = OpenRepo(opt);
         var limit = int.TryParse(opt.GetValueOrDefault("limit", "200"), out var n) ? n : throw new ArgumentException("--limit must be an integer");
-        var (format, output) = FormatOption(opt, "text", "text", "json");
+        var (format, output) = FormatOption(opt, Console.IsOutputRedirected ? "text" : "pretty", "pretty", "text", "json");
         var until = opt.GetValueOrDefault("until", "HEAD");
         var relative = FileInspect.NormalizePath(git, path);
         var end = git.RevParse(until);
@@ -145,12 +145,14 @@ public static partial class Cli
         if (isDirectory)
         {
             var report = FileInspect.InspectDirectory(git, relative, until, limit, opt.GetValueOrDefault("since"));
-            Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
+            if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.Directory(report, AnsiConsole.Console);
+            else Write(format == "json" ? FileInspect.DirectoryJson(report) : FileInspect.DirectoryText(report), format, output, err);
         }
         else
         {
             var report = FileInspect.Inspect(git, relative, until, limit, opt.GetValueOrDefault("since"));
-            Write(format == "json" ? FileInspect.Json(report) : FileInspect.Text(report), format, output, err);
+            if (format == "pretty" && output == null && !Console.IsOutputRedirected) InspectPretty.File(report, AnsiConsole.Console);
+            else Write(format == "json" ? FileInspect.Json(report) : FileInspect.Text(report), format, output, err);
         }
         return 0;
     }
@@ -931,7 +933,7 @@ public static partial class Cli
                   --since <ref>         only changes after ref
                   --until <ref>         inspect history until ref (default: HEAD)
                   --limit <n>          at most n commits (default 200, max 10000)
-                  -f text | json       output format (no HTML in the first increment)
+                  -f pretty | text | json   styled terminal report (default on TTY), plain text or JSON
 
             [bold]History export[/]
                   --since <ref>         start after this commit (exclusive) [grey](default: none, so --limit bounds it)[/]
