@@ -9,6 +9,7 @@ The [README](../README.md) covers installation and the command overview. These p
 | [gates.md](gates.md) | `evaluate` (and `--explain`), gates and policy as code, CI, `trace`, per-PR test environments |
 | [system-context.md](system-context.md) | what gitwizz reads from docwizz, context quality, requirement evidence |
 | [ai-review.md](ai-review.md) | the `ai-review` gate, the evidence package, the benchmark that lets it block |
+| [inspect.md](inspect.md) | `inspect` file and directory history, line ranges, output formats and evidence provenance |
 | [planning.md](planning.md) | `plan`: options, configuration, how the search works, performance |
 | [providers.md](providers.md) | GitHub, Azure DevOps Server and local branches; `context` as JSON |
 | [history/](history/README.md) | `history` and the `gitwizz.history/v2` contract |
@@ -42,7 +43,7 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
   `git merge-tree`, commands run in temporary worktrees.
 - **Stable output.** Human-readable text and versioned JSON (`gitwizz.evaluation/v1`, `gitwizz.trace/v1`,
   `gitwizz.context/v1`, `gitwizz.system-context/v1`, `gitwizz.evidence/v1`, `gitwizz.benchmark/v1`,
-  `gitwizz.health/v1`, [`gitwizz.history/v2`](history/README.md)), plus documented
+  `gitwizz.health/v1`, [`gitwizz.history/v2`](history/README.md), [`gitwizz.inspect/v1`](inspect.md), [`gitwizz.inspect-directory/v1`](inspect.md), and [`gitwizz.version-history/v2`](version-history/README.md)), plus documented
   [exit codes](../README.md#exit-codes).
 
 ## Known limitations

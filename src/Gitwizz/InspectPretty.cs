@@ -80,6 +80,6 @@ public static class InspectPretty
         console.WriteLine();
         foreach (string warning in warnings)
             console.MarkupLine("[grey]Note: " + Markup.Escape(warning) + "[/]");
-        console.MarkupLine("[grey]* PR and work-item references are inferred from commit messages, not provider-verified.[/]");
+        console.MarkupLine("[grey]* Commit-message mentions are inferred; provider-enriched PR metadata and work-item links may be verified independently.[/]");
     }
 }

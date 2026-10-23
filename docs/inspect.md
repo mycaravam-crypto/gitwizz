@@ -1,4 +1,4 @@
-# File inspection (first increment)
+# File and directory inspection
 
 `gitwizz inspect <path>` shows a read-only history for a tracked file, or a\nlast-change-first overview of all tracked files recursively under a directory at the selected revision.
 
@@ -10,8 +10,10 @@ gitwizz inspect src/Gitwizz/History.cs -f json -o inspect.json
 
 The report includes author, author date, committer date in JSON, SHA, subject,
 change type, diff hunk headers and commit-message references to PRs and work items.
-References are **unverified**; the tool does not currently retrieve PR details,
-review discussion or verified work item links. A commit's subject is not necessarily
+In **file mode**, commit-message references to PRs and work items are **unverified**;
+the tool does not retrieve PR details or review discussion for individual file histories.
+In **directory mode**, GitHub and Azure DevOps Server can optionally enrich results with
+provider-sourced PR and work-item metadata (see below). A commit's subject is not necessarily
 a reliable explanation of the developer's intention.
 
 `--follow` attempts to track renames. History is bounded (200 commits by default,
@@ -30,7 +32,9 @@ inspection to the commits that shaped those lines, using `git log -L`. Line numb
 refer to the file at `--until`; the range is traced backwards through edits and
 renames, so earlier commits show the lines at their old positions, including
 deleted lines. Unlike `blame`, which names only the last commit per final line,
-this lists every change to the range, and only the range's hunks are reported.
+this lists changes to the range that are reachable in the selected Git history and
+revision window, subject to the commit limit and shallow-clone boundaries; only the
+range's hunks are reported.
 JSON adds `lines` (`"start-end"`, or `null` without a filter). The options apply
 to files only; a range past the end of the file, a file missing at `--until`,
 or passing both options is an error.
@@ -39,7 +43,8 @@ A file path that was never tracked up to `--until` is an error; a file deleted
 before `--until` still shows its history, including the deletion.
 
 The operation runs read-only git commands and does not modify the index or working tree.
-The output uses `gitwizz.inspect/v1`, independent of `gitwizz.history/v2`.
+File JSON uses `gitwizz.inspect/v1`, and directory JSON uses
+`gitwizz.inspect-directory/v1`; both are independent of `gitwizz.history/v2`.
 \n## Directory overview\n\nA directory argument (including `.` for the repository root) lists tracked files\nrecursively, newest touching commit first, with path, committer date, author,\ncommit SHA, subject and unverified PR/work-item mentions. `--limit` bounds\nthe returned rows; `--since` excludes files with no changes in the range.\nUse a file path to drill down to all change hunks. This overview is based on\ntracked files at `--until`, not uncommitted or untracked working-tree content.\n
 ## Terminal display
 
@@ -66,4 +71,22 @@ In the interactive directory table, consecutive files with the same last-change 
 
 ## Progress feedback
 
-Directory inspection uses GitWizz's standard progress bars on interactive terminals for 20 or more files and for 5 or more PR lookups. Redirected output remains free of progress markup.
+Directory inspection uses GitWizz's standard progress bars on interactive terminals for 20 or more files and when at least 5 distinct PR references are found in commit subjects (GitHub). Redirected output remains free of progress markup.
+
+## Output formats and evidence provenance
+
+The interactive directory table and JSON output include enriched PR titles and
+provider-linked work items when available. **Plain text directory output currently
+shows only commit-message PR/work-item mentions and local file history**, not the
+enriched titles or linked work-item records. File-mode output is not enriched by a
+provider, in any format.
+
+Commit-message references remain **inferred**, even if a matching PR title is fetched
+from GitHub. A uniquely merged PR discovered by the GitHub commit-to-PR API is
+associated using provider evidence. Azure DevOps Server confirms commit-to-work-item
+links and verifies the completed PR's commit association before displaying a PR title.
+No provider metadata should be treated as proof of the developer's motivation.
+
+For GitHub, the PR progress indicator currently starts when at least five distinct
+PR references were already found in commit subjects; subsequently discovered PRs
+may add API lookups without changing that initial threshold.
