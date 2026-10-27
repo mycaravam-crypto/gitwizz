@@ -347,13 +347,13 @@ public class HealthTests : IDisposable
     {
         Assert.Null(Cli.LocalPolicyNotice(_dir, false));
         Write(RepoConfig.FileName, "context:\\n  docwizz:\\n    command: local-docwizz\\n");
-        Assert.Contains("Uncommitted .gitwizz.yml", Cli.LocalPolicyNotice(_dir, false));
+        Assert.Contains($"Uncommitted {RepoConfig.FileName}", Cli.LocalPolicyNotice(_dir, false));
         Assert.Contains("gitwizz doctor --working-tree", Cli.LocalPolicyNotice(_dir, false));
         Assert.Contains("checking the local file", Cli.LocalPolicyNotice(_dir, true));
         Commit("add policy");
         Assert.Null(Cli.LocalPolicyNotice(_dir, false));
         Write(RepoConfig.FileName, "context:\\n  docwizz:\\n    command: updated-docwizz\\n");
-        Assert.Contains("Uncommitted .gitwizz.yml", Cli.LocalPolicyNotice(_dir, false));
+        Assert.Contains($"Uncommitted {RepoConfig.FileName}", Cli.LocalPolicyNotice(_dir, false));
     }
 
     [Fact]
