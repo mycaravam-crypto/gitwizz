@@ -425,11 +425,13 @@ public static partial class Cli
     public static string? LocalPolicyNotice(string dir, bool workingTree)
     {
         var git = new Git(dir);
-        var status = git.Try("status", "--porcelain", "--untracked-files=normal", "--", RepoConfig.FileName);
+        var status = git.Try("status", "--porcelain", "--untracked-files=normal", "--", RepoConfig.FileName, RepoConfig.LegacyFileName);
         if (status.ExitCode != 0 || string.IsNullOrWhiteSpace(status.Stdout)) return null;
+        var name = status.Stdout.Contains(RepoConfig.FileName, StringComparison.Ordinal)
+            ? RepoConfig.FileName : RepoConfig.LegacyFileName;
         return workingTree
-            ? $"Uncommitted {RepoConfig.FileName} detected: checking the local file. This does not change the target-branch policy used by guide/evaluate."
-            : $"Uncommitted {RepoConfig.FileName} detected: doctor is checking the target-branch policy, not your local edits. Use 'gitwizz doctor --working-tree' to validate them, then commit the policy if it should apply to PR evaluations.";
+            ? $"Uncommitted {name} detected: checking the local file. This does not change the target-branch policy used by guide/evaluate."
+            : $"Uncommitted {name} detected: doctor is checking the target-branch policy, not your local edits. Use 'gitwizz doctor --working-tree' to check the local file.";
     }
 
     /// <summary>
