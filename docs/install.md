@@ -4,6 +4,21 @@ Requires the .NET 10 SDK and git ≥ 2.38 (`merge-tree --write-tree`; ≥ 2.40 f
 an authenticated [`gh`](https://cli.github.com) (GitHub) or [`ado`](https://github.com/mycaravam-crypto/ado-devops)
 logged in with `ado auth login` (Azure DevOps Server). Gates need the tools they run, e.g. Docker for environments.
 
+## Install as a global .NET tool (recommended)
+
+From the cloned repository root:
+
+```bash
+dotnet pack src/Gitwizz -c Release -o artifacts
+dotnet tool install --global Gitwizz --add-source ./artifacts
+gitwizz --help
+```
+
+For updates use `dotnet tool update --global Gitwizz --add-source ./artifacts`.
+The global tools directory (`$HOME/.dotnet/tools`) must be on `PATH`. This installs a CLI tool, not a standalone executable: .NET 10 runtime is required.
+
+## Alternative: published executable
+
 Publish to a fixed folder and point a `gitwizz` command at it. Re-run `dotnet publish` after pulling changes.
 
 ```bash
