@@ -33,7 +33,8 @@ public static class FileClasses
 /// </summary>
 public record RepoConfig
 {
-    public const string FileName = ".gitwizz.yml";
+    public const string FileName = "gitwizz.yaml";
+    public const string LegacyFileName = ".gitwizz.yml";
     public static readonly RepoConfig Default = new();
 
     public List<Regenerator> Regenerators { get; init; } = [];   // regenerable files and the command that rebuilds them
@@ -74,8 +75,13 @@ public record RepoConfig
     /// </summary>
     public static RepoConfig Load(Git git)
     {
-        var path = Path.Combine(git.Run("rev-parse", "--show-toplevel"), FileName);
-        return File.Exists(path) ? Parse(File.ReadAllText(path)) with { Source = FileName } : Default;
+        var root = git.Run("rev-parse", "--show-toplevel");
+        foreach (var name in new[] { FileName, LegacyFileName })
+        {
+            var path = Path.Combine(root, name);
+            if (File.Exists(path)) return Parse(File.ReadAllText(path)) with { Source = name };
+        }
+        return Default;
     }
 
     /// <summary>
@@ -83,7 +89,17 @@ public record RepoConfig
     /// the rules are versioned with the repository, and a pull request can't relax the gates it is judged by.
     /// </summary>
     public static RepoConfig Load(Git git, string commit) =>
-        git.Try("show", $"{commit}:{FileName}") is { ExitCode: 0 } r ? Parse(r.Stdout) with { Source = $"{FileName}@{commit[..Math.Min(12, commit.Length)]}" } : Default;
+        LoadCommit(git, commit);
+
+    private static RepoConfig LoadCommit(Git git, string commit)
+    {
+        foreach (var name in new[] { FileName, LegacyFileName })
+        {
+            if (git.Try("show", $"{commit}:{name}") is { ExitCode: 0 } result)
+                return Parse(result.Stdout) with { Source = $"{name}@{commit[..Math.Min(12, commit.Length)]}" };
+        }
+        return Default;
+    }
 
     /// <summary>Parses and validates the YAML text of a .gitwizz.yml.</summary>
     public static RepoConfig Parse(string yaml)
