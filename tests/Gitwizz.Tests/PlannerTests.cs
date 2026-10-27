@@ -286,7 +286,7 @@ public class PlannerTests : IDisposable
         foreach (var bad in new[] { "colour: red\n", "costs:\n  conflict: -1\n", "regenerators:\n  - match: x\n", "costs: [1\n" })
         {
             Write(".gitwizz.yml", bad);
-            Assert.StartsWith("invalid .gitwizz.yml", Assert.Throws<InvalidOperationException>(() => RepoConfig.Load(_git)).Message);
+            Assert.StartsWith("invalid gitwizz.yaml", Assert.Throws<InvalidOperationException>(() => RepoConfig.Load(_git)).Message);
         }
         File.Delete(P(".gitwizz.yml"));
     }
