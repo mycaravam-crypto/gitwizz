@@ -86,7 +86,7 @@ The full reference is in [docs/](docs/README.md): [guide, doctor and the workspa
 
 ## Configuration
 
-Everything is optional: without `.gitwizz.yml`, `plan` works as is and the built-in `merge` and `policy` gates run.
+Everything is optional: without `gitwizz.yaml` (or the legacy `.gitwizz.yml`), `plan` works as is and the built-in `merge` and `policy` gates run. New configurations should use `gitwizz.yaml`, matching `docwizz.yaml` and `testwizz.yaml`. The legacy `.gitwizz.yml` is still read, including from historical Git commits. When both exist, `gitwizz.yaml` wins; migrate by renaming the file without changing its YAML contents.
 The file is read from the target branch's commit. A starting point:
 
 ```yaml
