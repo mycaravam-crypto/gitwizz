@@ -215,7 +215,9 @@ public sealed class WorkspaceStore
 
     /// <summary>The policy file's blob at commit, or "none": what every policy-dependent artifact is keyed by.</summary>
     public static string ConfigHash(Git git, string commit) =>
-        git.Try("rev-parse", "--verify", "--quiet", $"{commit}:{RepoConfig.FileName}") is { ExitCode: 0 } r ? r.Stdout.Trim()\n        : git.Try("rev-parse", "--verify", "--quiet", $"{commit}:{RepoConfig.LegacyFileName}") is { ExitCode: 0 } legacy ? legacy.Stdout.Trim()\n        : "none";
+        git.Try("rev-parse", "--verify", "--quiet", $"{commit}:{RepoConfig.FileName}") is { ExitCode: 0 } r ? r.Stdout.Trim()
+        : git.Try("rev-parse", "--verify", "--quiet", $"{commit}:{RepoConfig.LegacyFileName}") is { ExitCode: 0 } legacy ? legacy.Stdout.Trim()
+        : "none";
 
     /// <summary>Everything the provider says about a PR that can change a verdict without a commit.</summary>
     public static string ProviderSnapshot(PullRequest pr) => Fingerprint.Of(JsonSerializer.Serialize(new
