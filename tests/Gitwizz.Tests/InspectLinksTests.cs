@@ -20,6 +20,21 @@ public class InspectLinksTests
         Assert.Equal("github-pr-closing-issue", workItem.Source);
     }
 
+    [Theory]
+    [InlineData("""[{"number":12,"merged_at":"2026-01-01T00:00:00Z"}]""", "#12")]
+    [InlineData("""[{"number":12,"merged_at":null},{"number":13,"merged_at":"2026-01-01T00:00:00Z"}]""", "#13")]
+    [InlineData("""[{"number":12,"merged_at":"2026-01-01"},{"number":13,"merged_at":"2026-01-02"}]""", null)]
+    [InlineData("""[{"number":12,"merged_at":null}]""", null)]
+    [InlineData("""[{"number":"bad","merged_at":"2026-01-01"}]""", null)]
+    [InlineData("""[{"number":0,"merged_at":"2026-01-01"}]""", null)]
+    [InlineData("""[{"number":12,"merged_at":"2026-01-01"},"unexpected"]""", "#12")]
+    [InlineData("{malformed", null)]
+    [InlineData("{}", null)]
+    public void Commit_to_pr_attribution_requires_a_single_valid_merged_pr(string response, string? expected)
+    {
+        Assert.Equal(expected, InspectLinks.UniqueMergedPullRequest(response));
+    }
+
     [Fact]
     public void Incorrect_pr_identifier_is_rejected()
     {
