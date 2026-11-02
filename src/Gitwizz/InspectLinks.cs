@@ -75,17 +75,25 @@ public static class InspectLinks
              $"repos/{{owner}}/{{repo}}/commits/{sha}/pulls"],
             timeout: TimeSpan.FromSeconds(20));
         if (result.ExitCode != 0) return null;
+        return UniqueMergedPullRequest(result.Stdout);
+    }
+
+    /// <summary>Only a single valid merged PR is evidence for commit attribution.</summary>
+    public static string? UniqueMergedPullRequest(string json)
+    {
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(result.Stdout);
+            using JsonDocument doc = JsonDocument.Parse(json);
             if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
-            JsonElement[] merged = doc.RootElement.EnumerateArray()
-                .Where(pr => pr.TryGetProperty("merged_at", out JsonElement date)
+            var merged = doc.RootElement.EnumerateArray()
+                .Where(pr => pr.ValueKind == JsonValueKind.Object
+                    && pr.TryGetProperty("merged_at", out var date)
                     && date.ValueKind == JsonValueKind.String)
                 .ToArray();
-            return merged.Length == 1 && merged[0].TryGetProperty("number", out JsonElement number)
-                ? "#" + number.GetInt32().ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : null;
+            if (merged.Length != 1 || !merged[0].TryGetProperty("number", out var number)
+                || number.ValueKind != JsonValueKind.Number || !number.TryGetInt32(out int id) || id <= 0)
+                return null;
+            return "#" + id.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
         catch (JsonException) { return null; }
     }
