@@ -26,7 +26,7 @@ public static class InspectLinks
                     discovered = FindPullRequest(git, entry.Sha);
                     shaToPr.Add(entry.Sha, discovered);
                 }
-                if (discovered != null) entry = entry with { PullRequest = discovered };
+                if (discovered != null) entry = entry with { PullRequest = discovered, PullRequestEvidence = "provider-confirmed" };
             }
             if (entry.PullRequest is not { } reference
                 || !int.TryParse(reference.TrimStart('#'), out int number))
