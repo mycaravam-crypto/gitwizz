@@ -26,7 +26,8 @@ public static class InspectPretty
             if (newGroup && priorMinute != null) table.AddEmptyRow();
             priorMinute = date;
             string description = $"[bold]{Markup.Escape(f.Path)}[/]\n[grey]{Markup.Escape(f.Subject)}[/]";
-            string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) + " [grey](inferred)[/]";
+            string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) +
+                (f.PullRequestEvidence == "provider-confirmed" ? " [grey](provider-confirmed)[/]" : " [grey](inferred)[/]");
             if (f.PullRequestTitle != null) refs += "\n" + Markup.Escape(f.PullRequestTitle);
             foreach (InspectLinks.WorkItem item in f.LinkedWorkItems)
                 refs += "\n[steelblue1]" + Markup.Escape(item.Id) + "[/] " +

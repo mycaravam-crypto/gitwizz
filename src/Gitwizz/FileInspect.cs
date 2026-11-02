@@ -119,6 +119,8 @@ public static class FileInspect
     public record DirectoryEntry(string Path, string Sha, string Author, string AuthoredAt,
         string CommittedAt, string Subject, string? PullRequest, IReadOnlyList<string> WorkItems, long CommitTimestamp)
     {
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string? PullRequestEvidence { get; init; }
         public string? PullRequestTitle { get; init; }
         public string? PullRequestUrl { get; init; }
         public IReadOnlyList<InspectLinks.WorkItem> LinkedWorkItems { get; init; } = Array.Empty<InspectLinks.WorkItem>();
