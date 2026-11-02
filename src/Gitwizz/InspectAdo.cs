@@ -87,6 +87,7 @@ public static class InspectAdo
             rows.Add(entry with
             {
                 PullRequest = reference,
+                PullRequestEvidence = title != null ? "provider-confirmed" : null,
                 PullRequestTitle = title,
                 LinkedWorkItems = linked.DistinctBy(item => item.Id).ToList().AsReadOnly()
             });
