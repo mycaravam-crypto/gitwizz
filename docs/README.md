@@ -70,9 +70,10 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
   conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
   links issues to pull requests, not to commits), and only for the newest `--commit-lookups` commits.
-- `version-history` reads local refs (fetched remote branches included) and git dates: when a GitHub or Azure DevOps
-  release was published isn't read, pull requests and work items aren't attached, and a cherry-picked fix is listed
-  in each line it was picked to.
+- `version-history` reads local refs (including fetched remote branches), commits and git dates without provider access.
+  Pull requests are grouped from recognizable merge and squash commit messages, not verified against GitHub or Azure
+  DevOps; provider work-item links and release publication timestamps are not retrieved. A cherry-picked fix is listed
+  in each release line where it appears.
 - Requirement evidence needs a resolver that answers `gitwizz.requirement-input/v1`; gitwizz doesn't build one. Until
   docwizz ships it ([docwizz#166](https://github.com/mycaravam-crypto/docwizz/issues/166)), leave
   `context.requirements` off or point it at your own read-only command.
