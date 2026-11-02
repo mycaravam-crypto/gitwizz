@@ -6,6 +6,15 @@ namespace Gitwizz.Tests;
 public class InspectEvidenceTests
 {
     [Theory]
+    [InlineData("provider-confirmed", "provider-confirmed")]
+    [InlineData(null, "inferred")]
+    [InlineData("inferred", "inferred")]
+    public void PrettyClassificationNeverUpgradesUnverifiedReferences(string? evidence, string expected)
+    {
+        Assert.Contains("(" + expected + ")", InspectPretty.PrReferenceLabel(evidence));
+    }
+
+    [Theory]
     [InlineData("provider-confirmed")]
     [InlineData(null)]
     public void DirectoryJsonDoesNotExposePresentationOnlyEvidence(string? evidence)

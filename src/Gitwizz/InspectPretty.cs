@@ -27,7 +27,7 @@ public static class InspectPretty
             priorMinute = date;
             string description = $"[bold]{Markup.Escape(f.Path)}[/]\n[grey]{Markup.Escape(f.Subject)}[/]";
             string refs = f.PullRequest is null ? "—" : Markup.Escape(f.PullRequest) +
-                (f.PullRequestEvidence == "provider-confirmed" ? " [grey](provider-confirmed)[/]" : " [grey](inferred)[/]");
+                PrReferenceLabel(f.PullRequestEvidence);
             if (f.PullRequestTitle != null) refs += "\n" + Markup.Escape(f.PullRequestTitle);
             foreach (InspectLinks.WorkItem item in f.LinkedWorkItems)
                 refs += "\n[steelblue1]" + Markup.Escape(item.Id) + "[/] " +
@@ -40,6 +40,10 @@ public static class InspectPretty
         console.Write(table);
         Warnings(report.Warnings, console);
     }
+
+    /// <summary>Presentation label for a PR association; commit-message references are never verified by title lookup alone.</summary>
+    public static string PrReferenceLabel(string? evidence) =>
+        evidence == "provider-confirmed" ? " [grey](provider-confirmed)[/]" : " [grey](inferred)[/]";
 
     /// <summary>Formats a commit timestamp in German day/month/year order.</summary>
     public static string GermanMinute(string timestamp) =>

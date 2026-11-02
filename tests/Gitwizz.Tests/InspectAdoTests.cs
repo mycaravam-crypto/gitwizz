@@ -51,6 +51,7 @@ public class InspectAdoTests
         FileInspect.DirectoryResult result = InspectAdo.Enrich(report, ado);
         FileInspect.DirectoryEntry enriched = Assert.Single(result.Files);
         Assert.Equal("Payment fix", enriched.PullRequestTitle);
+        Assert.Equal("provider-confirmed", enriched.PullRequestEvidence);
         InspectLinks.WorkItem item = Assert.Single(enriched.LinkedWorkItems);
         Assert.Equal("AB#42", item.Id);
         Assert.Contains(ado.Calls, c => c == "pr context 9");
@@ -66,6 +67,7 @@ public class InspectAdoTests
             200, false, new[] { entry }, Array.Empty<string>());
         FileInspect.DirectoryEntry enriched = Assert.Single(InspectAdo.Enrich(report, ado).Files);
         Assert.Null(enriched.PullRequestTitle);
+        Assert.Null(enriched.PullRequestEvidence);
         Assert.Equal("AB#42", Assert.Single(enriched.LinkedWorkItems).Id);
         Assert.DoesNotContain(ado.Calls, c => c.StartsWith("pr context "));
     }
@@ -84,6 +86,7 @@ public class InspectAdoTests
         FakeAdo ado = new() { FailPr = true };
         FileInspect.DirectoryResult result = InspectAdo.Enrich(Report("#9"), ado);
         Assert.Null(result.Files[0].PullRequestTitle);
+        Assert.Null(result.Files[0].PullRequestEvidence);
         Assert.Contains(result.Warnings, w => w.Contains("pull request #9 unavailable", StringComparison.Ordinal));
     }
 
