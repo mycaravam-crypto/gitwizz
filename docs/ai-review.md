@@ -29,6 +29,13 @@ OpenRouter, …) are refused, even when listed. Other endpoints must be loopback
 internal host name (`.internal`, `.corp`, `.lan`, `.local`, …), or listed in `allowed_hosts`; anything else is a
 configuration error.
 
+**Network trust boundary.** Host allowlisting is a configuration check based on the URL host,
+not a DNS-resolution or network-egress guarantee. An internal-looking hostname or an entry in
+`allowed_hosts` can still resolve to an external address. Deployments handling confidential
+repository evidence should restrict outbound connections at the network layer, control DNS,
+and use TLS with appropriate certificate validation. Add only trusted, operator-controlled
+inference endpoints to `allowed_hosts`; the evidence package may include code and PR content.
+
 **Bounded evidence, not the repository.** The model gets one JSON package (`gitwizz.evidence/v1`; see it with
 `gitwizz context 42 --ai -o pkg.json`): PR title and description, linked requirements and acceptance criteria, changed
 files, changed C# members and API changes, the diff (without lockfiles, generated and binary files), where changed
