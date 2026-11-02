@@ -17,7 +17,7 @@ In **directory mode**, GitHub and Azure DevOps Server can optionally enrich resu
 provider-sourced PR and work-item metadata (see below). A commit's subject is not necessarily
 a reliable explanation of the developer's intention.
 
-`--follow` attempts to track renames. History is bounded (200 commits by default,
+File mode follows renames automatically using Git's `--follow` internally; there is no\nuser-facing `--follow` option. History is bounded (200 commits by default,
 up to 10,000). Shallow repositories and truncation are indicated. HTML output
 remains a follow-up increment.
 
