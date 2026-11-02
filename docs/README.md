@@ -65,7 +65,8 @@ Typos get suggestions (`--strat` → "did you mean --strategy?"), and common err
   Raise `--beam` when the plan blocks PRs you expected to merge.
 - After a REGENERATE step the planning state holds the PR's lockfile, not a regenerated one.
 - Synthetic commits are unreferenced objects; `git gc` cleans them up.
-- History needs true merge commits; squash- or rebase-merged repositories have nothing to replay.
+- `history` exports reachable commits regardless of merge strategy. Recognizable merge commits and squash subjects
+  support PR attribution; rebased changes and custom messages may remain unattributed.
 - `history` finds pull requests through their merge or squash messages, so rebase-merged PRs and custom merge
   messages leave commits `unknown`. A merge commit carries no ranges of its own: changes made while resolving a merge
   conflict aren't attributed. Commit → work item links kept by the provider are read only from Azure DevOps (GitHub
