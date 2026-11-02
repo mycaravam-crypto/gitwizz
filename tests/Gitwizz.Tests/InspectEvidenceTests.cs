@@ -8,7 +8,7 @@ public class InspectEvidenceTests
     [Theory]
     [InlineData("provider-confirmed")]
     [InlineData(null)]
-    public void DirectoryJsonPreservesCommitToPrEvidence(string? evidence)
+    public void DirectoryJsonDoesNotExposePresentationOnlyEvidence(string? evidence)
     {
         var entry = new FileInspect.DirectoryEntry(
             "src/Example.cs", new string('a', 40), "author",
@@ -22,7 +22,6 @@ public class InspectEvidenceTests
             new[] { entry }, Array.Empty<string>());
 
         using var json = JsonDocument.Parse(FileInspect.DirectoryJson(report));
-        var actual = json.RootElement.GetProperty("files")[0].GetProperty("pullRequestEvidence");
-        Assert.Equal(evidence, actual.ValueKind == JsonValueKind.Null ? null : actual.GetString());
+        Assert.False(json.RootElement.GetProperty("files")[0].TryGetProperty("pullRequestEvidence", out _));
     }
 }
