@@ -10,5 +10,5 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }   # check --since needs the base commit
-      - uses: mycaravam-crypto/docwizz@3eb69966b0e566b17ab3b799f0f61538cf05f09d # v0.7.108
+      - uses: mycaravam-crypto/docwizz@59b7896fe1edbd038e80ebfd08df883e81e894eb # v0.7.118
         with: { path: ., fail: 'true' }   # fails on problems the PR introduces
