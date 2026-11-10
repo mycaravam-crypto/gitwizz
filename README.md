@@ -20,22 +20,23 @@ Needs the .NET 10 SDK and git ≥ 2.38 (≥ 2.40 for `--strategy rebase`). Provi
 Server, `ado auth login`). Gates need the tools they run, e.g. Docker for test environments; `gitwizz doctor` checks
 all of it.
 
+Install both global .NET tools from the repository root:
+
 ```bash
-# Linux, macOS, Git Bash
-dotnet publish src/Gitwizz -c Release -o ~/tools/gitwizz
-echo "alias gitwizz='dotnet ~/tools/gitwizz/gitwizz.dll'" >> ~/.bashrc   # zsh: ~/.zshrc
+dotnet pack src/Gitwizz -c Release -o artifacts
+dotnet pack src/Gw -c Release -o artifacts
+dotnet tool install --global Gitwizz --add-source ./artifacts
+dotnet tool install --global Gitwizz.Gw --add-source ./artifacts
+
+gitwizz --help
+gw --help
 ```
 
-```powershell
-# Windows PowerShell
-dotnet publish src/Gitwizz -c Release -o "$HOME\tools\gitwizz"
-if (!(Test-Path $PROFILE)) { New-Item -Type File -Force $PROFILE }
-Add-Content $PROFILE 'function gitwizz { dotnet "$HOME\tools\gitwizz\gitwizz.dll" @args }'
-```
-
-Re-run `dotnet publish` after pulling. A `gitwizz.cmd` for cmd and a faster single-file binary:
-[docs/install.md](docs/install.md).
-
+For updates use `dotnet tool update --global Gitwizz --add-source ./artifacts` and
+`dotnet tool update --global Gitwizz.Gw --add-source ./artifacts`. Both commands expose the same CLI; the second
+package adds the short `gw` command without replacing `gitwizz`. See [docs/install.md](docs/install.md) for
+alternative executable installation.
+ 
 ## Quick start
 
 ```bash
