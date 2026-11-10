@@ -16,7 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../Gitwizz/Gitwizz.csproj" />
+    <ProjectReference Include="../Gitwizz/Gitwizz.csproj" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>
