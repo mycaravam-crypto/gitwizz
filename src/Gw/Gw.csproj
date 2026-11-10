@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>gw</ToolCommandName>
+    <PackageId>Gitwizz.Gw</PackageId>
+    <Description>Short command alias for the Gitwizz PR quality and merge orchestrator.</Description>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>gw</AssemblyName>
+    <RootNamespace>Gitwizz.ToolAlias</RootNamespace>
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Gitwizz/Gitwizz.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
