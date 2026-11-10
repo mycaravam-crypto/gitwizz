@@ -11,14 +11,14 @@ From the cloned repository root:
 ```bash
 dotnet pack src/Gitwizz -c Release -o artifacts
 dotnet pack src/Gw -c Release -o artifacts
-dotnet tool install --global Gitwizz --add-source ./artifacts
-dotnet tool install --global Gitwizz.Gw --add-source ./artifacts
+dotnet tool install --global Gitwizz --version 0.0.0-dev --add-source ./artifacts
+dotnet tool install --global Gitwizz.Gw --version 0.0.0-dev --add-source ./artifacts
 gitwizz --help
 gw --help
 ```
 
-For updates use `dotnet tool update --global Gitwizz --add-source ./artifacts` and
-`dotnet tool update --global Gitwizz.Gw --add-source ./artifacts`. Both commands expose the same CLI; the
+For updates use `dotnet tool update --global Gitwizz --version 0.0.0-dev --add-source ./artifacts` and
+`dotnet tool update --global Gitwizz.Gw --version 0.0.0-dev --add-source ./artifacts`. Both commands expose the same CLI; the
 second package adds the short `gw` command without replacing `gitwizz`.
 The global tools directory (`$HOME/.dotnet/tools`) must be on `PATH`. This installs a CLI tool, not a standalone executable: .NET 10 runtime is required.
 
